@@ -1,8 +1,10 @@
 # -*- coding: gbk -*-
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -12,10 +14,10 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT
-from .json_utils import read_json
+from .json_utils import read_json, write_json
 from .memory_store import MemoryStore
 from .output_parser import parse_chatgpt_output
 
@@ -104,6 +106,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/app.js":
             self._send_file(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
             return
+        if parsed.path == "/new-campaign-demo.html":
+            self._send_file(STATIC_DIR / "new-campaign-demo.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self._json(status_payload())
             return
@@ -112,6 +117,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/export":
             self._download_export()
+            return
+        if parsed.path == "/api/asset":
+            query = parse_qs(parsed.query)
+            self._json(asset_lookup(
+                first_query(query, "campaign_id"),
+                first_query(query, "key"),
+            ))
+            return
+        if parsed.path.startswith("/campaign-assets/"):
+            self._send_campaign_asset(parsed.path)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -143,6 +158,10 @@ class Handler(BaseHTTPRequestHandler):
                 campaign_id = str(payload.get("campaign_id", "")).strip()
                 select_campaign(campaign_id)
                 self._json({"ok": True, "status": status_payload()})
+                return
+            if parsed.path == "/api/asset":
+                payload = self._read_json()
+                self._json(save_asset(payload))
                 return
             if parsed.path == "/api/command":
                 payload = self._read_json()
@@ -195,6 +214,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _send_campaign_asset(self, request_path: str) -> None:
+        try:
+            parts = unquote(request_path).split("/", 3)
+            if len(parts) != 4:
+                raise RuntimeError("invalid asset path")
+            campaign_id = safe_segment(parts[2])
+            rel = Path(parts[3])
+            root = (CAMPAIGNS_DIR / campaign_id / "assets").resolve()
+            target = (root / rel).resolve()
+            if root not in target.parents and target != root:
+                raise RuntimeError("asset path escapes campaign assets")
+            if not target.exists() or target.suffix.lower() != ".png":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self._send_file(target, "image/png")
+        except Exception:
+            self.send_error(HTTPStatus.NOT_FOUND)
+
     def _download_export(self) -> None:
         payload = export_payload()
         raw = payload.encode("utf-8")
@@ -204,6 +241,94 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+
+def first_query(query: dict[str, list[str]], key: str) -> str:
+    values = query.get(key) or [""]
+    return str(values[0]).strip()
+
+
+def safe_segment(value: str) -> str:
+    cleaned = "".join(ch if (ch.isalnum() or ch in "_.-") else "_" for ch in str(value).strip())
+    cleaned = re.sub(r"_+", "_", cleaned)
+    return cleaned.strip("._") or "asset"
+
+
+def asset_manifest_path(campaign_id: str) -> Path:
+    return CAMPAIGNS_DIR / safe_segment(campaign_id) / "assets" / "manifest.json"
+
+
+def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
+    path = asset_manifest_path(campaign_id)
+    if not path.exists():
+        return {"assets": {}}
+    try:
+        data = read_json(path)
+        if isinstance(data, dict):
+            data.setdefault("assets", {})
+            return data
+    except Exception:
+        pass
+    return {"assets": {}}
+
+
+def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
+    if not campaign_id:
+        campaign_id = MemoryStore().resolve_campaign_id(None)
+    if not key:
+        raise RuntimeError("asset key is required")
+    manifest = load_asset_manifest(campaign_id)
+    entry = manifest.get("assets", {}).get(key)
+    if not entry:
+        return {"ok": True, "exists": False}
+    rel_path = str(entry.get("path", ""))
+    full = CAMPAIGNS_DIR / safe_segment(campaign_id) / rel_path
+    if not rel_path or not full.exists():
+        return {"ok": True, "exists": False}
+    url_path = rel_path.replace("\\", "/")
+    if url_path.startswith("assets/"):
+        url_path = url_path[len("assets/"):]
+    return {
+        "ok": True,
+        "exists": True,
+        "entry": entry,
+        "url": f"/campaign-assets/{safe_segment(campaign_id)}/{url_path}",
+    }
+
+
+def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
+    key = str(payload.get("key") or "").strip()
+    if not key:
+        raise RuntimeError("asset key is required")
+    data_url = str(payload.get("data_url") or "")
+    prefix = "data:image/png;base64,"
+    if not data_url.startswith(prefix):
+        raise RuntimeError("asset data_url must be a PNG data URL")
+    raw = base64.b64decode(data_url[len(prefix):], validate=True)
+    subdir = safe_segment(str(payload.get("subdir") or payload.get("kind") or "misc"))
+    filename = safe_segment(str(payload.get("filename") or key)) + ".png"
+    rel_path = Path("assets") / subdir / filename
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    target = root / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+
+    manifest = load_asset_manifest(campaign_id)
+    manifest.setdefault("assets", {})[key] = {
+        "path": rel_path.as_posix(),
+        "kind": str(payload.get("kind") or subdir),
+        "seed": str(payload.get("seed") or key),
+        "style": str(payload.get("style") or "canvas_pixel"),
+        "generator_version": int(payload.get("generator_version") or 1),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        manifest["assets"][key]["metadata"] = metadata
+    write_json(asset_manifest_path(campaign_id), manifest)
+    return asset_lookup(campaign_id, key)
+
 
 def cli_command(parts: list[str], campaign_id: str = "") -> list[str]:
     command = [sys.executable, "-m", "trpg_orchestrator.cli", *parts]
@@ -268,7 +393,7 @@ def campaign_list(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "title": profile.get("title") or meta.get("name") or campaign_id,
             "genre": profile.get("genre", ""),
             "tone": profile.get("tone", ""),
-            "chapter": recent.get("current_scene", {}).get("time") or "current",
+            "chapter": recent.get("current_scene", {}).get("chapter") or recent.get("chapter", "") or recent.get("current_scene", {}).get("time", ""),
             "conversation": meta.get("chatgpt_conversation_name", ""),
             "project": meta.get("chatgpt_project_name", ""),
             "active": campaign_id == active,
@@ -293,6 +418,7 @@ def campaign_state(campaign_id: str) -> dict[str, Any]:
         "tone": profile.get("tone", ""),
         "mechanics": profile.get("mechanics", {}),
         "player": maybe("player_state.json"),
+        "character_prompt": maybe("character_prompt.json"),
         "recent": maybe("recent_context.json"),
         "quests": maybe("quest_history.json"),
         "npcs": maybe("npc_memory.json"),
@@ -339,7 +465,7 @@ def output_payload() -> dict[str, Any]:
     audit_path = OUTBOX_DIR / "v4_audit_result.json"
     flavor_path = OUTBOX_DIR / "ai_flavor_report.json"
     text = ""
-    parsed: dict[str, str] = {"body": "", "choices": "", "summary": ""}
+    parsed: dict[str, Any] = {"body": "", "choices": "", "summary": "", "blocks": []}
     source = ""
     for path in (clean_path, raw_path):
         if path.exists():
@@ -350,7 +476,7 @@ def output_payload() -> dict[str, Any]:
         try:
             p = parse_chatgpt_output(text) if "【状态回写_BEGIN】" in text else None
             if p:
-                parsed = {"body": p.body, "choices": p.choices, "summary": p.summary}
+                parsed = {"body": p.body, "choices": p.choices, "summary": p.summary, "blocks": p.blocks}
             else:
                 parsed = split_public(text)
         except Exception:
@@ -375,7 +501,7 @@ def split_public(text: str) -> dict[str, str]:
         choices = text.split("【选择点】", 1)[1].split("【回合摘要】", 1)[0].strip()
     if "【回合摘要】" in text:
         summary = text.split("【回合摘要】", 1)[1].split("【状态回写_BEGIN】", 1)[0].strip()
-    return {"body": body, "choices": choices, "summary": summary}
+    return {"body": body, "choices": choices, "summary": summary, "blocks": []}
 
 
 if __name__ == "__main__":

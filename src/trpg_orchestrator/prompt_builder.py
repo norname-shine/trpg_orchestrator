@@ -102,7 +102,7 @@ def build_chatgpt_input(
             "## DeepSeek V4 现场压力包",
             "V4 压力包是本回合导演指令。必须服从其中的压力、边界、NPC 方向、禁止事项和选择要求。不要照搬结构。",
             "```json\n" + json.dumps(pressure_pack, ensure_ascii=False, indent=2) + "\n```",
-            "请只输出规定格式的本回合正文、选择点、回合摘要和状态回写。",
+            "Output strict JSON only: blocks, summary, and state_writeback. No text outside JSON.",
         ]
     )
 

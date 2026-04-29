@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>新建跑团 Demo</title>
+  <link rel="stylesheet" href="/app.css">
+  <style>
+    .demoShell {
+      width: min(980px, calc(100vw - 28px));
+      margin: 0 auto;
+      padding: 28px 0;
+    }
+    .demoHero {
+      min-height: calc(100vh - 56px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      align-items: stretch;
+    }
+    .demoMain, .demoSide {
+      padding: 22px;
+    }
+    .demoMain h1 {
+      font-size: 30px;
+      margin-bottom: 10px;
+    }
+    .demoMain p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      line-height: 1.8;
+    }
+    .demoForm {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .demoForm label {
+      display: grid;
+      gap: 7px;
+      color: #6b563b;
+      font-weight: 700;
+    }
+    .demoForm input, .demoForm textarea {
+      min-height: 46px;
+      resize: vertical;
+    }
+    .demoActions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .demoPreview {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .demoPreview .storyThumb {
+      height: 130px;
+    }
+    @media (max-width: 860px) {
+      .demoHero { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="rainCanvas" aria-hidden="true"></canvas>
+  <main class="demoShell">
+    <section class="demoHero">
+      <div class="panel demoMain">
+        <h1>新建跑团 Demo</h1>
+        <p>这里先作为新建跑团流程的占位页。后续会接入真实的 campaign 初始化、模板选择、ChatGPT 对话绑定和首轮记忆生成。</p>
+        <div class="demoForm">
+          <label>
+            跑团名称
+            <input id="demoTitle" value="怪物猎人风新大陆远征" aria-label="跑团名称">
+          </label>
+          <label>
+            题材方向
+            <input id="demoGenre" value="生态调查 / 巨兽狩猎 / 公会委托" aria-label="题材方向">
+          </label>
+          <label>
+            初始钩子
+            <textarea id="demoHook" aria-label="初始钩子">新人猎人抵达边境据点，第一份委托来自一支迟迟未归的商队。</textarea>
+          </label>
+        </div>
+        <div class="demoActions">
+          <button class="sendAction" type="button" onclick="history.back()">返回控制台</button>
+          <button type="button" onclick="alert('下一步会接入真实 init-campaign 接口。')">生成 Demo 记忆</button>
+        </div>
+      </div>
+      <aside class="panel demoSide">
+        <div class="panelTitle"><h2>预览卡片</h2><span>Demo</span></div>
+        <div class="demoPreview">
+          <span class="storyThumb desert"></span>
+          <article class="choiceCard">
+            <div class="choiceTitle">跑团会出现在选择栏</div>
+            <div class="choices">名称、题材、当前章节和固定对话会成为下拉面板中的联动卡片。</div>
+          </article>
+        </div>
+      </aside>
+    </section>
+  </main>
+  <script>
+    const canvas = document.getElementById("rainCanvas");
+    const ctx = canvas.getContext("2d");
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    function frame() {
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      ctx.strokeStyle = "rgba(120, 92, 55, .06)";
+      for (let i = 0; i < 44; i += 1) {
+        ctx.beginPath();
+        ctx.arc((i * 97) % window.innerWidth, (i * 53) % window.innerHeight, 42 + (i % 6) * 18, 0, Math.PI * 1.25);
+        ctx.stroke();
+      }
+      requestAnimationFrame(frame);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+    frame();
+  </script>
+</body>
+</html>

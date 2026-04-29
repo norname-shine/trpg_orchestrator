@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>跑团控制台</title>
+  <title>TRPG 跑团控制台</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -18,20 +18,16 @@
         </svg>
         <div>
           <h1>跑团控制台</h1>
-          <p>你的故事，由你与世界共同书写</p>
+          <p>本地记忆、导演指令和正文回写的统一操作台</p>
         </div>
       </div>
-      <nav class="campaignBar">
-        <button class="selectBtn" id="storySelectBtn">选择跑团故事 <span>⌄</span></button>
-        <button class="selectBtn wide" id="activeCampaignBtn">当前跑团：<strong id="campaignName">-</strong> <span>⌄</span></button>
-        <button class="selectBtn wide" id="chapterBtn">章节：<strong id="chapterName">当前现场</strong> <span>⌄</span></button>
-      </nav>
+      <div></div>
       <div class="navActions">
         <div class="statusChip" id="jobPill"><span></span><b id="jobText">待机</b></div>
-        <button data-command="validate-memory">规则书</button>
-        <button data-command="memory-report">记忆库</button>
-        <button id="refreshBtn">刷新</button>
-        <button class="exportBtn" id="exportBtn">导出</button>
+        <button data-command="validate-memory" type="button">校验记忆</button>
+        <button data-command="memory-report" type="button">记忆报告</button>
+        <button id="refreshBtn" type="button">刷新</button>
+        <button class="exportBtn" id="exportBtn" type="button">导出</button>
       </div>
     </header>
 
@@ -40,7 +36,7 @@
         <section class="panel characterPanel">
           <div class="panelTitle">
             <h2>角色状态</h2>
-            <span>⌃</span>
+            <span id="characterCardMode">叙事卡</span>
           </div>
           <div class="characterHead">
             <div class="avatar">
@@ -49,92 +45,90 @@
             <div>
               <h3 id="characterName">未命名角色</h3>
               <p id="characterMeta">身份待确认</p>
-              <div class="xp"><span style="width:52%"></span></div>
-              <small id="characterXp">经验值待记录</small>
+              <div class="progressLine">
+                <span id="progressLabel">成长</span>
+                <b id="progressValue">待记录</b>
+              </div>
+              <div class="xp"><span id="progressBar" style="width:52%"></span></div>
             </div>
           </div>
-          <div class="statList">
-            <div><span>生命值</span><b>28 / 34</b><i style="width:82%"></i></div>
-            <div><span>专注值</span><b>16 / 20</b><i style="width:80%"></i></div>
-            <div><span>体力值</span><b>22 / 28</b><i style="width:78%"></i></div>
+          <div class="statList" id="vitalList"></div>
+          <div class="conditionTitle">条件与状态</div>
+          <div class="badges" id="characterBadges">
+            <span>谨慎</span><span>斩斧</span><span>生态调查</span><span>新人猎人</span>
           </div>
-          <div class="badges">
-            <span>敏捷提升</span><span>轻微伤势</span><span>潮湿</span><span>1 回合</span>
+          <div class="attributeGrid" id="attributeGrid">
+            <div><b>斧</b><span>牵制</span></div>
+            <div><b>剑</b><span>爆发</span></div>
+            <div><b>迹</b><span>追踪</span></div>
+            <div><b>营</b><span>补给</span></div>
+            <div><b>捕</b><span>陷阱</span></div>
+            <div><b>退</b><span>保命</span></div>
           </div>
-          <div class="attributeGrid">
-            <div><b>11</b><span>力</span></div>
-            <div><b>16</b><span>敏</span></div>
-            <div><b>13</b><span>体</span></div>
-            <div><b>12</b><span>智</span></div>
-            <div><b>15</b><span>感</span></div>
-            <div><b>10</b><span>魅</span></div>
+          <div class="companionCard">
+            <canvas id="palicoCanvas" width="64" height="64" aria-label="艾露猫点阵头像"></canvas>
+            <div>
+              <b id="palicoName">浩文</b>
+              <span id="palicoMeta">老练但嘴硬</span>
+            </div>
           </div>
         </section>
 
-        <section class="panel mapPanel">
-          <div class="panelTitle"><h2>地图</h2><span>⌃</span></div>
+        <section class="panel mapPanel collapsiblePanel">
+          <div class="panelTitle">
+            <h2>区域地图</h2>
+            <div class="panelTools"><span id="mapLabel">当前路线</span><button class="collapseBtn" data-collapse-panel="map" type="button" aria-expanded="true" aria-label="收起区域地图">−</button></div>
+          </div>
           <div class="mapCanvas">
             <canvas id="mapCanvas" width="720" height="300" aria-label="点阵地图"></canvas>
-            <button class="mapZoom">＋</button>
+            <button class="mapZoom" id="mapZoomBtn" type="button" title="重绘地图">↻</button>
           </div>
         </section>
 
-        <section class="panel taskPanel">
-          <div class="panelTitle"><h2>任务 / 物品</h2><span>⌃</span></div>
-          <div class="taskTabs"><span class="active">任务</span><span>物品</span></div>
-          <ul>
-            <li><b>寻找失踪的货物</b><span>进行中</span></li>
-            <li><b>与灯塔守卫交谈</b><span>进行中</span></li>
-            <li><b>调查潮声放日的脚印</b><span>未开始</span></li>
-          </ul>
+        <section class="panel taskPanel collapsiblePanel">
+          <div class="panelTitle">
+            <h2>任务 / 物品</h2>
+            <div class="panelTools"><span>记录</span><button class="collapseBtn" data-collapse-panel="task" type="button" aria-expanded="true" aria-label="收起任务物品">−</button></div>
+          </div>
+          <div class="taskTabs">
+            <button class="active" data-side-tab="quests" type="button">任务</button>
+            <button data-side-tab="items" type="button">物品</button>
+          </div>
+          <ul id="sideList"></ul>
         </section>
 
-        <section class="panel memoryPanel">
-          <div class="panelTitle"><h2>记忆</h2><span>⌁</span></div>
-          <ul>
-            <li>潮汐之前的停靠 <span>2天前</span></li>
-            <li>守卫长的警告 <span>3天前</span></li>
-            <li>潮声驿团的符号 <span>5天前</span></li>
-          </ul>
+        <section class="panel memoryPanel collapsiblePanel">
+          <div class="panelTitle">
+            <h2>近期记忆</h2>
+            <div class="panelTools"><span>线索</span><button class="collapseBtn" data-collapse-panel="memory" type="button" aria-expanded="true" aria-label="收起近期记忆">−</button></div>
+          </div>
+          <ul id="memoryList"></ul>
         </section>
       </aside>
 
       <section class="centerColumn">
-        <div class="storySwitch">
-          <button class="storyCard active" data-open-story-picker="true">
-            <span class="thumb harbor"></span>
-            <b>雾港迷航</b>
-            <small>进行中 · 第三章</small>
-          </button>
-          <button class="storyCard">
-            <span class="thumb desert"></span>
-            <b>星火荒原</b>
-            <small>进行中 · 第一章</small>
-          </button>
-          <button class="storyCard">
-            <span class="thumb train"></span>
-            <b>月下列车</b>
-            <small>已暂停 · 第二章</small>
-          </button>
-          <button class="storyCard newStory">
-            <span>＋</span>
-            <b>新建跑团</b>
-            <small>开始新的冒险</small>
-          </button>
-        </div>
+        <nav class="campaignBar inWorkspace">
+          <button class="selectBtn" id="storySelectBtn" type="button">选择跑团 <span>▾</span></button>
+          <div class="displayPill wide" id="activeCampaignBtn"><span>故事</span><strong id="campaignName">-</strong></div>
+          <div class="displayPill wide" id="chapterBtn"><span>章节</span><strong id="chapterName"></strong></div>
+        </nav>
 
         <section class="panel logPanel">
           <div class="logHeader">
             <h2>跑团记录</h2>
-            <button class="tinyBtn">摘要</button>
-            <div class="autoScroll"><span>自动滚动</span><i></i></div>
+            <button class="tinyBtn active" data-panel-tab="story" type="button">正文</button>
+            <button class="tinyBtn" data-panel-tab="choices" type="button">选择</button>
+            <button class="tinyBtn" data-panel-tab="director" type="button">导演</button>
+            <button class="tinyBtn" data-panel-tab="logs" type="button">日志</button>
+            <button class="tinyBtn" data-panel-tab="summary" type="button">摘要</button>
+            <button class="autoScroll active" id="autoScrollBtn" type="button"><span>自动滚动</span><i></i></button>
           </div>
           <div class="messageFeed" id="storyTab">
             <div id="storyText" class="prose"></div>
           </div>
           <div class="messageFeed hidden" id="choicesTab">
             <div class="choiceCard">
-              <div class="choiceTitle">关键抉择</div>
+              <div class="choiceTitle">关键选择</div>
               <div id="choicesText" class="choices"></div>
             </div>
           </div>
@@ -144,71 +138,75 @@
           <div class="messageFeed hidden" id="logsTab">
             <pre id="logText"></pre>
           </div>
+          <div class="messageFeed hidden" id="summaryTab">
+            <div id="summaryText" class="prose"></div>
+          </div>
         </section>
 
         <section class="composer panel">
           <div class="modeRow">
             <span>模式：</span>
-            <button class="mode active">沉浸剧情</button>
-            <button class="mode">主持分析</button>
-            <button class="mode" data-command="rewrite-plan">重写</button>
-            <button class="mode">搜写自检</button>
+            <button class="mode active" data-panel-tab="story" type="button">沉浸剧情</button>
+            <button class="mode" data-panel-tab="director" type="button">导演指令</button>
+            <button class="mode" data-command="rewrite-plan" type="button">重写计划</button>
+            <button class="mode" data-panel-tab="logs" type="button">执行日志</button>
           </div>
           <div class="inputWrap">
-            <textarea id="actionInput" spellcheck="false" placeholder="输入你的行动或对这个世界的互动...&#10;（Shift + Enter 换行，Enter 发送）"></textarea>
-            <button id="runTurnBtn" class="sendAction">发送行动</button>
+            <textarea id="actionInput" spellcheck="false" placeholder="输入玩家行动。Shift + Enter 换行，Enter 发送。"></textarea>
+            <button id="runTurnBtn" class="sendAction" type="button">发送行动</button>
           </div>
           <div class="quickBar">
-            <button id="prepareBtn">继续</button>
-            <button data-command="capture">观察周围</button>
-            <button data-command="send">与 NPC 对话</button>
-            <button data-command="ingest">检查物品</button>
-            <button data-command="validate-memory">查看地图</button>
-            <button data-command="memory-report">复盘</button>
+            <button id="prepareBtn" type="button">只生成输入</button>
+            <button data-command="send" type="button">发送到 ChatGPT</button>
+            <button data-command="capture" type="button">抓取回复</button>
+            <button data-command="ingest" type="button">解析写回</button>
+            <button data-command="run-rewrite" type="button">执行重写</button>
+            <button id="clearInputBtn" type="button">清空输入</button>
           </div>
         </section>
       </section>
 
       <aside class="rightColumn">
         <section class="panel galleryPanel">
-          <div class="panelTitle"><h2>图集收藏</h2><span>⚑</span></div>
-          <div class="filterRow">
-            <button class="active">全部</button><button>角色</button><button>NPC</button><button>场景</button><button>地图</button><button>道具</button>
+          <div class="panelTitle"><h2>资料夹</h2><span>可视化占位</span></div>
+          <div class="filterRow" id="galleryFilters">
+            <button class="active" data-filter="all" type="button">全部</button>
+            <button data-filter="monster" type="button">怪物</button>
+            <button data-filter="npc" type="button">NPC</button>
+            <button data-filter="scene" type="button">场景</button>
+            <button data-filter="item" type="button">物品</button>
           </div>
-          <div class="galleryGrid">
-            <article><span class="art portrait"></span><b>莱恩 · 艾文</b><small>角色</small></article>
-            <article><span class="art guard"></span><b>码头守卫长</b><small>NPC</small></article>
-            <article><span class="art pier"></span><b>老码头栈桥</b><small>场景</small></article>
-            <article><span class="art town"></span><b>雾港全景</b><small>场景</small></article>
-            <article><span class="art map"></span><b>雾港地图</b><small>地图</small></article>
-            <article><span class="art chest"></span><b>潮汐之箱</b><small>道具</small></article>
-            <article><span class="art mark"></span><b>三叉涡旋符号</b><small>线索</small></article>
-            <article><span class="art compass"></span><b>潮声驿团徽记</b><small>线索</small></article>
+          <div class="galleryGrid" id="galleryGrid">
+            <article data-kind="monster"><span class="art portrait"></span><b>未知大型怪物</b><small>怪物</small></article>
+            <article data-kind="npc"><span class="art guard"></span><b>浩文</b><small>随从</small></article>
+            <article data-kind="scene"><span class="art pier"></span><b>泥苔林</b><small>区域</small></article>
+            <article data-kind="scene"><span class="art town"></span><b>猎人公会</b><small>据点</small></article>
+            <article data-kind="scene"><span class="art map"></span><b>旧商道南支线</b><small>路线</small></article>
+            <article data-kind="item"><span class="art chest"></span><b>骨制斩斧</b><small>装备</small></article>
+            <article data-kind="item"><span class="art mark"></span><b>大怪鸟碎羽</b><small>素材</small></article>
+            <article data-kind="monster"><span class="art compass"></span><b>土砂龙迁徙线</b><small>生态</small></article>
           </div>
-          <button class="viewAll">查看全部图集</button>
+          <button class="viewAll" id="viewAllBtn" type="button">显示全部资料</button>
         </section>
       </aside>
     </section>
   </main>
+
   <div class="storyOverlay hidden" id="storyOverlay" aria-hidden="true">
-    <div class="storyPicker">
-      <div class="pickerHeader">
+    <div class="storyPicker compactPicker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+      <div class="pickerHeader compactHeader">
         <div>
-          <h2>选择跑团故事</h2>
-          <p>先选跑团，再选该跑团绑定的固定故事。</p>
+          <h2 id="pickerTitle">选择跑团故事</h2>
+          <p id="pickerHint">先选跑团，再进入该跑团绑定的固定故事。</p>
         </div>
-        <button id="closeStoryPicker">×</button>
+        <button id="closeStoryPicker" type="button" aria-label="关闭">×</button>
       </div>
-      <div class="pickerBody">
-        <section>
-          <h3>跑团</h3>
-          <div id="campaignList" class="campaignList"></div>
-        </section>
-        <section>
-          <h3>故事 / 固定对话</h3>
-          <div id="storyList" class="campaignList storyList"></div>
-        </section>
-      </div>
+      <div class="pickerCampaignRail" id="campaignList"></div>
+      <div class="storyGridPicker" id="storyList"></div>
+      <button class="pickerFooter" id="viewAllCampaignsBtn" type="button">
+        <span>查看全部跑团</span>
+        <b>›</b>
+      </button>
     </div>
   </div>
   <script src="/app.js"></script>

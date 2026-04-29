@@ -1,0 +1,14 @@
+{
+  "campaign_id": "example_campaign",
+  "scope": "locations",
+  "last_updated_turn": 0,
+  "facts": [
+    {
+      "source": "state_writeback",
+      "field": "location_history_updates",
+      "value": "当前位置门缝和灰尘没有新鲜拖痕；窗台外侧有一道来源未确认的擦痕。"
+    }
+  ],
+  "uncertain_or_unconfirmed": [],
+  "notes": []
+}

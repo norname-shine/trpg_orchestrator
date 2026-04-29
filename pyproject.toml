@@ -1,0 +1,13 @@
+[project]
+name = "trpg-orchestrator"
+version = "0.1.0"
+description = "Local text TRPG dual-model orchestration toolkit."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+trpg = "trpg_orchestrator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

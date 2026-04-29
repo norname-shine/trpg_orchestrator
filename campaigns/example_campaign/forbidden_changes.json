@@ -1,0 +1,8 @@
+{
+  "campaign_id": "example_campaign",
+  "global_forbidden": [],
+  "campaign_specific_forbidden": [],
+  "secrets_not_to_reveal": [],
+  "npc_knowledge_boundaries": {},
+  "unconfirmed_should_not_be_written_as_fact": []
+}

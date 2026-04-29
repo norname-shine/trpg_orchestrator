@@ -1,0 +1,11 @@
+{
+  "campaign_id": "example_campaign",
+  "purpose": "Long-term campaign direction prompt for V4 director context.",
+  "background_direction": [],
+  "main_tension": [],
+  "theme_and_tone": [],
+  "main_threads_direction": [],
+  "side_threads_direction": [],
+  "pace_rules": [],
+  "do_not_force_every_turn": []
+}

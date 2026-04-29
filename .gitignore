@@ -1,0 +1,29 @@
+.env
+.browser-profile/
+node_modules/
+outbox/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Local/private campaign state. Keep only the public example template.
+campaigns/campaign_registry.json
+campaigns/*/
+!campaigns/example_campaign/
+!campaigns/example_campaign/*.json
+campaigns/*/logs/
+campaigns/*/backups/
+
+# Local editor/system files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,7 @@
+{
+  "campaign_id": "example_campaign",
+  "purpose": "Optional image generation and visual-description rules. Do not trigger image generation unless requested.",
+  "visual_direction": [],
+  "image_generation_rules": [],
+  "do_not_generate": []
+}

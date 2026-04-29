@@ -1,0 +1,9 @@
+{
+  "campaign_id": "example_campaign",
+  "purpose": "Campaign-specific prose, immersion, localization, and anti-AI style prompt.",
+  "prose_style": [],
+  "immersion_rules": [],
+  "dialogue_rules": [],
+  "localization_rules": [],
+  "avoid_patterns": []
+}

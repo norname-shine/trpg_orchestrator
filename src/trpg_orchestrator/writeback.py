@@ -29,6 +29,8 @@ SCALAR_UPDATE_FIELDS = {
     "equipment_history_updates": ("equipment_history.json", "equipment_updates"),
 }
 
+MAX_APPLIED_WRITEBACK_HASHES = 50
+
 
 def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[str, Any], extra_hashes: list[str] | None = None) -> dict[str, Any]:
     updates: dict[str, Any] = {}
@@ -91,8 +93,30 @@ def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[st
             scene["immediate_pressure"] = short_term["quest"]
         updates["recent_context.json"] = recent
 
+    remember_applied_writeback_hashes(updates, memory, approved_writeback, extra_hashes)
     stamp_updates(updates, memory)
     return updates
+
+
+def remember_applied_writeback_hashes(
+    updates: dict[str, Any],
+    memory: dict[str, Any],
+    approved_writeback: dict[str, Any],
+    extra_hashes: list[str] | None = None,
+) -> None:
+    digests = [writeback_hash(approved_writeback), *(extra_hashes or [])]
+    digests = [digest for digest in digests if digest]
+    if not digests:
+        return
+    recent = deepcopy(updates.get("recent_context.json") or memory["recent_context.json"])
+    applied = recent.setdefault("applied_writeback_hashes", [])
+    if not isinstance(applied, list):
+        applied = []
+        recent["applied_writeback_hashes"] = applied
+    for digest in digests:
+        append_plain_unique(applied, digest)
+    recent["applied_writeback_hashes"] = applied[-MAX_APPLIED_WRITEBACK_HASHES:]
+    updates["recent_context.json"] = recent
 
 
 def migrate_legacy_facts(memory: dict[str, Any]) -> dict[str, Any]:

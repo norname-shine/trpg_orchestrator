@@ -36,6 +36,8 @@ TURN_TYPES = {
 CHOICE_LEVELS = {"none", "minor", "major", "life_risk", "route_split", "moral_cost"}
 CHOICE_STYLES = {"natural_stop", "listed_options", "no_choice"}
 AUDIT_DECISIONS = {"accept", "revise", "reject"}
+CHATGPT_BLOCK_TYPES = {"gm_narration", "player_action", "npc_dialogue", "system_check", "choice_prompt"}
+CHATGPT_ACTOR_KINDS = {"gm", "player", "npc", "system", ""}
 
 
 class SchemaValidationError(ValueError):
@@ -97,6 +99,66 @@ def validate_writeback(data: dict[str, Any]) -> None:
         raise SchemaValidationError("closed_threads must be a list")
 
 
+def validate_chatgpt_blocks(blocks: list[dict[str, Any]]) -> None:
+    if not isinstance(blocks, list):
+        raise SchemaValidationError("ChatGPT blocks must be a list")
+    if not blocks:
+        raise SchemaValidationError("ChatGPT blocks must not be empty")
+
+    narrative_count = 0
+    choice_prompt_count = 0
+    for index, block in enumerate(blocks, start=1):
+        if not isinstance(block, dict):
+            raise SchemaValidationError(f"block {index} must be an object")
+        block_type = str(block.get("type") or "").strip()
+        if block_type not in CHATGPT_BLOCK_TYPES:
+            raise SchemaValidationError(f"block {index} invalid type: {block_type}")
+        actor_kind = str(block.get("actor_kind") or "").strip()
+        if actor_kind not in CHATGPT_ACTOR_KINDS:
+            raise SchemaValidationError(f"block {index} invalid actor_kind: {actor_kind}")
+        body = str(block.get("body") or "").strip()
+        choices = block.get("choices") if isinstance(block.get("choices"), list) else []
+        if not body and not choices:
+            raise SchemaValidationError(f"block {index} must contain body or choices")
+
+        if block_type in {"gm_narration", "player_action", "npc_dialogue", "system_check"} and body:
+            narrative_count += 1
+        if block_type in {"player_action", "npc_dialogue"}:
+            _require_nonempty_string(block, "actor_id", f"block {index}")
+            _require_nonempty_string(block, "avatar_key", f"block {index}")
+        if block_type == "system_check" and block.get("check") not in (None, {}) and not isinstance(block.get("check"), dict):
+            raise SchemaValidationError(f"block {index} check must be an object")
+        if block_type == "choice_prompt":
+            choice_prompt_count += 1
+            validate_choice_prompt(block, index)
+
+    if narrative_count == 0:
+        raise SchemaValidationError("ChatGPT output must include at least one narrative block")
+    if choice_prompt_count > 1:
+        raise SchemaValidationError("ChatGPT output must not include more than one choice_prompt block")
+
+
+def validate_choice_prompt(block: dict[str, Any], index: int) -> None:
+    choices = block.get("choices")
+    if choices in (None, []):
+        return
+    if not isinstance(choices, list):
+        raise SchemaValidationError(f"block {index} choices must be a list")
+    if not 2 <= len(choices) <= 4:
+        raise SchemaValidationError(f"block {index} choices must contain 2-4 choices")
+    seen_ids: set[str] = set()
+    for choice_index, choice in enumerate(choices, start=1):
+        if not isinstance(choice, dict):
+            raise SchemaValidationError(f"block {index} choice {choice_index} must be an object")
+        _require_nonempty_string(choice, "id", f"block {index} choice {choice_index}")
+        _require_nonempty_string(choice, "label", f"block {index} choice {choice_index}")
+        _require_nonempty_string(choice, "risk", f"block {index} choice {choice_index}")
+        choice_id = str(choice.get("id") or "").strip()
+        if choice_id in seen_ids:
+            raise SchemaValidationError(f"block {index} duplicate choice id: {choice_id}")
+        seen_ids.add(choice_id)
+
+
 def validate_audit_result(data: dict[str, Any]) -> None:
     if not isinstance(data, dict):
         raise SchemaValidationError("audit result must be a JSON object")
@@ -116,3 +178,8 @@ def validate_audit_result(data: dict[str, Any]) -> None:
 def _require_object(data: dict[str, Any], key: str) -> None:
     if not isinstance(data.get(key), dict):
         raise SchemaValidationError(f"{key} must be an object")
+
+
+def _require_nonempty_string(data: dict[str, Any], key: str, prefix: str) -> None:
+    if not isinstance(data.get(key), str) or not data.get(key, "").strip():
+        raise SchemaValidationError(f"{prefix} missing non-empty {key}")

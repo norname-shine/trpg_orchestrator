@@ -30,6 +30,9 @@ SCALAR_UPDATE_FIELDS = {
 }
 
 
+MAX_WRITEBACK_HASHES = 50
+
+
 def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[str, Any], extra_hashes: list[str] | None = None) -> dict[str, Any]:
     updates: dict[str, Any] = {}
     long_term = approved_writeback.get("long_term_memory", approved_writeback)
@@ -72,7 +75,8 @@ def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[st
             append_plain_unique(target["campaign_specific_forbidden"], item)
         updates["forbidden_changes.json"] = target
 
-    if short_term or approved_writeback.get("summary_for_recent_context"):
+    writeback_hashes = writeback_hashes_to_record(approved_writeback, extra_hashes)
+    if short_term or approved_writeback.get("summary_for_recent_context") or writeback_hashes:
         recent = deepcopy(updates.get("recent_context.json") or memory["recent_context.json"])
         summary = approved_writeback.get("summary_for_recent_context", recent.get("last_outcome", ""))
         recent["last_outcome"] = summary
@@ -81,6 +85,7 @@ def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[st
             append_plain_unique(recent["recent_summary"], summary)
             recent["recent_summary"] = recent["recent_summary"][-12:]
         recent["short_term_state"] = short_term
+        remember_writeback_hashes(recent, writeback_hashes)
         recent["turn_index"] = int(recent.get("turn_index", 0)) + 1
         scene = recent.setdefault("current_scene", {})
         if short_term.get("location"):
@@ -93,6 +98,28 @@ def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[st
 
     stamp_updates(updates, memory)
     return updates
+
+
+def writeback_hashes_to_record(approved_writeback: dict[str, Any], extra_hashes: list[str] | None = None) -> list[str]:
+    hashes: list[str] = []
+    current_hash = writeback_hash(approved_writeback)
+    if current_hash:
+        hashes.append(current_hash)
+    for digest in extra_hashes or []:
+        if digest:
+            hashes.append(str(digest))
+    return hashes
+
+
+def remember_writeback_hashes(recent: dict[str, Any], hashes: list[str]) -> None:
+    if not hashes:
+        return
+    existing = recent.get("applied_writeback_hashes", [])
+    if not isinstance(existing, list):
+        existing = []
+    for digest in hashes:
+        append_plain_unique(existing, digest)
+    recent["applied_writeback_hashes"] = existing[-MAX_WRITEBACK_HASHES:]
 
 
 def migrate_legacy_facts(memory: dict[str, Any]) -> dict[str, Any]:
@@ -186,5 +213,8 @@ def writeback_hash(writeback: dict[str, Any]) -> str:
 
 
 def has_applied_writeback(memory: dict[str, Any], digest: str) -> bool:
+    if not digest:
+        return False
     recent = memory.get("recent_context.json", {})
-    return digest in recent.get("applied_writeback_hashes", [])
+    applied = recent.get("applied_writeback_hashes", [])
+    return isinstance(applied, list) and digest in applied

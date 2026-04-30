@@ -64,6 +64,37 @@
   },
   "ending_target": "",
   "state_update_hints": [],
+  "visual_assets": [
+    {
+      "kind": "npc | item | scene | map | monster | ecology",
+      "id": "",
+      "title": "",
+      "detail": "",
+      "source_memory": "",
+      "certainty": "confirmed | clue | uncertain | placeholder",
+      "display_zone": "gallery | map | portrait | log",
+      "cache_policy": "stable | scene_only | rebuild_on_version"
+    }
+  ],
+  "map_route": {
+    "title": "",
+    "nodes": [
+      { "id": "", "label": "", "certainty": "confirmed | clue | inferred" }
+    ],
+    "edges": [
+      { "from": "", "to": "", "kind": "route | blocked | trace | danger" }
+    ],
+    "markers": [
+      { "label": "", "kind": "clue | pressure | hazard | resource", "certainty": "confirmed | uncertain" }
+    ]
+  },
   "human_readable_note": ""
 }
 
+
+visual_assets / map_route 规则：
+- 只输出给本地 Canvas 和资料夹使用的视觉提示，不写正文，不生成图片提示词。
+- 不确认未知外观、未知怪物全貌、未知路线终点。
+- 未确认内容必须使用 certainty: "clue" 或 "uncertain"。
+- map_route 标签要短，适合小尺寸 16:9 地图展示。
+- visual_assets 不会自动写入长期记忆，只是本回合可视化提示。

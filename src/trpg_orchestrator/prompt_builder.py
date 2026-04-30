@@ -78,6 +78,9 @@ def build_chatgpt_input(
         [
             read_prompt("chatgpt_style_rules.md"),
             read_prompt("chatgpt_image_rules.md"),
+            read_prompt("canvas_asset_generation_rules.md"),
+            read_prompt("gallery_asset_rules.md"),
+            read_prompt("visual_asset_protocol.md"),
             read_prompt("chatgpt_npc_voice_rules.md"),
             read_prompt("chatgpt_monster_rules.md"),
         ]
@@ -129,3 +132,4 @@ def build_audit_user_prompt(
             json.dumps(writeback, ensure_ascii=False, indent=2),
         ]
     )
+

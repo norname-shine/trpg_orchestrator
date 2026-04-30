@@ -741,6 +741,60 @@ button:disabled {
   font-size: 12px;
   line-height: 1.35;
 }
+.writebackPanel {
+  display: grid;
+  gap: 12px;
+}
+.writebackHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.68);
+}
+.writebackHeader b {
+  display: block;
+  font-size: 18px;
+  color: #7c5526;
+}
+.writebackHeader span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.writebackActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.writebackActions button {
+  min-height: 34px;
+  border-radius: 10px;
+  padding: 0 12px;
+}
+.writebackFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.writebackFiles span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.7);
+  color: #6f5d43;
+  font-size: 12px;
+}
+.writebackPanel pre {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.68);
+}
 pre {
   margin: 0;
   white-space: pre-wrap;
@@ -838,31 +892,54 @@ textarea:focus {
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 10px;
   padding: 12px 14px;
 }
 .galleryGrid article {
   min-width: 0;
-  min-height: 164px;
+  min-height: 92px;
   display: grid;
-  grid-template-rows: 92px auto 24px;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 9px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
   background: rgba(255,255,255,.70);
-  box-shadow: 0 8px 18px rgba(84,62,35,.10);
+  box-shadow: 0 7px 16px rgba(84,62,35,.08);
+  cursor: pointer;
+  transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease;
+}
+.galleryGrid article:hover,
+.galleryGrid article:focus-visible {
+  border-color: rgba(71,125,184,.5);
+  box-shadow: 0 9px 22px rgba(84,62,35,.14);
+  outline: none;
+  transform: translateY(-1px);
+}
+.galleryGrid article.hidden,
+.galleryGrid article[hidden] {
+  display: none;
 }
 .galleryCanvas {
   display: block;
-  width: 100%;
-  height: 92px;
+  width: 68px;
+  height: 68px;
+  border-radius: 14px;
+  border: 1px solid rgba(126,95,58,.25);
   background: #e7d8bd;
+  image-rendering: pixelated;
+}
+.galleryText {
+  min-width: 0;
 }
 .galleryGrid b {
   display: block;
-  padding: 8px 9px 0;
-  font-size: 13px;
+  padding: 0;
+  font-size: 14px;
   line-height: 1.35;
   overflow-wrap: anywhere;
   display: -webkit-box;
@@ -870,11 +947,21 @@ textarea:focus {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.galleryGrid p {
+  margin: 4px 0 3px;
+  color: #6f5d43;
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .galleryGrid small {
   display: block;
-  padding: 0 9px 8px;
+  padding: 0;
   color: var(--muted);
-  align-self: end;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -897,7 +984,8 @@ textarea:focus {
   border-radius: 12px;
 }
 
-.storyOverlay {
+.storyOverlay,
+.galleryOverlay {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -906,7 +994,8 @@ textarea:focus {
   padding-left: max(20px, calc((100vw - min(1920px, calc(100vw - 28px))) / 2 + 326px));
   background: rgba(54, 41, 26, .08);
 }
-.storyOverlay.hidden { display: none; }
+.storyOverlay.hidden,
+.galleryOverlay.hidden { display: none; }
 .storyPicker {
   width: min(760px, calc(100vw - 28px));
   border: 1px solid var(--line-strong);
@@ -1072,6 +1161,175 @@ textarea:focus {
   .topNav { grid-template-columns: 280px minmax(0, 1fr); }
   .navActions { grid-column: 1 / -1; justify-content: flex-end; }
 }
+.galleryOverlay {
+  padding: 64px 20px 20px;
+  background: rgba(54, 41, 26, .16);
+}
+.galleryDialog {
+  width: min(940px, calc(100vw - 40px));
+  max-height: calc(100vh - 84px);
+  margin: 0 auto;
+  display: grid;
+  grid-template-rows: 72px minmax(0, 1fr);
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: rgba(255,251,241,.97);
+  box-shadow: 0 24px 80px rgba(76,55,31,.26);
+  overflow: hidden;
+}
+.galleryDialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.galleryDialogHeader h2,
+.galleryDialogHeader p {
+  margin: 0;
+}
+.galleryDialogHeader p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+#closeGalleryOverlay {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 10px;
+  font-size: 22px;
+}
+.galleryDialogBody {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) 300px;
+  gap: 14px;
+  padding: 14px;
+}
+.galleryDialogList {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+.galleryDialogItem {
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 3px 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  text-align: left;
+  background: rgba(255,255,255,.62);
+  box-shadow: none;
+}
+.galleryDialogItem b,
+.galleryDialogItem small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.galleryDialogItem small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.galleryDialogItem span {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef3ea;
+  color: #5d794f;
+  font-size: 12px;
+}
+.galleryDialogItem.active {
+  border-color: rgba(71,125,184,.55);
+  background: #eef5ff;
+}
+.galleryInspector {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.58);
+}
+.galleryInspector canvas {
+  width: 192px;
+  height: 192px;
+  justify-self: center;
+  border-radius: 16px;
+  border: 1px solid rgba(126,95,58,.25);
+  background: #eadcc3;
+  image-rendering: pixelated;
+}
+.galleryInspector b {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.galleryInspector p {
+  margin: 0;
+  color: #6f5d43;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.galleryInspector span {
+  color: var(--muted);
+}
+.galleryInspector button {
+  min-height: 40px;
+  border-radius: 12px;
+}
+.galleryEmpty {
+  padding: 20px;
+  color: var(--muted);
+}
+.setupGrid h3 {
+  margin: 0;
+}
+.setupGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 16px;
+}
+.embeddedSetup {
+  padding: 0 14px 12px;
+  grid-template-columns: 1fr;
+}
+.setupGrid section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.58);
+}
+.setupGrid label {
+  display: grid;
+  gap: 5px;
+  color: #6f5d43;
+  font-size: 13px;
+}
+.setupGrid input {
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: rgba(255,255,255,.76);
+  color: var(--ink);
+}
+.setupGrid button {
+  min-height: 38px;
+  border-radius: 10px;
+}
 
 @media (max-width: 1120px) {
   .workspace {
@@ -1090,7 +1348,9 @@ textarea:focus {
   .selectBtn, .selectBtn.wide { min-width: 220px; }
   .inputWrap { grid-template-columns: 1fr; }
   .sendAction { min-height: 54px; }
-  .galleryGrid { grid-template-columns: 1fr 1fr; }
+  .galleryGrid { grid-template-columns: 1fr; }
+  .galleryDialogBody { grid-template-columns: 1fr; overflow-y: auto; }
+  .galleryInspector canvas { width: 140px; height: 140px; }
   .msg { grid-template-columns: 34px minmax(0, 1fr); }
   .msg time { display: none; }
   .choiceGrid { grid-template-columns: 1fr; }

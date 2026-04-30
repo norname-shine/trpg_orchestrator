@@ -460,6 +460,8 @@ def _offline_pressure_pack(campaign_id: str, action: str, memory: dict) -> dict:
         "choice_requirement": {"need_choice": False, "choice_level": "none", "why": "offline development placeholder", "choice_style": "no_choice"},
         "ending_target": "",
         "state_update_hints": [],
+        "visual_assets": [],
+        "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
         "human_readable_note": "offline development placeholder pressure pack; use DeepSeek V4 for formal play.",
     }
 

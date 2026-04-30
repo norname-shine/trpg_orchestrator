@@ -16,10 +16,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT
-from .json_utils import read_json, write_json
+from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT, PROMPTS_DIR
+from .encoding_utils import read_text_auto
+from .json_utils import extract_json_object, read_json, write_json
 from .memory_store import MemoryStore
-from .output_parser import parse_chatgpt_output
+from .output_parser import parse_chatgpt_output, public_output
+from .prompt_builder import build_audit_user_prompt, read_prompt
+from .deepseek_client import DeepSeekClient
+from .schema_validator import validate_audit_result, validate_writeback
+from .writeback import apply_approved_writeback, has_applied_writeback, writeback_hash
 
 
 STATIC_DIR = PROJECT_ROOT / "web"
@@ -118,6 +123,24 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/output":
             self._json(output_payload())
             return
+        if parsed.path == "/api/canvas-rules":
+            self._json(canvas_rules_payload())
+            return
+        if parsed.path == "/api/rules":
+            query = parse_qs(parsed.query)
+            self._json(rules_payload(first_query(query, "name")))
+            return
+        if parsed.path == "/api/assets":
+            query = parse_qs(parsed.query)
+            self._json(asset_list(
+                first_query(query, "campaign_id"),
+                first_query(query, "kind"),
+            ))
+            return
+        if parsed.path == "/api/writeback-review":
+            query = parse_qs(parsed.query)
+            self._json(writeback_review_payload(first_query(query, "campaign_id")))
+            return
         if parsed.path == "/api/export":
             self._download_export()
             return
@@ -162,9 +185,29 @@ class Handler(BaseHTTPRequestHandler):
                 select_campaign(campaign_id)
                 self._json({"ok": True, "status": status_payload()})
                 return
+            if parsed.path == "/api/init-campaign":
+                payload = self._read_json()
+                self._json(init_campaign_payload(payload))
+                return
+            if parsed.path == "/api/set-chatgpt-binding":
+                payload = self._read_json()
+                self._json(set_chatgpt_binding_payload(payload))
+                return
+            if parsed.path == "/api/audit-writeback":
+                payload = self._read_json()
+                self._json(audit_writeback_payload(str(payload.get("campaign_id", "")).strip()))
+                return
+            if parsed.path == "/api/apply-writeback":
+                payload = self._read_json()
+                self._json(apply_writeback_payload(str(payload.get("campaign_id", "")).strip()))
+                return
             if parsed.path == "/api/asset":
                 payload = self._read_json()
                 self._json(save_asset(payload))
+                return
+            if parsed.path == "/api/rebuild-assets":
+                payload = self._read_json()
+                self._json(rebuild_assets(payload))
                 return
             if parsed.path == "/api/command":
                 payload = self._read_json()
@@ -190,6 +233,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/api/asset":
+                query = parse_qs(parsed.query)
+                self._json(delete_asset({
+                    "campaign_id": first_query(query, "campaign_id"),
+                    "key": first_query(query, "key"),
+                }))
+                return
+        except Exception as exc:
+            self._json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND)
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stdout.write("%s - %s\n" % (self.address_string(), fmt % args))
 
@@ -299,6 +356,34 @@ def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
     }
 
 
+
+def asset_entry_payload(campaign_id: str, key: str, entry: dict[str, Any]) -> dict[str, Any]:
+    rel_path = str(entry.get("path", ""))
+    full = CAMPAIGNS_DIR / safe_segment(campaign_id) / rel_path
+    url_path = rel_path.replace("\\", "/")
+    if url_path.startswith("assets/"):
+        url_path = url_path[len("assets/"):]
+    return {
+        "key": key,
+        "exists": bool(rel_path and full.exists()),
+        "url": f"/campaign-assets/{safe_segment(campaign_id)}/{url_path}" if rel_path else "",
+        **entry,
+    }
+
+
+def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
+    if not campaign_id:
+        campaign_id = MemoryStore().resolve_campaign_id(None)
+    manifest = load_asset_manifest(campaign_id)
+    entries = []
+    for key, entry in manifest.get("assets", {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if kind and str(entry.get("kind", "")) != kind:
+            continue
+        entries.append(asset_entry_payload(campaign_id, key, entry))
+    entries.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return {"ok": True, "campaign_id": campaign_id, "assets": entries}
 def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
     campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
     key = str(payload.get("key") or "").strip()
@@ -333,6 +418,60 @@ def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
     return asset_lookup(campaign_id, key)
 
 
+
+def safe_asset_target(campaign_id: str, rel_path: str) -> Path:
+    if not rel_path:
+        raise RuntimeError("asset path is empty")
+    root = (CAMPAIGNS_DIR / safe_segment(campaign_id) / "assets").resolve()
+    target = (CAMPAIGNS_DIR / safe_segment(campaign_id) / rel_path).resolve()
+    if root not in target.parents and target != root:
+        raise RuntimeError("asset path escapes campaign assets")
+    if target.suffix.lower() != ".png":
+        raise RuntimeError("only PNG assets can be removed")
+    return target
+
+
+def delete_asset(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
+    key = str(payload.get("key") or "").strip()
+    if not key:
+        raise RuntimeError("asset key is required")
+    manifest = load_asset_manifest(campaign_id)
+    entry = manifest.get("assets", {}).pop(key, None)
+    removed_file = False
+    warnings: list[str] = []
+    if isinstance(entry, dict) and entry.get("path"):
+        try:
+            target = safe_asset_target(campaign_id, str(entry.get("path", "")))
+            if target.exists():
+                target.unlink()
+                removed_file = True
+        except Exception as exc:
+            warnings.append(str(exc))
+    write_json(asset_manifest_path(campaign_id), manifest)
+    return {"ok": True, "campaign_id": campaign_id, "key": key, "removed_file": removed_file, "warnings": warnings}
+
+
+def rebuild_assets(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
+    kind = str(payload.get("kind") or "").strip()
+    manifest = load_asset_manifest(campaign_id)
+    removed: list[str] = []
+    warnings: list[str] = []
+    for key, entry in list(manifest.get("assets", {}).items()):
+        if kind and str(entry.get("kind", "")) != kind:
+            continue
+        if isinstance(entry, dict) and entry.get("path"):
+            try:
+                target = safe_asset_target(campaign_id, str(entry.get("path", "")))
+                if target.exists():
+                    target.unlink()
+            except Exception as exc:
+                warnings.append(f"{key}: {exc}")
+        manifest.get("assets", {}).pop(key, None)
+        removed.append(key)
+    write_json(asset_manifest_path(campaign_id), manifest)
+    return {"ok": True, "campaign_id": campaign_id, "kind": kind, "removed": removed, "warnings": warnings}
 def cli_command(parts: list[str], campaign_id: str = "") -> list[str]:
     command = [sys.executable, "-m", "trpg_orchestrator.cli", *parts]
     if campaign_id and parts[0] not in {"validate-memory", "memory-report", "rewrite-plan", "run-rewrite"}:
@@ -365,6 +504,176 @@ def run_command(command: list[str]) -> None:
     JOB.finish(completed)
 
 
+
+def canvas_rules_payload() -> dict[str, Any]:
+    path = PROMPTS_DIR / "canvas_asset_generation_rules.md"
+    return {
+        "ok": True,
+        "path": str(path),
+        "rules": read_text_auto(path) if path.exists() else "",
+    }
+
+def rules_payload(name: str = "") -> dict[str, Any]:
+    if name:
+        if "/" in name or "\\" in name or not name.endswith(".md"):
+            raise RuntimeError("invalid rule name")
+        path = PROMPTS_DIR / name
+        return {
+            "ok": True,
+            "name": name,
+            "path": str(path),
+            "content": read_text_auto(path) if path.exists() else "",
+            "exists": path.exists(),
+        }
+    rules = []
+    for path in sorted(PROMPTS_DIR.glob("*.md")):
+        content = read_text_auto(path)
+        title = path.stem.replace("_", " ")
+        for line in content.splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+        rules.append({
+            "name": path.name,
+            "title": title,
+            "path": str(path),
+            "size": path.stat().st_size,
+        })
+    return {"ok": True, "rules": rules}
+
+def init_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if not campaign_id:
+        raise RuntimeError("campaign_id is required")
+    if not name:
+        raise RuntimeError("name is required")
+    paths = MemoryStore().init_campaign(campaign_id, name)
+    return {"ok": True, "campaign_id": campaign_id, "root": str(paths.root), "status": status_payload()}
+
+
+def set_chatgpt_binding_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
+    project_name = str(payload.get("project_name") or "").strip()
+    conversation_name = str(payload.get("conversation_name") or "").strip()
+    if not project_name:
+        raise RuntimeError("project_name is required")
+    if not conversation_name:
+        raise RuntimeError("conversation_name is required")
+    MemoryStore().update_chatgpt_binding(campaign_id, project_name, conversation_name)
+    return {"ok": True, "campaign_id": campaign_id, "status": status_payload()}
+
+
+def current_writeback() -> dict[str, Any]:
+    path = OUTBOX_DIR / "state_writeback.json"
+    if path.exists():
+        data = read_json(path)
+        validate_writeback(data)
+        return data
+    raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
+    if not raw_path.exists():
+        raise FileNotFoundError("missing outbox/state_writeback.json or chatgpt_raw_output.md")
+    parsed = parse_chatgpt_output(raw_path.read_text(encoding="utf-8", errors="replace"))
+    validate_writeback(parsed.writeback)
+    write_json(path, parsed.writeback)
+    return parsed.writeback
+
+
+def audit_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id or None)
+    memory = store.load_campaign_memory(resolved)
+    writeback = current_writeback()
+    pressure_pack = read_json(OUTBOX_DIR / "pressure_pack.json") if (OUTBOX_DIR / "pressure_pack.json").exists() else {}
+    audit_result = extract_json_object(DeepSeekClient().complete_json(
+        read_prompt("v4_audit_prompt.md"),
+        build_audit_user_prompt(resolved, memory, pressure_pack, writeback),
+    ))
+    validate_audit_result(audit_result)
+    write_json(OUTBOX_DIR / "v4_audit_result.json", audit_result)
+    return writeback_review_payload(resolved)
+
+
+def writeback_review_payload(campaign_id: str = "") -> dict[str, Any]:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id or None)
+    memory = store.load_campaign_memory(resolved)
+    writeback: dict[str, Any] = {}
+    audit_result: dict[str, Any] = {}
+    pending_updates: dict[str, Any] = {}
+    warnings: list[str] = []
+    try:
+        writeback = current_writeback()
+    except Exception as exc:
+        warnings.append(str(exc))
+    audit_path = OUTBOX_DIR / "v4_audit_result.json"
+    if audit_path.exists():
+        try:
+            audit_result = read_json(audit_path)
+            validate_audit_result(audit_result)
+        except Exception as exc:
+            warnings.append(f"invalid audit result: {exc}")
+            audit_result = {}
+    decision = audit_result.get("decision", "not_audited")
+    approved = audit_result.get("approved_writeback") or writeback
+    if decision in {"accept", "revise"} and approved:
+        raw_digest = writeback_hash(writeback)
+        approved_digest = writeback_hash(approved)
+        for digest in (raw_digest, approved_digest):
+            if digest and has_applied_writeback(memory, digest):
+                warnings.append(f"duplicate writeback already applied: {digest[:12]}")
+        pending_updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest])
+    return {
+        "ok": True,
+        "campaign_id": resolved,
+        "writeback": writeback,
+        "audit_result": audit_result,
+        "decision": decision,
+        "approved_writeback": approved if decision in {"accept", "revise"} else {},
+        "memory_files_to_update": sorted(pending_updates.keys()),
+        "pending_updates": pending_updates,
+        "warnings": warnings + list(audit_result.get("warnings", [])),
+    }
+
+
+def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id or None)
+    memory = store.load_campaign_memory(resolved)
+    writeback = current_writeback()
+    audit_path = OUTBOX_DIR / "v4_audit_result.json"
+    if not audit_path.exists():
+        raise RuntimeError("missing V4 audit result; run audit first")
+    audit_result = read_json(audit_path)
+    validate_audit_result(audit_result)
+    decision = audit_result.get("decision")
+    if decision == "reject":
+        raise RuntimeError(f"V4 rejected writeback: {audit_result.get('reason', '')}")
+    if decision not in {"accept", "revise"}:
+        raise RuntimeError(f"invalid V4 audit decision: {decision}")
+    approved = audit_result.get("approved_writeback") or writeback
+    raw_digest = writeback_hash(writeback)
+    approved_digest = writeback_hash(approved)
+    for digest in (raw_digest, approved_digest):
+        if has_applied_writeback(memory, digest):
+            raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
+    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest])
+    touched = list(updates.keys())
+    if touched:
+        store.backup_files(resolved, touched)
+        store.write_memory_updates(resolved, updates)
+    raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
+    flavor_path = OUTBOX_DIR / "ai_flavor_report.json"
+    pressure_path = OUTBOX_DIR / "pressure_pack.json"
+    store.write_log(resolved, {
+        "player_action": (OUTBOX_DIR / "last_player_action.txt").read_text(encoding="utf-8", errors="replace") if (OUTBOX_DIR / "last_player_action.txt").exists() else "",
+        "v4_pressure_pack": read_json(pressure_path) if pressure_path.exists() else {},
+        "chatgpt_raw_output": raw_path.read_text(encoding="utf-8", errors="replace") if raw_path.exists() else "",
+        "ai_flavor_report": read_json(flavor_path) if flavor_path.exists() else {},
+        "v4_audit_result": audit_result,
+        "final_write": updates,
+    })
+    return {"ok": True, "campaign_id": resolved, "updated_files": touched, "status": status_payload()}
 def status_payload() -> dict[str, Any]:
     store = MemoryStore()
     registry = store.load_registry()
@@ -513,3 +822,12 @@ def split_public(text: str) -> dict[str, str]:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
+

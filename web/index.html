@@ -26,6 +26,7 @@
         <div class="statusChip" id="jobPill"><span></span><b id="jobText">待机</b></div>
         <button data-command="validate-memory" type="button">校验记忆</button>
         <button data-command="memory-report" type="button">记忆报告</button>
+        <button id="rulesBtn" type="button">规则</button>
         <button id="refreshBtn" type="button">刷新</button>
         <button class="exportBtn" id="exportBtn" type="button">导出</button>
       </div>
@@ -119,6 +120,7 @@
             <button class="tinyBtn active" data-panel-tab="story" type="button">正文</button>
             <button class="tinyBtn" data-panel-tab="choices" type="button">选择</button>
             <button class="tinyBtn" data-panel-tab="director" type="button">导演</button>
+            <button class="tinyBtn" data-panel-tab="writeback" type="button">写回</button>
             <button class="tinyBtn" data-panel-tab="logs" type="button">日志</button>
             <button class="tinyBtn" data-panel-tab="summary" type="button">摘要</button>
             <button class="autoScroll active" id="autoScrollBtn" type="button"><span>自动滚动</span><i></i></button>
@@ -134,6 +136,23 @@
           </div>
           <div class="messageFeed hidden" id="directorTab">
             <pre id="directorText"></pre>
+          </div>
+          <div class="messageFeed hidden" id="writebackTab">
+            <div class="writebackPanel">
+              <div class="writebackHeader">
+                <div>
+                  <b id="writebackDecision">未审核</b>
+                  <span id="writebackHint">解析 ChatGPT 回复后，可在这里审核并应用状态回写。</span>
+                </div>
+                <div class="writebackActions">
+                  <button id="refreshWritebackBtn" type="button">刷新预览</button>
+                  <button id="auditWritebackBtn" type="button">V4 审核</button>
+                  <button id="applyWritebackBtn" type="button">写入记忆</button>
+                </div>
+              </div>
+              <div class="writebackFiles" id="writebackFiles"></div>
+              <pre id="writebackText"></pre>
+            </div>
           </div>
           <div class="messageFeed hidden" id="logsTab">
             <pre id="logText"></pre>
@@ -194,12 +213,48 @@
       </div>
       <div class="pickerCampaignRail" id="campaignList"></div>
       <div class="storyGridPicker" id="storyList"></div>
+      <div class="setupGrid embeddedSetup">
+        <section>
+          <h3>新建跑团</h3>
+          <label>campaign_id<input id="newCampaignId" type="text" placeholder="example_campaign"></label>
+          <label>跑团名称<input id="newCampaignName" type="text" placeholder="怪猎长夜团"></label>
+          <button id="createCampaignBtn" type="button">创建并注册</button>
+        </section>
+        <section>
+          <h3>绑定固定对话</h3>
+          <label>ChatGPT Project<input id="bindingProject" type="text" placeholder="TRPG 自动主持"></label>
+          <label>固定对话名称<input id="bindingConversation" type="text" placeholder="怪猎长夜团固定对话"></label>
+          <button id="saveBindingBtn" type="button">保存绑定</button>
+        </section>
+      </div>
       <button class="pickerFooter" id="viewAllCampaignsBtn" type="button">
         <span>查看全部跑团</span>
         <b>›</b>
       </button>
     </div>
   </div>
+  <div class="galleryOverlay hidden" id="galleryOverlay" aria-hidden="true">
+    <div class="galleryDialog" role="dialog" aria-modal="true" aria-labelledby="galleryDialogTitle">
+      <div class="galleryDialogHeader">
+        <div>
+          <h2 id="galleryDialogTitle">资料夹</h2>
+          <p id="galleryDialogHint">本地缓存的地图、NPC、物品与生态线索。</p>
+        </div>
+        <button id="closeGalleryOverlay" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="galleryDialogBody">
+        <div class="galleryDialogList" id="galleryDialogList"></div>
+        <aside class="galleryInspector" id="galleryInspector">
+          <canvas id="galleryInspectorCanvas" width="192" height="192"></canvas>
+          <b id="galleryInspectorTitle">选择一项资料</b>
+          <p id="galleryInspectorDetail">点击左侧资料查看完整说明。</p>
+          <span id="galleryInspectorMeta">资料</span>
+          <button id="useGalleryAssetBtn" type="button">引用到行动输入</button>
+        </aside>
+      </div>
+    </div>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>
+

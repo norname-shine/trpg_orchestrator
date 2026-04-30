@@ -19,6 +19,8 @@ PRESSURE_PACK_KEYS = {
     "ending_target",
     "state_update_hints",
     "human_readable_note",
+    "visual_assets",
+    "map_route",
 }
 
 TURN_TYPES = {
@@ -71,9 +73,12 @@ def validate_pressure_pack(data: dict[str, Any], expected_campaign_id: str | Non
         "must_not_explain_directly",
         "forbidden_this_turn",
         "state_update_hints",
+        "visual_assets",
     ):
         if not isinstance(data.get(key), list):
             raise SchemaValidationError(f"{key} must be a list")
+    if not isinstance(data.get("map_route"), dict):
+        raise SchemaValidationError("map_route must be an object")
 
 
 def validate_writeback(data: dict[str, Any]) -> None:
@@ -111,4 +116,3 @@ def validate_audit_result(data: dict[str, Any]) -> None:
 def _require_object(data: dict[str, Any], key: str) -> None:
     if not isinstance(data.get(key), dict):
         raise SchemaValidationError(f"{key} must be an object")
-

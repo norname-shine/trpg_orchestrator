@@ -14,15 +14,17 @@ const state = {
     task: false,
     memory: false,
   },
+  galleryFilter: "all",
+  renderedMapKey: "",
 };
 
 const $ = (id) => document.getElementById(id);
-const ASSET_GENERATOR_VERSION = 2;
+const ASSET_GENERATOR_VERSION = 6;
 
 function init() {
   drawBackground();
   drawPixelAvatar("TRPG", { cache: false });
-  drawPixelMap("TRPG", { cache: false });
+  drawPixelMap("TRPG", { cache: false, force: true });
   bindControls();
   applyCollapseState();
   refresh();
@@ -37,10 +39,6 @@ function bindControls() {
   $("clearInputBtn").addEventListener("click", () => {
     $("actionInput").value = "";
     $("actionInput").focus();
-  });
-  $("mapZoomBtn").addEventListener("click", () => {
-    const label = $("mapLabel").textContent || state.activeCampaign || "map";
-    drawPixelMap(`${label}:${Date.now()}`, { cache: false });
   });
   $("viewAllBtn").addEventListener("click", () => setGalleryFilter("all"));
   $("viewAllCampaignsBtn").addEventListener("click", () => {
@@ -199,10 +197,7 @@ function renderStatus(data) {
     objectId: slugify(characterName || "player"),
     variant: "hunter",
   });
-  drawPixelMap(scene.location || state.activeCampaign || "map", {
-    cache: true,
-    objectId: slugify(scene.location || "current_map"),
-  });
+  renderCachedMap(scene);
 
   const job = data.job || {};
   const failed = job.returncode !== null && job.returncode !== 0;
@@ -217,6 +212,20 @@ function renderStatus(data) {
   state.lastJobRunning = Boolean(job.running);
 }
 
+function renderCachedMap(scene) {
+  const seed = scene.location || state.activeCampaign || "map";
+  const objectId = slugify(scene.location || "current_map");
+  const mapKey = `${state.activeCampaign}:${objectId}:v${ASSET_GENERATOR_VERSION}`;
+  if (state.renderedMapKey === mapKey) return;
+  state.renderedMapKey = mapKey;
+  drawPixelMap(seed, {
+    cache: true,
+    objectId,
+    scene,
+    force: true,
+  });
+}
+
 function renderCampaignState(campaignState) {
   state.lastCampaignState = campaignState;
   const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
@@ -227,6 +236,7 @@ function renderCampaignState(campaignState) {
   renderCompanionCard(card.companion);
   renderSidePanel(campaignState);
   renderMemoryPanel(campaignState);
+  renderGallery(campaignState);
 }
 
 function extractPlayerName(player, characterPrompt = {}) {
@@ -435,22 +445,42 @@ function currentCampaignMeta() {
 function renderSidePanel(campaignState) {
   const list = $("sideList");
   if (!list) return;
-  const quests = campaignState.quests || {};
-  const player = campaignState.player || {};
-  const rows = state.sideTab === "items"
-    ? normalizeRows(player.facts || []).filter((x) => /斩斧|碎羽|记录|素材|装备|泥甲|物件/.test(x))
-    : normalizeRows(quests.quest_updates || quests.facts || []);
+  const rows = state.sideTab === "items" ? itemRows(campaignState) : questRows(campaignState);
   const fallback = state.sideTab === "items" ? ["暂无物品记录"] : ["暂无任务记录"];
   list.innerHTML = "";
-  (rows.length ? rows.slice(-5) : fallback).forEach((row, index) => {
+  (rows.length ? rows.slice(-5) : fallback.map((title) => ({ title, tag: "记录" }))).forEach((row, index) => {
     const li = document.createElement("li");
     const b = document.createElement("b");
-    b.textContent = row;
+    b.textContent = row.title || row;
+    if (row.detail) {
+      const small = document.createElement("small");
+      small.textContent = row.detail;
+      b.appendChild(small);
+    }
     const span = document.createElement("span");
-    span.textContent = index === rows.length - 1 ? "当前" : "记录";
+    span.textContent = row.tag || (index === rows.length - 1 ? "当前" : "记录");
     li.append(b, span);
     list.appendChild(li);
   });
+}
+
+function questRows(campaignState) {
+  const quests = campaignState.quests || {};
+  return dedupeRows([...normalizeFactRows(quests.quest_updates), ...normalizeFactRows(quests.facts)])
+    .map((row) => ({ ...row, tag: row.tag || "任务" }));
+}
+
+function itemRows(campaignState) {
+  const player = campaignState.player || {};
+  const recent = campaignState.recent || {};
+  const source = [
+    ...normalizeFactRows(campaignState.equipment?.facts),
+    ...normalizeFactRows(player.facts),
+    ...clauseRows(recent.short_term_state?.resources, "物品"),
+    ...clauseRows(recent.short_term_state?.injury_or_damage, "损耗"),
+  ];
+  const keywords = /斩斧|碎羽|素材|装备|物件|药瓶|货车|泥|痕|油灯|拖布|登记册|任务板|缰绳|行囊|鳞|补给|样本|碎片/;
+  return dedupeRows(source.filter((row) => keywords.test(row.title + row.detail))).map((row) => ({ ...row, tag: row.tag || "物品" }));
 }
 
 function renderMemoryPanel(campaignState) {
@@ -471,16 +501,64 @@ function renderMemoryPanel(campaignState) {
 }
 
 function normalizeRows(rows) {
-  return rows.map((row) => {
-    if (typeof row === "string") return row;
-    return row.summary || row.title || row.id || JSON.stringify(row);
-  }).filter(Boolean);
+  return normalizeFactRows(rows).map((row) => row.title);
+}
+
+function normalizeFactRows(rows) {
+  const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
+  return list.map((row) => {
+    if (typeof row === "string") return splitFactText(row);
+    if (!row || typeof row !== "object") return null;
+    const text = row.value || row.summary || row.title || row.name || row.text || row.description || "";
+    const parsed = splitFactText(text || row.id || "");
+    parsed.tag = row.field ? fieldLabel(row.field) : (row.kind || row.type || parsed.tag || "记录");
+    return parsed;
+  }).filter((row) => row && row.title);
+}
+
+function clauseRows(value, tag = "记录") {
+  const text = typeof value === "string" ? value : Array.isArray(value) ? value.join("；") : "";
+  return text.split(/[；;。]/)
+    .map((part) => splitFactText(part))
+    .filter((row) => row.title)
+    .map((row) => ({ ...row, tag }));
+}
+
+function splitFactText(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return { title: "", detail: "", tag: "记录" };
+  const parts = clean.split(/[；;。]/).map((x) => x.trim()).filter(Boolean);
+  const title = parts[0]?.slice(0, 42) || clean.slice(0, 42);
+  const detail = parts.slice(1).join("；").slice(0, 96);
+  return { title, detail, tag: "记录" };
+}
+
+function fieldLabel(field) {
+  return {
+    quest_history_updates: "任务",
+    equipment_history_updates: "装备",
+    location_history_updates: "地点",
+    enemy_or_mystery_updates: "生态",
+    world_state_updates: "世界",
+    player_growth: "成长",
+  }[field] || "记录";
+}
+
+function dedupeRows(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = `${row.title}:${row.detail}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function renderOutput(output) {
   const parsed = output.parsed || {};
-  renderStory(parsed.body || "暂无正文。");
-  setText("choicesText", parsed.choices || "暂无选择点。");
+  const blocks = Array.isArray(parsed.blocks) ? parsed.blocks : [];
+  renderStoryBlocks(blocks, parsed.body || "暂无正文。");
+  renderChoicePanel(blocks, parsed.choices || "暂无选择点。");
   renderSummary(parsed.summary || "暂无回合摘要。");
   const director = {
     pressure_pack: output.pressure_pack || {},
@@ -490,33 +568,127 @@ function renderOutput(output) {
   setText("directorText", JSON.stringify(director, null, 2));
 }
 
-function renderStory(text) {
+function renderStoryBlocks(blocks, fallbackText) {
   const container = $("storyText");
   container.innerHTML = "";
-  const parts = String(text).split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  if (!parts.length) {
-    container.textContent = "暂无正文。";
+  const visibleBlocks = blocks.filter((block) => !["choice_prompt", "summary"].includes(block.type));
+  const rows = visibleBlocks.length ? visibleBlocks : legacyTextBlocks(fallbackText);
+  if (!rows.length) container.textContent = "暂无正文。";
+  rows.forEach((block) => container.appendChild(renderMessageBlock(block)));
+  scrollActiveFeed();
+}
+
+function renderMessageBlock(block) {
+  const role = blockRole(block);
+  const card = document.createElement("article");
+  card.className = `msg ${role}`;
+  card.dataset.blockType = block.type || "gm_narration";
+
+  const avatar = document.createElement("div");
+  avatar.className = "msgAvatar";
+  if (role === "player" || role === "npc") {
+    const canvas = document.createElement("canvas");
+    canvas.width = 48;
+    canvas.height = 48;
+    avatar.appendChild(canvas);
+    drawBlockAvatar(canvas, block, role);
+  } else {
+    avatar.textContent = role === "system" ? "检" : "叙";
+  }
+
+  const body = document.createElement("div");
+  body.className = "msgBody";
+  const title = document.createElement("strong");
+  title.textContent = block.speaker || defaultSpeaker(block.type);
+  const content = document.createElement("div");
+  content.className = "msgText";
+  content.textContent = block.body || "";
+  body.append(title, content);
+  const check = checkMeta(block);
+  if (check) body.appendChild(check);
+
+  const time = document.createElement("time");
+  time.textContent = block.time || "现在";
+  card.append(avatar, body, time);
+  return card;
+}
+
+function renderChoicePanel(blocks, fallbackText) {
+  const choiceBlock = blocks.find((block) => block.type === "choice_prompt");
+  const holder = $("choicesText");
+  if (!holder) return;
+  holder.innerHTML = "";
+  if (choiceBlock?.body) {
+    const intro = document.createElement("div");
+    intro.className = "choiceIntro";
+    intro.textContent = choiceBlock.body;
+    holder.appendChild(intro);
+  }
+  const choices = Array.isArray(choiceBlock?.choices) ? choiceBlock.choices : [];
+  if (choices.length) {
+    const grid = document.createElement("div");
+    grid.className = "choiceGrid";
+    choices.slice(0, 4).forEach((choice, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "choiceOption";
+      const label = choice.label || choice.text || `选择 ${index + 1}`;
+      button.innerHTML = `<b>${escapeHtml(label)}</b>${choice.risk ? `<small>${escapeHtml(choice.risk)}</small>` : ""}`;
+      button.addEventListener("click", () => {
+        const input = $("actionInput");
+        if (input) {
+          input.value = label;
+          input.focus();
+        }
+      });
+      grid.appendChild(button);
+    });
+    holder.appendChild(grid);
     return;
   }
-  parts.forEach((part, index) => {
-    const card = document.createElement("article");
-    const role = index === 0 ? "gm" : index % 6 === 3 ? "system" : "gm";
-    card.className = `msg ${role}`;
-    const badge = document.createElement("div");
-    badge.className = "badge";
-    badge.textContent = role === "system" ? "检" : "叙";
-    const body = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = role === "system" ? "系统记录" : "GM 叙述";
-    const content = document.createElement("div");
-    content.textContent = part;
-    body.append(title, content);
-    const time = document.createElement("time");
-    time.textContent = "现在";
-    card.append(badge, body, time);
-    container.appendChild(card);
-  });
-  scrollActiveFeed();
+  holder.textContent = choiceBlock?.body || fallbackText || "暂无选择点。";
+}
+
+function blockRole(block) {
+  if (block.type === "player_action") return "player";
+  if (block.type === "npc_dialogue") return "npc";
+  if (block.type === "system_check") return "system";
+  return "gm";
+}
+
+function defaultSpeaker(type) {
+  if (type === "player_action") return "玩家";
+  if (type === "npc_dialogue") return "NPC";
+  if (type === "system_check") return "系统检定";
+  return "GM 叙述";
+}
+
+function checkMeta(block) {
+  const check = block.check || block.meta?.check;
+  if (!check || typeof check !== "object") return null;
+  const row = document.createElement("div");
+  row.className = "checkMeta";
+  const parts = [
+    check.skill || check.name || check.type,
+    check.roll ? `掷骰 ${check.roll}` : "",
+    check.target ? `难度 ${check.target}` : "",
+    check.result || check.outcome || "",
+  ].filter(Boolean);
+  row.textContent = parts.join(" · ");
+  return parts.length ? row : null;
+}
+
+function legacyTextBlocks(text) {
+  return String(text || "")
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part, index) => ({
+      type: index % 6 === 3 ? "system_check" : "gm_narration",
+      speaker: index % 6 === 3 ? "系统记录" : "GM 叙述",
+      body: part,
+      time: "现在",
+    }));
 }
 
 function renderSummary(text) {
@@ -626,6 +798,7 @@ async function selectCampaign(campaignId) {
   });
   state.activeCampaign = campaignId;
   state.selectedCampaign = campaignId;
+  state.renderedMapKey = "";
   closeStoryPicker();
   await refresh();
 }
@@ -643,12 +816,132 @@ function showPanel(name) {
 }
 
 function setGalleryFilter(filter) {
+  state.galleryFilter = filter || "all";
   document.querySelectorAll("#galleryFilters button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.filter === filter);
+    button.classList.toggle("active", button.dataset.filter === state.galleryFilter);
   });
   document.querySelectorAll("#galleryGrid article").forEach((card) => {
-    card.classList.toggle("hidden", filter !== "all" && card.dataset.kind !== filter);
+    card.classList.toggle("hidden", state.galleryFilter !== "all" && card.dataset.kind !== state.galleryFilter);
   });
+}
+
+function renderGallery(campaignState) {
+  const grid = $("galleryGrid");
+  if (!grid) return;
+  const assets = buildVisualAssets(campaignState);
+  grid.innerHTML = "";
+  assets.forEach((asset) => {
+    const card = document.createElement("article");
+    card.dataset.kind = asset.kind;
+    const canvas = document.createElement("canvas");
+    canvas.width = asset.kind === "scene" ? 260 : 128;
+    canvas.height = asset.kind === "scene" ? 120 : 128;
+    canvas.className = "galleryCanvas";
+    const title = document.createElement("b");
+    title.textContent = asset.title;
+    const meta = document.createElement("small");
+    meta.textContent = asset.meta || galleryKindLabel(asset.kind);
+    card.append(canvas, title, meta);
+    grid.appendChild(card);
+    drawGalleryAsset(canvas, asset);
+  });
+  setGalleryFilter(state.galleryFilter);
+}
+
+function buildVisualAssets(campaignState) {
+  const recent = campaignState.recent || {};
+  const scene = recent.current_scene || {};
+  const rows = [];
+  rows.push({
+    kind: "scene",
+    key: `map:${scene.location || state.activeCampaign || "current"}`,
+    title: conciseTitle(scene.location || "当前区域地图", 18),
+    meta: "地图",
+    seed: scene.location || state.activeCampaign || "map",
+    scene,
+  });
+  (scene.active_npcs || []).slice(0, 4).forEach((name) => {
+    rows.push({
+      kind: "npc",
+      key: `npc:${name}`,
+      title: name,
+      meta: "NPC",
+      seed: name,
+    });
+  });
+  itemRows(campaignState).slice(-6).forEach((item, index) => {
+    rows.push({
+      kind: "item",
+      key: `item:${item.title}:${index}`,
+      title: conciseTitle(item.title, 20),
+      meta: item.tag || "物品",
+      seed: `${item.title}:${item.detail}`,
+      detail: item.detail,
+    });
+  });
+  monsterRows(campaignState).slice(-3).forEach((monster, index) => {
+    rows.push({
+      kind: "monster",
+      key: `monster:${monster.title}:${index}`,
+      title: conciseTitle(monster.title, 20),
+      meta: monster.tag || "生态",
+      seed: `${monster.title}:${monster.detail}`,
+      detail: monster.detail,
+    });
+  });
+  return dedupeAssets(rows).slice(0, 12);
+}
+
+function monsterRows(campaignState) {
+  const rows = [
+    ...normalizeFactRows(campaignState.ecology?.facts),
+    ...normalizeFactRows(campaignState.world?.facts),
+    ...clauseRows(campaignState.recent?.short_term_state?.resources, "生态"),
+    ...clauseRows(campaignState.recent?.short_term_state?.injury_or_damage, "生态"),
+  ];
+  return rows.filter((row) => /怪物|土砂龙|迁徙|生态|痕迹|泥痕|驮兽|未知/.test(row.title + row.detail));
+}
+
+function dedupeAssets(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = slugify(row.key || row.title);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function conciseTitle(text, maxLen) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > maxLen ? `${clean.slice(0, maxLen - 1)}…` : clean;
+}
+
+function galleryKindLabel(kind) {
+  return { npc: "NPC", scene: "场景", item: "物品", monster: "生态" }[kind] || "资料";
+}
+
+function drawGalleryAsset(canvas, asset) {
+  const kind = asset.kind === "scene" ? "gallery_map" : `gallery_${asset.kind}`;
+  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" ? "portraits" : "items";
+  const draw = () => {
+    if (asset.kind === "scene") drawPixelMap(asset.seed, { cache: false, canvas, scene: asset.scene, compact: true });
+    else if (asset.kind === "npc") drawPixelPortraitToCanvas(canvas, asset.seed, "npc");
+    else if (asset.kind === "monster") drawCanvasMonster(canvas, asset);
+    else drawCanvasItem(canvas, asset);
+  };
+  if (state.activeCampaign) {
+    cacheCanvasAsset({
+      canvas,
+      kind,
+      subdir,
+      objectId: slugify(asset.key || asset.title),
+      seedText: asset.seed || asset.title,
+      draw,
+    });
+    return;
+  }
+  draw();
 }
 
 function setBusy(running, error = false) {
@@ -695,6 +988,108 @@ function hashSeed(text) {
     h = Math.imul(h, 16777619);
   }
   return h >>> 0;
+}
+
+function drawBlockAvatar(canvas, block, role) {
+  const actorKey = block.avatar_key || block.actor_id || block.speaker || role;
+  const kind = role === "npc" ? "npc_portrait" : "player_portrait";
+  const draw = () => drawPixelPortraitToCanvas(canvas, actorKey, role);
+  if (state.activeCampaign) {
+    cacheCanvasAsset({
+      canvas,
+      kind,
+      subdir: "portraits",
+      objectId: slugify(actorKey),
+      seedText: actorKey,
+      draw,
+    });
+    return;
+  }
+  draw();
+}
+
+function drawPixelPortraitToCanvas(canvas, seedText, role) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`${role}:${seedText}`);
+  const size = canvas.width;
+  const cell = size / 24;
+  const npc = role === "npc";
+  const skin = ["#d9a36e", "#c58b5c", "#e0b17d", "#b9794f", "#9f6748"][seed % 5];
+  const hair = ["#2b241c", "#463423", "#6b4a2e", "#1d2528", "#7a6a48"][(seed >>> 3) % 5];
+  const cloth = role === "npc"
+    ? ["#465a63", "#7a5c36", "#5c6642", "#6d4b55", "#66594a", "#31515a"][(seed >>> 6) % 6]
+    : ["#31556b", "#704b2e", "#365747", "#533f65"][(seed >>> 6) % 4];
+  const accent = ["#d6bc75", "#9eb0a2", "#b46d45", "#486d88", "#8d7650"][(seed >>> 11) % 5];
+  const hairStyle = npc ? (seed >>> 14) % 5 : (seed >>> 14) % 3;
+  const faceStyle = npc ? (seed >>> 18) % 5 : (seed >>> 18) % 3;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const mirror = (x, y, w, h, color) => {
+    px(x, y, w, h, color);
+    px(24 - x - w, y, w, h, color);
+  };
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, size, size);
+  px(0, 0, 24, 24, npc ? ["#d8c4a4", "#c8b79b", "#d4c0aa"][(seed >>> 22) % 3] : "#d3c7b0");
+  if (hairStyle === 0) {
+    px(5, 3, 14, 4, hair);
+    mirror(4, 5, 3, 3, hair);
+  } else if (hairStyle === 1) {
+    px(4, 2, 16, 3, hair);
+    px(5, 5, 6, 3, hair);
+    px(14, 5, 5, 2, hair);
+  } else if (hairStyle === 2) {
+    px(6, 2, 12, 2, hair);
+    mirror(3, 4, 4, 7, hair);
+  } else if (hairStyle === 3) {
+    px(4, 4, 16, 3, hair);
+    px(3, 2, 18, 2, "#24211b");
+    px(5, 1, 14, 1, accent);
+  } else {
+    px(5, 2, 14, 5, hair);
+    px(17, 5, 3, 5, hair);
+  }
+  px(6, 6, 12, 10, skin);
+  mirror(5, 8, 2, 5, shadeColor(skin, -18));
+  px(8, 8, 8, 5, "#e7bd89");
+  if (faceStyle === 2) {
+    mirror(8, 9, 3, 1, "#111816");
+  } else {
+    mirror(8, 9, 2, 1, "#111816");
+  }
+  px(11, 11, 2, 1, "#805338");
+  px(9, 14, 6, faceStyle === 1 ? 2 : 1, (seed >>> 9) & 1 ? "#6b2e2e" : "#4e2c24");
+  if (faceStyle === 3) px(7, 12, 2, 1, "#d9c08f");
+  if (faceStyle === 4) px(10, 15, 5, 2, "#59412d");
+  px(6, 16, 12, 5, cloth);
+  mirror(3, 17, 4, 5, npc ? shadeColor(cloth, -18) : "#6a4a30");
+  px(8, 16, 8, 1, accent);
+  if (npc) {
+    if ((seed >>> 24) & 1) {
+      px(17, 5, 2, 6, "#7b6c50");
+      px(18, 4, 1, 1, accent);
+    } else {
+      px(4, 6, 2, 6, "#6f5f45");
+      px(18, 6, 2, 6, "#6f5f45");
+    }
+    if ((seed >>> 25) & 1) px(12, 4, 7, 2, "#1f2426");
+    if ((seed >>> 26) & 1) px(7, 13, 10, 1, "#51321f");
+  } else {
+    px(17, 15, 4, 2, "#8f6530");
+    px(18, 14, 2, 1, "#d6bc75");
+  }
+  px(4, 22, 16, 2, "#8f846f");
+}
+
+function shadeColor(hex, amount) {
+  const raw = hex.replace("#", "");
+  const num = parseInt(raw, 16);
+  const r = Math.max(0, Math.min(255, (num >> 16) + amount));
+  const g = Math.max(0, Math.min(255, ((num >> 8) & 255) + amount));
+  const b = Math.max(0, Math.min(255, (num & 255) + amount));
+  return `#${[r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function drawPixelAvatar(seedText, options = {}) {
@@ -800,7 +1195,7 @@ function drawPixelPalico(seedText, options = {}) {
 }
 
 function drawPixelMap(seedText, options = {}) {
-  const canvas = $("mapCanvas");
+  const canvas = options.canvas || $("mapCanvas");
   if (!canvas) return;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
@@ -809,7 +1204,7 @@ function drawPixelMap(seedText, options = {}) {
       subdir: "maps",
       objectId: options.objectId || slugify(seedText),
       seedText,
-      draw: () => drawPixelMap(seedText, { cache: false }),
+      draw: () => drawPixelMap(seedText, { cache: false, canvas, scene: options.scene, compact: options.compact }),
     });
     return;
   }
@@ -817,34 +1212,286 @@ function drawPixelMap(seedText, options = {}) {
   const w = canvas.width;
   const h = canvas.height;
   const seed = hashSeed(seedText);
-  const cell = 12;
-  ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = "#cfc7b0";
+  const scene = options.scene || {};
+  ctx.imageSmoothingEnabled = true;
+  drawMapPaper(ctx, w, h, seed);
+  drawMapTerrain(ctx, w, h, seed);
+  drawMapRoute(ctx, w, h, seed);
+  drawMapNodes(ctx, w, h, seed, scene, Boolean(options.compact || h < 180));
+}
+
+function drawMapPaper(ctx, w, h, seed) {
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, "#eadfca");
+  g.addColorStop(.55, "#f6eedb");
+  g.addColorStop(1, "#d6c3a1");
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
-  for (let y = 0; y < h; y += cell) {
-    for (let x = 0; x < w; x += cell) {
-      const n = (x * 31 + y * 17 + seed) % 97;
-      ctx.fillStyle = n < 24 ? "#8ab0b7" : n < 34 ? "#d8c99f" : n < 42 ? "#b7c2a6" : "#d5ceb9";
-      ctx.fillRect(x, y, cell, cell);
-    }
+  for (let i = 0; i < 360; i += 1) {
+    const x = (i * 73 + seed) % w;
+    const y = (i * 41 + (seed >>> 4)) % h;
+    ctx.fillStyle = i % 2 ? "rgba(99,76,45,.055)" : "rgba(255,255,255,.11)";
+    ctx.fillRect(x, y, 1.5, 1.5);
   }
-  ctx.fillStyle = "#746a55";
-  for (let i = 0; i < 38; i += 1) {
-    const x = i * 20;
-    const y = 190 - Math.sin(i / 3) * 44;
-    ctx.fillRect(x, y, 28, 14);
+}
+
+function drawMapTerrain(ctx, w, h, seed) {
+  const blob = (x, y, rw, rh, color, alpha) => {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rw, rh, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+  blob(w * .78, h * .28, w * .23, h * .23, "#d5ad68", .34);
+  blob(w * .86, h * .65, w * .2, h * .26, "#c69a5d", .22);
+  blob(w * .26, h * .72, w * .22, h * .18, "#aebc8d", .24);
+  ctx.save();
+  ctx.strokeStyle = "rgba(127, 93, 55, .32)";
+  ctx.lineWidth = Math.max(2, w / 260);
+  for (let i = 0; i < 10; i += 1) {
+    const x = w * .62 + i * w * .035;
+    const y = h * .34 + Math.sin(i + seed) * h * .05;
+    ctx.beginPath();
+    ctx.moveTo(x - 22, y + 20);
+    ctx.lineTo(x, y - 18);
+    ctx.lineTo(x + 24, y + 20);
+    ctx.stroke();
   }
-  ctx.fillStyle = "#f2dfad";
-  [[120, 130], [330, 96], [510, 168]].forEach(([x, y]) => {
-    ctx.fillRect(x, y, 70, 50);
-    ctx.fillStyle = "#8a6b43";
-    ctx.fillRect(x + 10, y + 10, 50, 8);
-    ctx.fillStyle = "#f2dfad";
+  ctx.restore();
+}
+
+function drawMapRoute(ctx, w, h, seed) {
+  const route = [[w * .12, h * .67], [w * .34, h * .58], [w * .55, h * .48], [w * .82, h * .36]];
+  const creek = [[w * .06, h * .32], [w * .2, h * .42], [w * .36, h * .4], [w * .51, h * .52]];
+  strokeCurve(ctx, creek, "rgba(78,135,157,.48)", Math.max(9, w / 38));
+  strokeCurve(ctx, creek, "rgba(242,250,247,.42)", Math.max(2, w / 120));
+  strokeCurve(ctx, route, "rgba(74,53,31,.22)", Math.max(16, w / 26));
+  strokeCurve(ctx, route, "#8b6a3d", Math.max(8, w / 60));
+  ctx.save();
+  ctx.setLineDash([12, 12]);
+  strokeCurve(ctx, route, "rgba(255,244,214,.48)", Math.max(2, w / 180));
+  ctx.restore();
+  const migration = [[w * .16, h * .82], [w * .34, h * .78], [w * .55, h * .69], [w * .72, h * .61]];
+  ctx.save();
+  ctx.setLineDash([10, 8]);
+  strokeCurve(ctx, migration, "rgba(83,118,68,.78)", Math.max(6, w / 76));
+  ctx.restore();
+}
+
+function drawMapNodes(ctx, w, h, seed, scene, compact) {
+  const labels = mapLabels(scene);
+  const nodes = [
+    { label: labels[0], x: w * .17, y: h * .66, tone: "#b98634" },
+    { label: labels[1], x: w * .44, y: h * .52, tone: "#4b7da8" },
+    { label: labels[2], x: w * .67, y: h * .38, tone: "#b98634" },
+  ];
+  if (/泥|痕|药|货车|驮兽/.test(JSON.stringify(scene))) {
+    nodes.push({ label: "可疑痕迹", x: w * .58, y: h * .28, tone: "#a74732" });
+  }
+  nodes.forEach((node) => drawMapNode(ctx, node, compact));
+  ctx.save();
+  ctx.font = `800 ${compact ? 22 : 42}px Microsoft YaHei`;
+  ctx.fillStyle = "#536f45";
+  ctx.strokeStyle = "rgba(255,250,239,.8)";
+  ctx.lineWidth = compact ? 6 : 9;
+  ctx.strokeText("异常迁徙 / 现场压力", w * .18, h * .9);
+  ctx.fillText("异常迁徙 / 现场压力", w * .18, h * .9);
+  ctx.restore();
+}
+
+function mapLabels(scene) {
+  const text = String(scene.location || "");
+  if (text.includes("长夜据点")) return ["前厅", "廊道", "货车"];
+  if (text.includes("石溪") || text.includes("黄土")) return ["公会", "石溪道", "黄土峡口"];
+  return ["起点", "现场", "远端"];
+}
+
+function drawMapNode(ctx, node, compact) {
+  const cardW = compact ? 106 : 190;
+  const cardH = compact ? 40 : 66;
+  const x = Math.max(cardW / 2 + 8, Math.min(node.x, ctx.canvas.width - cardW / 2 - 8));
+  const y = Math.max(cardH / 2 + 8, Math.min(node.y, ctx.canvas.height - cardH / 2 - 8));
+  ctx.save();
+  ctx.fillStyle = "rgba(255,250,239,.9)";
+  ctx.strokeStyle = "rgba(73,48,25,.28)";
+  roundRectPath(ctx, x - cardW / 2, y - cardH / 2, cardW, cardH, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = node.tone;
+  ctx.beginPath();
+  ctx.arc(x - cardW / 2 + (compact ? 19 : 30), y, compact ? 8 : 15, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#3e3020";
+  ctx.font = `800 ${compact ? 18 : 34}px Microsoft YaHei`;
+  ctx.fillText(conciseTitle(node.label, compact ? 5 : 8), x - cardW / 2 + (compact ? 34 : 58), y + (compact ? 6 : 12));
+  ctx.restore();
+}
+
+function strokeCurve(ctx, points, color, width) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const midX = (points[i][0] + points[i + 1][0]) / 2;
+    const midY = (points[i][1] + points[i + 1][1]) / 2;
+    ctx.quadraticCurveTo(points[i][0], points[i][1], midX, midY);
+  }
+  const last = points[points.length - 1];
+  ctx.lineTo(last[0], last[1]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawCanvasItem(canvas, asset) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(asset.seed || asset.title);
+  drawIconBase(ctx, canvas.width, canvas.height, "#cfb88d", "#7f603d");
+  const text = `${asset.title}${asset.detail || ""}`;
+  if (/泥|痕/.test(text)) return drawMudIcon(ctx, canvas.width, canvas.height, seed);
+  if (/药|瓶/.test(text)) return drawBottleIcon(ctx, canvas.width, canvas.height, seed);
+  if (/斧|装备|武器/.test(text)) return drawAxeIcon(ctx, canvas.width, canvas.height, seed);
+  if (/登记|任务板|木牌|记录/.test(text)) return drawSignIcon(ctx, canvas.width, canvas.height, seed);
+  if (/羽|鳞|素材|碎片/.test(text)) return drawScaleIcon(ctx, canvas.width, canvas.height, seed);
+  return drawSatchelIcon(ctx, canvas.width, canvas.height, seed);
+}
+
+function drawCanvasMonster(canvas, asset) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(asset.seed || asset.title);
+  drawIconBase(ctx, canvas.width, canvas.height, "#9ea889", "#4f6348");
+  ctx.fillStyle = "#715332";
+  for (let i = 0; i < 5; i += 1) {
+    ctx.beginPath();
+    ctx.ellipse(40 + i * 12, 74 - i * 5, 18, 8, -.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = "#3f3022";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(32, 38);
+  ctx.quadraticCurveTo(65, 12, 96, 42);
+  ctx.stroke();
+  ctx.fillStyle = (seed & 1) ? "#d5b86a" : "#b08a4e";
+  ctx.beginPath();
+  ctx.arc(66, 45, 14, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawIconBase(ctx, w, h, bg1, bg2) {
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, bg1);
+  g.addColorStop(1, bg2);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = "rgba(72,48,26,.28)";
+  ctx.lineWidth = 4;
+  roundRectPath(ctx, 9, 9, w - 18, h - 18, 16);
+  ctx.stroke();
+}
+
+function drawMudIcon(ctx, w, h) {
+  ctx.fillStyle = "#69482d";
+  for (let i = 0; i < 14; i += 1) {
+    ctx.beginPath();
+    ctx.ellipse(32 + (i * 17) % 56, 34 + (i * 11) % 48, 10, 5, i, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = "#2f241a";
+  ctx.lineWidth = 5;
+  [34, 56].forEach((x) => {
+    ctx.beginPath();
+    ctx.moveTo(x, 82);
+    ctx.quadraticCurveTo(x + 10, 56, x + 28, 70);
+    ctx.stroke();
   });
-  ctx.fillStyle = "#4d82bd";
-  ctx.fillRect(590, 40, 24, 24);
-  ctx.fillStyle = "#d6a23e";
-  ctx.fillRect(145, 112, 22, 22);
+}
+
+function drawBottleIcon(ctx, w, h) {
+  ctx.fillStyle = "#dbe9c9";
+  roundRectPath(ctx, w * .42, h * .26, w * .22, h * .48, 8);
+  ctx.fill();
+  ctx.fillStyle = "#6f8f65";
+  ctx.fillRect(w * .47, h * .18, w * .12, h * .13);
+  ctx.fillStyle = "rgba(167,71,50,.72)";
+  ctx.fillRect(w * .44, h * .54, w * .18, h * .17);
+  ctx.strokeStyle = "#6b4c32";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(w * .24, h * .76);
+  ctx.lineTo(w * .72, h * .83);
+  ctx.stroke();
+}
+
+function drawAxeIcon(ctx, w, h) {
+  ctx.strokeStyle = "#4c3824";
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.moveTo(w * .28, h * .78);
+  ctx.lineTo(w * .7, h * .25);
+  ctx.stroke();
+  ctx.fillStyle = "#d1bc84";
+  ctx.beginPath();
+  ctx.moveTo(w * .63, h * .18);
+  ctx.lineTo(w * .88, h * .32);
+  ctx.lineTo(w * .62, h * .45);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawSignIcon(ctx, w, h) {
+  ctx.fillStyle = "#704820";
+  roundRectPath(ctx, w * .22, h * .36, w * .56, h * .25, 5);
+  ctx.fill();
+  ctx.fillStyle = "#ead2a0";
+  ctx.fillRect(w * .3, h * .45, w * .36, h * .04);
+  ctx.fillRect(w * .3, h * .53, w * .46, h * .04);
+  ctx.fillStyle = "#5b3b20";
+  ctx.fillRect(w * .47, h * .62, w * .08, h * .24);
+}
+
+function drawScaleIcon(ctx, w, h) {
+  for (let i = 0; i < 4; i += 1) {
+    ctx.fillStyle = ["#d4c37c", "#a7904f", "#6d744f", "#e2d08a"][i];
+    ctx.beginPath();
+    ctx.moveTo(w * (.28 + i * .08), h * (.68 - i * .05));
+    ctx.quadraticCurveTo(w * (.43 + i * .07), h * .22, w * (.73 + i * .02), h * (.55 - i * .03));
+    ctx.quadraticCurveTo(w * (.52 + i * .04), h * .78, w * (.28 + i * .08), h * (.68 - i * .05));
+    ctx.fill();
+  }
+}
+
+function drawSatchelIcon(ctx, w, h) {
+  ctx.fillStyle = "#8b6036";
+  roundRectPath(ctx, w * .24, h * .38, w * .54, h * .36, 10);
+  ctx.fill();
+  ctx.fillStyle = "#b98a53";
+  roundRectPath(ctx, w * .31, h * .29, w * .4, h * .18, 8);
+  ctx.fill();
+  ctx.strokeStyle = "#4f3620";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(w * .36, h * .5);
+  ctx.lineTo(w * .72, h * .63);
+  ctx.stroke();
+  ctx.fillStyle = "#d9bd73";
+  ctx.fillRect(w * .46, h * .53, w * .1, h * .1);
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
 
 async function cacheCanvasAsset({ canvas, kind, subdir, objectId, seedText, draw }) {
@@ -881,10 +1528,12 @@ async function cacheCanvasAsset({ canvas, kind, subdir, objectId, seedText, draw
       }),
     });
     state.assetCache[key] = saved.url ? { url: saved.url } : null;
+    if (saved.url) updateMapImageIfNeeded(canvas, saved.url);
   } catch (err) {
     console.warn("asset cache failed", err);
     state.assetCache[key] = null;
     draw();
+    updateMapImageIfNeeded(canvas, canvas.toDataURL("image/png"));
   }
 }
 
@@ -894,11 +1543,18 @@ function drawImageToCanvas(canvas, url, fallback) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    updateMapImageIfNeeded(canvas, image.src);
   };
   image.onerror = () => {
     if (fallback) fallback();
   };
   image.src = `${url}?v=${ASSET_GENERATOR_VERSION}`;
+}
+
+function updateMapImageIfNeeded(canvas, url) {
+  if (canvas.id !== "mapCanvas") return;
+  const image = $("mapImage");
+  if (image && url) image.src = url;
 }
 
 function slugify(value) {

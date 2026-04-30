@@ -109,6 +109,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/new-campaign-demo.html":
             self._send_file(STATIC_DIR / "new-campaign-demo.html", "text/html; charset=utf-8")
             return
+        if parsed.path == "/map-item-preview.html":
+            self._send_file(STATIC_DIR / "map-item-preview.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self._json(status_payload())
             return
@@ -421,6 +424,10 @@ def campaign_state(campaign_id: str) -> dict[str, Any]:
         "character_prompt": maybe("character_prompt.json"),
         "recent": maybe("recent_context.json"),
         "quests": maybe("quest_history.json"),
+        "equipment": maybe("equipment_history.json"),
+        "locations": maybe("location_history.json"),
+        "world": maybe("world_state.json"),
+        "ecology": maybe("enemy_or_monster_ecology.json"),
         "npcs": maybe("npc_memory.json"),
         "threads": maybe("main_threads.json"),
     }

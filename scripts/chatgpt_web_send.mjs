@@ -31,7 +31,7 @@ try {
   await safetyCheck(page);
   if (captureOnly) {
     const latest = await latestAssistantText(page);
-    if (!isCompleteReply(latest)) fail("Latest assistant reply is missing required markers.");
+    if (!isCompleteReply(latest)) fail("Latest assistant reply is missing required markers or JSON fields.");
     fs.writeFileSync(outputPath, latest.trim() + "\n", "utf8");
     console.log(`Captured latest assistant reply: ${latest.length} chars`);
   } else {
@@ -161,7 +161,7 @@ async function latestAssistantText(page) {
   const count = await locators.count().catch(() => 0);
   for (let i = count - 1; i >= 0; i -= 1) {
     const text = await locators.nth(i).innerText({ timeout: 1000 }).catch(() => "");
-    if (text.includes(M.body) || text.includes(M.writebackBegin) || text.includes(M.choices)) return text;
+    if (text.includes(M.body) || text.includes(M.writebackBegin) || text.includes(M.choices) || looksLikeStructuredJson(text)) return text;
   }
   return "";
 }
@@ -203,7 +203,36 @@ function hasContentButMissingWriteback(text) {
 }
 
 function isCompleteReply(text) {
+  if (looksLikeStructuredJson(text)) return true;
   return Object.values(M).every((marker) => text.includes(marker));
+}
+
+function looksLikeStructuredJson(text) {
+  const payload = extractJsonPayload(text);
+  if (!payload) return false;
+  try {
+    const data = JSON.parse(payload);
+    return Array.isArray(data.blocks)
+      && data.blocks.length > 0
+      && (isPlainObject(data.state_writeback) || isPlainObject(data.writeback) || isPlainObject(data.memory_patch));
+  } catch {
+    return false;
+  }
+}
+
+function extractJsonPayload(text) {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return "";
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+  if (candidate.startsWith("{") && candidate.endsWith("}")) return candidate;
+  const first = candidate.indexOf("{");
+  const last = candidate.lastIndexOf("}");
+  return first >= 0 && last > first ? candidate.slice(first, last + 1) : "";
+}
+
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseArgs(argv) {

@@ -80,8 +80,8 @@
             <div class="panelTools"><span id="mapLabel">当前路线</span><button class="collapseBtn" data-collapse-panel="map" type="button" aria-expanded="true" aria-label="收起区域地图">−</button></div>
           </div>
           <div class="mapCanvas">
-            <canvas id="mapCanvas" width="720" height="300" aria-label="点阵地图"></canvas>
-            <button class="mapZoom" id="mapZoomBtn" type="button" title="重绘地图">↻</button>
+            <img id="mapImage" class="mapImage" alt="区域地图 PNG" />
+            <canvas id="mapCanvas" class="mapSourceCanvas" width="1280" height="720" aria-hidden="true"></canvas>
           </div>
         </section>
 
@@ -168,7 +168,7 @@
 
       <aside class="rightColumn">
         <section class="panel galleryPanel">
-          <div class="panelTitle"><h2>资料夹</h2><span>可视化占位</span></div>
+          <div class="panelTitle"><h2>资料夹</h2><span>本地缓存</span></div>
           <div class="filterRow" id="galleryFilters">
             <button class="active" data-filter="all" type="button">全部</button>
             <button data-filter="monster" type="button">怪物</button>
@@ -176,16 +176,7 @@
             <button data-filter="scene" type="button">场景</button>
             <button data-filter="item" type="button">物品</button>
           </div>
-          <div class="galleryGrid" id="galleryGrid">
-            <article data-kind="monster"><span class="art portrait"></span><b>未知大型怪物</b><small>怪物</small></article>
-            <article data-kind="npc"><span class="art guard"></span><b>浩文</b><small>随从</small></article>
-            <article data-kind="scene"><span class="art pier"></span><b>泥苔林</b><small>区域</small></article>
-            <article data-kind="scene"><span class="art town"></span><b>猎人公会</b><small>据点</small></article>
-            <article data-kind="scene"><span class="art map"></span><b>旧商道南支线</b><small>路线</small></article>
-            <article data-kind="item"><span class="art chest"></span><b>骨制斩斧</b><small>装备</small></article>
-            <article data-kind="item"><span class="art mark"></span><b>大怪鸟碎羽</b><small>素材</small></article>
-            <article data-kind="monster"><span class="art compass"></span><b>土砂龙迁徙线</b><small>生态</small></article>
-          </div>
+          <div class="galleryGrid" id="galleryGrid"></div>
           <button class="viewAll" id="viewAllBtn" type="button">显示全部资料</button>
         </section>
       </aside>

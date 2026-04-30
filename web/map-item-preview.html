@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Canvas 地图与物品预览</title>
+  <style>
+    :root {
+      --paper: #f6efe2;
+      --ink: #3f3224;
+      --muted: #7d6d57;
+      --line: rgba(101, 76, 45, .28);
+      --gold: #b98634;
+      --blue: #4b7da8;
+      --green: #647e52;
+      --red: #a74732;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 20% 12%, rgba(185, 134, 52, .16), transparent 28%),
+        linear-gradient(135deg, #efe4d1, #fbf8f0 48%, #e4dccb);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .shell {
+      width: min(1180px, calc(100vw - 32px));
+      display: grid;
+      grid-template-columns: minmax(560px, 1.35fr) minmax(320px, .65fr);
+      gap: 18px;
+    }
+    .panel {
+      border: 1px solid rgba(122, 91, 52, .24);
+      border-radius: 18px;
+      background: rgba(255, 252, 245, .76);
+      box-shadow: 0 18px 50px rgba(68, 48, 27, .12), inset 0 0 0 1px rgba(255,255,255,.65);
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    h1, h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+    h2 { font-size: 17px; }
+    .tag {
+      border: 1px solid rgba(185,134,52,.4);
+      border-radius: 999px;
+      padding: 6px 12px;
+      color: #8a5c22;
+      background: #fff8e8;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .mapWrap { padding: 16px; }
+    #routeMap {
+      aspect-ratio: 16 / 10;
+      border-radius: 14px;
+      border: 1px solid rgba(105, 80, 47, .3);
+      background: #e6dbc7;
+      box-shadow: inset 0 0 22px rgba(77, 55, 31, .12);
+    }
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 16px 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .legend span {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.48);
+    }
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--gold);
+      flex: 0 0 auto;
+    }
+    .dot.blue { background: var(--blue); }
+    .dot.green { background: var(--green); }
+    .dot.red { background: var(--red); }
+    .items {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .itemCard {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      min-height: 94px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,.58);
+    }
+    .itemCard canvas {
+      width: 72px;
+      height: 72px;
+      border-radius: 14px;
+      border: 1px solid rgba(126, 95, 58, .24);
+      background: #eadcc3;
+      image-rendering: pixelated;
+    }
+    .itemCard b {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 5px;
+    }
+    .itemCard p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    @media (max-width: 900px) {
+      body { padding: 14px; }
+      .shell { grid-template-columns: 1fr; }
+      .legend { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="panel">
+      <header>
+        <h1>旧商道南支线</h1>
+        <span class="tag">公会 → 石溪道 → 黄土峡口</span>
+      </header>
+      <div class="mapWrap">
+        <canvas id="routeMap" width="1280" height="800"></canvas>
+      </div>
+      <div class="legend">
+        <span><i class="dot"></i>据点 / 路标</span>
+        <span><i class="dot blue"></i>石溪与浅滩</span>
+        <span><i class="dot red"></i>可疑泥痕</span>
+        <span><i class="dot green"></i>土砂龙迁徙线</span>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <header>
+        <h2>物品 / 线索生成</h2>
+        <span class="tag">Canvas</span>
+      </header>
+      <div class="items">
+        <article class="itemCard">
+          <canvas id="itemMud" width="96" height="96"></canvas>
+          <div><b>可疑泥痕样本</b><p>干裂黄泥里混着新鲜湿层，边缘有被粗糙甲壳刮开的纹路。</p></div>
+        </article>
+        <article class="itemCard">
+          <canvas id="itemSign" width="96" height="96"></canvas>
+          <div><b>旧商道木牌</b><p>木牌被风沙磨薄，指向黄土峡口的一角被新近撞裂。</p></div>
+        </article>
+        <article class="itemCard">
+          <canvas id="itemScale" width="96" height="96"></canvas>
+          <div><b>土砂龙鳞片碎屑</b><p>不是完整素材，只能证明迁徙线贴近石溪道南侧。</p></div>
+        </article>
+        <article class="itemCard">
+          <canvas id="itemSatchel" width="96" height="96"></canvas>
+          <div><b>遗落补给袋</b><p>公会麻布袋，绳结断口较新，里面只剩几粒砂砾和药草味。</p></div>
+        </article>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const route = {
+      title: "旧商道南支线",
+      nodes: [
+        { id: "guild", label: "公会", x: 165, y: 470, tone: "gold" },
+        { id: "creek", label: "石溪道", x: 515, y: 390, tone: "blue" },
+        { id: "canyon", label: "黄土峡口", x: 990, y: 285, tone: "gold" },
+        { id: "mud", label: "可疑泥痕", x: 705, y: 250, tone: "red" },
+      ],
+      path: [[165, 470], [315, 438], [515, 390], [725, 336], [990, 285]],
+      migration: [[210, 620], [380, 600], [560, 570], [735, 525], [925, 492]],
+    };
+
+    function drawRouteMap() {
+      const canvas = document.querySelector("#routeMap");
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      drawPaper(ctx, canvas.width, canvas.height);
+      drawTerrain(ctx);
+      drawRivers(ctx);
+      drawRoute(ctx, route.path, "#8b6a3d", 18);
+      drawMigration(ctx, route.migration);
+      drawMudClue(ctx, route.nodes.find((n) => n.id === "mud"));
+      route.nodes.forEach((node) => drawNode(ctx, node));
+      drawCompass(ctx, 72, 78);
+      drawMapTitle(ctx);
+      drawFrame(ctx, canvas.width, canvas.height);
+    }
+
+    function drawPaper(ctx, w, h) {
+      const g = ctx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, "#efe3c9");
+      g.addColorStop(.5, "#f7efd9");
+      g.addColorStop(1, "#ddc8a5");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < 2400; i += 1) {
+        const x = Math.random() * w;
+        const y = Math.random() * h;
+        ctx.fillStyle = Math.random() > .55 ? "rgba(109,78,44,.055)" : "rgba(255,255,255,.08)";
+        ctx.fillRect(x, y, 1.3, 1.3);
+      }
+    }
+
+    function drawTerrain(ctx) {
+      blob(ctx, 880, 190, 380, 210, "#d9b66f", .38);
+      blob(ctx, 1010, 380, 330, 230, "#c99f62", .24);
+      blob(ctx, 280, 545, 330, 160, "#b5be8f", .22);
+      for (let i = 0; i < 18; i += 1) {
+        const x = 810 + i * 25;
+        const y = 210 + Math.sin(i * .8) * 38;
+        ridge(ctx, x, y, 56 + (i % 3) * 18, "#8b6a3d");
+      }
+    }
+
+    function drawRivers(ctx) {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(74,126,155,.55)";
+      ctx.lineWidth = 24;
+      drawCurve(ctx, [[100, 248], [260, 300], [430, 286], [575, 375], [735, 340]]);
+      ctx.strokeStyle = "rgba(241,249,245,.45)";
+      ctx.lineWidth = 6;
+      drawCurve(ctx, [[100, 248], [260, 300], [430, 286], [575, 375], [735, 340]]);
+      ctx.restore();
+    }
+
+    function drawRoute(ctx, points, color, width) {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(74,53,31,.22)";
+      ctx.lineWidth = width + 12;
+      drawCurve(ctx, points);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      drawCurve(ctx, points);
+      ctx.setLineDash([18, 22]);
+      ctx.strokeStyle = "rgba(255,244,214,.48)";
+      ctx.lineWidth = 5;
+      drawCurve(ctx, points);
+      ctx.restore();
+    }
+
+    function drawMigration(ctx, points) {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.setLineDash([20, 14]);
+      ctx.strokeStyle = "rgba(83,118,68,.75)";
+      ctx.lineWidth = 14;
+      drawCurve(ctx, points);
+      ctx.setLineDash([]);
+      arrowHead(ctx, points.at(-2), points.at(-1), "rgba(83,118,68,.9)");
+      ctx.font = "700 26px Microsoft YaHei";
+      ctx.fillStyle = "#536f45";
+      ctx.fillText("土砂龙迁徙线", 305, 665);
+      ctx.restore();
+    }
+
+    function drawMudClue(ctx, node) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(155,65,44,.8)";
+      ctx.lineWidth = 5;
+      ctx.setLineDash([10, 8]);
+      ctx.beginPath();
+      ctx.moveTo(node.x, node.y + 96);
+      ctx.quadraticCurveTo(node.x - 70, node.y + 132, node.x - 140, node.y + 92);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "700 28px Microsoft YaHei";
+      ctx.fillStyle = "#9b412c";
+      ctx.fillText("可疑泥痕", node.x - 62, node.y - 40);
+      ctx.font = "34px Microsoft YaHei";
+      ctx.fillText("▲", node.x - 10, node.y - 8);
+      ctx.restore();
+    }
+
+    function drawNode(ctx, node) {
+      const color = node.tone === "red" ? "#a74732" : node.tone === "blue" ? "#4b7da8" : "#b98634";
+      ctx.save();
+      ctx.fillStyle = "rgba(255,250,239,.84)";
+      ctx.strokeStyle = "rgba(73,48,25,.32)";
+      roundRect(ctx, node.x - 82, node.y - 58, 164, 82, 18);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(node.x - 48, node.y - 17, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#3e3020";
+      ctx.font = "700 28px Microsoft YaHei";
+      ctx.fillText(node.label, node.x - 20, node.y - 7);
+      ctx.restore();
+    }
+
+    function drawMapTitle(ctx) {
+      ctx.save();
+      ctx.font = "700 34px Microsoft YaHei";
+      ctx.fillStyle = "#3f3224";
+      ctx.fillText("旧商道南支线", 98, 92);
+      ctx.font = "20px Microsoft YaHei";
+      ctx.fillStyle = "#7d6d57";
+      ctx.fillText("公会 → 石溪道 → 黄土峡口", 100, 126);
+      ctx.restore();
+    }
+
+    function drawCompass(ctx, x, y) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.strokeStyle = "#8b6a3d";
+      ctx.fillStyle = "#8b6a3d";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 38, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = 0; i < 8; i += 1) {
+        ctx.rotate(Math.PI / 4);
+        ctx.beginPath();
+        ctx.moveTo(0, -44);
+        ctx.lineTo(7, -12);
+        ctx.lineTo(0, -18);
+        ctx.lineTo(-7, -12);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawFrame(ctx, w, h) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(89,61,32,.42)";
+      ctx.lineWidth = 8;
+      roundRect(ctx, 18, 18, w - 36, h - 36, 28);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,.45)";
+      ctx.lineWidth = 2;
+      roundRect(ctx, 30, 30, w - 60, h - 60, 22);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawItems() {
+      drawMudItem(document.querySelector("#itemMud"));
+      drawSignItem(document.querySelector("#itemSign"));
+      drawScaleItem(document.querySelector("#itemScale"));
+      drawSatchelItem(document.querySelector("#itemSatchel"));
+    }
+
+    function itemBase(canvas, bg1, bg2) {
+      const ctx = canvas.getContext("2d");
+      const g = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      g.addColorStop(0, bg1);
+      g.addColorStop(1, bg2);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "rgba(72,48,26,.28)";
+      ctx.lineWidth = 3;
+      roundRect(ctx, 6, 6, 84, 84, 14);
+      ctx.stroke();
+      return ctx;
+    }
+
+    function drawMudItem(canvas) {
+      const ctx = itemBase(canvas, "#cfb179", "#8d6741");
+      for (let i = 0; i < 18; i += 1) {
+        ctx.fillStyle = i % 3 ? "#6b4c32" : "#d1b172";
+        ctx.beginPath();
+        ctx.ellipse(25 + (i * 19) % 52, 25 + (i * 13) % 44, 8 + i % 5, 4 + i % 3, i, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      claw(ctx, 26, 58);
+      claw(ctx, 50, 52);
+    }
+
+    function drawSignItem(canvas) {
+      const ctx = itemBase(canvas, "#d7c297", "#9f7948");
+      ctx.fillStyle = "#6f4a27";
+      roundRect(ctx, 20, 30, 58, 26, 4);
+      ctx.fill();
+      ctx.fillStyle = "#e8d1a4";
+      ctx.fillRect(25, 38, 32, 4);
+      ctx.fillRect(25, 46, 42, 4);
+      ctx.fillStyle = "#5f3c21";
+      ctx.fillRect(45, 56, 8, 28);
+      ctx.strokeStyle = "#f1d895";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(69, 30);
+      ctx.lineTo(78, 22);
+      ctx.stroke();
+    }
+
+    function drawScaleItem(canvas) {
+      const ctx = itemBase(canvas, "#b8bea1", "#596b52");
+      for (let i = 0; i < 5; i += 1) {
+        ctx.fillStyle = ["#d4c37c", "#a7904f", "#6d744f"][i % 3];
+        ctx.beginPath();
+        ctx.moveTo(25 + i * 9, 62 - i * 5);
+        ctx.quadraticCurveTo(42 + i * 8, 18 + i * 2, 67 + i * 2, 56 - i * 3);
+        ctx.quadraticCurveTo(48 + i * 5, 75, 25 + i * 9, 62 - i * 5);
+        ctx.fill();
+      }
+    }
+
+    function drawSatchelItem(canvas) {
+      const ctx = itemBase(canvas, "#cfb88d", "#7f603d");
+      ctx.fillStyle = "#8b6036";
+      roundRect(ctx, 22, 36, 54, 38, 8);
+      ctx.fill();
+      ctx.fillStyle = "#b98a53";
+      roundRect(ctx, 28, 28, 42, 18, 7);
+      ctx.fill();
+      ctx.strokeStyle = "#4f3620";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(34, 48);
+      ctx.lineTo(72, 62);
+      ctx.stroke();
+      ctx.fillStyle = "#d9bd73";
+      ctx.fillRect(45, 52, 10, 10);
+    }
+
+    function drawCurve(ctx, points) {
+      ctx.beginPath();
+      ctx.moveTo(points[0][0], points[0][1]);
+      for (let i = 1; i < points.length - 1; i += 1) {
+        const midX = (points[i][0] + points[i + 1][0]) / 2;
+        const midY = (points[i][1] + points[i + 1][1]) / 2;
+        ctx.quadraticCurveTo(points[i][0], points[i][1], midX, midY);
+      }
+      const last = points.at(-1);
+      ctx.lineTo(last[0], last[1]);
+      ctx.stroke();
+    }
+
+    function arrowHead(ctx, from, to, color) {
+      const angle = Math.atan2(to[1] - from[1], to[0] - from[0]);
+      ctx.save();
+      ctx.translate(to[0], to[1]);
+      ctx.rotate(angle);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-32, -18);
+      ctx.lineTo(-22, 0);
+      ctx.lineTo(-32, 18);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function blob(ctx, x, y, w, h, color, alpha) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.ellipse(x, y, w / 2, h / 2, -.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function ridge(ctx, x, y, size, color) {
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = .38;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x - size / 2, y + size / 4);
+      ctx.lineTo(x, y - size / 3);
+      ctx.lineTo(x + size / 2, y + size / 4);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function claw(ctx, x, y) {
+      ctx.strokeStyle = "#3f3022";
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      for (let i = 0; i < 3; i += 1) {
+        ctx.beginPath();
+        ctx.moveTo(x + i * 9, y);
+        ctx.quadraticCurveTo(x + 7 + i * 9, y - 17, x + 15 + i * 9, y - 5);
+        ctx.stroke();
+      }
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    drawRouteMap();
+    drawItems();
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -8,11 +8,11 @@ from typing import Any
 
 
 REQUIRED_MARKERS = [
-    "????",
-    "?????",
-    "??????",
-    "?????_BEGIN?",
-    "?????_END?",
+    "【正文】",
+    "【选择点】",
+    "【回合摘要】",
+    "【状态回写_BEGIN】",
+    "【状态回写_END】",
 ]
 
 
@@ -26,6 +26,15 @@ class ParsedOutput:
 
 
 def missing_markers(text: str) -> list[str]:
+    stripped = text.strip()
+    if stripped.startswith("{") or stripped.startswith("```"):
+        try:
+            parsed = _parse_json_output(stripped)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        else:
+            if parsed.blocks and isinstance(parsed.writeback, dict):
+                return []
     return [marker for marker in REQUIRED_MARKERS if marker not in text]
 
 
@@ -39,28 +48,28 @@ def parse_chatgpt_output(text: str) -> ParsedOutput:
 
     missing = missing_markers(text)
     if missing:
-        raise ValueError(f"ChatGPT ????????: {', '.join(missing)}")
+        raise ValueError(f"ChatGPT 输出缺少格式标记: {', '.join(missing)}")
 
-    body = _section(text, "????", "?????").strip()
-    choices = _section(text, "?????", "??????").strip()
-    summary = _section(text, "??????", "?????_BEGIN?").strip()
-    writeback_text = _section(text, "?????_BEGIN?", "?????_END?")
+    body = _section(text, "【正文】", "【选择点】").strip()
+    choices = _section(text, "【选择点】", "【回合摘要】").strip()
+    summary = _section(text, "【回合摘要】", "【状态回写_BEGIN】").strip()
+    writeback_text = _section(text, "【状态回写_BEGIN】", "【状态回写_END】")
     try:
         writeback = json.loads(writeback_text.strip())
     except json.JSONDecodeError as exc:
-        raise ValueError(f"???? JSON ????: {exc}") from exc
+        raise ValueError(f"状态回写 JSON 解析失败: {exc}") from exc
     return ParsedOutput(body=body, choices=choices, summary=summary, writeback=writeback, blocks=_legacy_blocks(body, choices))
 
 
 def public_output(parsed: ParsedOutput) -> str:
-    return f"????\n{parsed.body}\n\n?????\n{parsed.choices}\n"
+    return f"【正文】\n{parsed.body}\n\n【选择点】\n{parsed.choices}\n"
 
 
 def _section(text: str, start: str, end: str) -> str:
     pattern = re.compile(re.escape(start) + r"(.*?)" + re.escape(end), re.S)
     match = pattern.search(text)
     if not match:
-        raise ValueError(f"??????: {start} -> {end}")
+        raise ValueError(f"无法提取区段: {start} -> {end}")
     return match.group(1)
 
 
@@ -96,7 +105,7 @@ def _normalize_blocks(rows: Any) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         if isinstance(row, str):
-            row = {"type": "gm_narration", "speaker": "GM ??", "body": row}
+            row = {"type": "gm_narration", "speaker": "GM 叙述", "body": row}
         if not isinstance(row, dict):
             continue
         block_type = str(row.get("type") or "gm_narration").strip() or "gm_narration"
@@ -122,13 +131,13 @@ def _normalize_blocks(rows: Any) -> list[dict[str, Any]]:
 
 def _default_speaker(block_type: str) -> str:
     return {
-        "gm_narration": "GM ??",
-        "player_action": "??",
+        "gm_narration": "GM 叙述",
+        "player_action": "玩家",
         "npc_dialogue": "NPC",
-        "system_check": "????",
-        "choice_prompt": "????",
-        "summary": "????",
-    }.get(block_type, "??")
+        "system_check": "系统检定",
+        "choice_prompt": "关键抉择",
+        "summary": "回合摘要",
+    }.get(block_type, "记录")
 
 
 def _join_blocks(blocks: list[dict[str, Any]], allowed: set[str]) -> str:
@@ -143,8 +152,10 @@ def _choices_text(blocks: list[dict[str, Any]]) -> str:
                 if isinstance(choice, dict):
                     cid = str(choice.get("id") or "").strip()
                     label = str(choice.get("label") or choice.get("text") or "").strip()
+                    risk = str(choice.get("risk") or "").strip()
+                    suffix = f"（风险：{risk}）" if risk else ""
                     if label:
-                        rows.append(f"{cid}. {label}" if cid else label)
+                        rows.append(f"{cid}. {label}{suffix}" if cid else f"{label}{suffix}")
             return "\n".join(row for row in rows if row)
     return ""
 
@@ -152,31 +163,50 @@ def _choices_text(blocks: list[dict[str, Any]]) -> str:
 def _legacy_blocks(body: str, choices: str) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     for index, part in enumerate([part.strip() for part in re.split(r"\n{2,}", body) if part.strip()]):
+        block_type = _guess_legacy_type(part)
         blocks.append({
             "id": f"legacy_body_{index + 1}",
-            "type": "gm_narration",
-            "speaker": "GM ??",
+            "type": block_type,
+            "speaker": _default_speaker(block_type),
             "body": part,
             "time": "",
             "avatar_key": "",
             "actor_id": "",
-            "actor_kind": "",
+            "actor_kind": "system" if block_type == "system_check" else "gm",
             "check": {},
             "choices": [],
-            "tags": [],
+            "tags": ["legacy"],
         })
     if choices:
         blocks.append({
             "id": "legacy_choices",
             "type": "choice_prompt",
-            "speaker": "????",
+            "speaker": "关键抉择",
             "body": choices,
             "time": "",
             "avatar_key": "",
             "actor_id": "",
-            "actor_kind": "",
+            "actor_kind": "system",
             "check": {},
-            "choices": [],
-            "tags": [],
+            "choices": _parse_legacy_choices(choices),
+            "tags": ["legacy"],
         })
     return blocks
+
+
+def _guess_legacy_type(text: str) -> str:
+    head = text[:16]
+    if any(token in text for token in ("d20", "检定", "DC", "难度", "成功", "失败")):
+        return "system_check"
+    if head.startswith(("玩家", "角色")):
+        return "player_action"
+    if head.startswith(("NPC", "接待员", "老猎人", "货车伙计")):
+        return "npc_dialogue"
+    return "gm_narration"
+
+
+def _parse_legacy_choices(text: str) -> list[dict[str, str]]:
+    choices: list[dict[str, str]] = []
+    for match in re.finditer(r"(?:^|\n)\s*([A-D])(?:[.、．])\s*(.+)", text):
+        choices.append({"id": match.group(1), "label": match.group(2).strip(), "risk": "unknown"})
+    return choices

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .output_parser import parse_chatgpt_output
+
 
 M_BODY = "\u3010\u6b63\u6587\u3011"
 M_CHOICES = "\u3010\u9009\u62e9\u70b9\u3011"
@@ -17,9 +19,8 @@ LEFT_QUOTE = "\u201c"
 
 def check_ai_flavor(text: str, forbidden_changes: dict[str, Any] | None = None) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
-    body = _between(text, M_BODY, M_CHOICES) or text
-    choices = _between(text, M_CHOICES, M_SUMMARY) or ""
-    public_text = "\n".join(part for part in (body, choices, _after(text, M_SUMMARY).split("\u3010\u72b6\u6001\u56de\u5199_BEGIN\u3011", 1)[0]) if part)
+    body, choices, summary = _public_sections(text)
+    public_text = "\n".join(part for part in (body, choices, summary) if part)
 
     for phrase in FORBIDDEN_PHRASES:
         count = body.count(phrase)
@@ -112,3 +113,19 @@ def _after(text: str, start: str) -> str:
     if start not in text:
         return ""
     return text.split(start, 1)[1]
+
+
+def _public_sections(text: str) -> tuple[str, str, str]:
+    stripped = text.strip()
+    if stripped.startswith("{") or stripped.startswith("```"):
+        try:
+            parsed = parse_chatgpt_output(stripped)
+        except Exception:
+            pass
+        else:
+            return parsed.body, parsed.choices, parsed.summary
+
+    body = _between(text, M_BODY, M_CHOICES) or text
+    choices = _between(text, M_CHOICES, M_SUMMARY) or ""
+    summary = _after(text, M_SUMMARY).split("\u3010\u72b6\u6001\u56de\u5199_BEGIN\u3011", 1)[0]
+    return body, choices, summary

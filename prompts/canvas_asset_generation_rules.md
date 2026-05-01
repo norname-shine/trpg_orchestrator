@@ -45,6 +45,8 @@ These rules describe how the local frontend generates visual assets. They are ru
 
 - NPC portrait assets must be locally generated and cached.
 - NPC portraits must use stable names or ids as seeds.
+- The NPC gallery must exclude the main player character and companion/sub-player names. The main player uses `portrait` assets only; companions use `companion` or `companion_portrait` assets. They must never create `gallery_npc`, `npc_portrait`, separate `player_portrait`, or campaign-specific universal assets such as `palico` for the actor type.
+- Companion/sub-player drawing must be selected by `archetype`, `species`, or `kind`: for example `palico` for Monster Hunter, `servant` for FATE, and `companion` for a generic fallback.
 - NPC portraits must be visually distinct. Vary at least several of:
   - hair shape
   - headgear or side ornaments
@@ -81,5 +83,5 @@ These rules describe how the local frontend generates visual assets. They are ru
 
 ## Current Generator Version Note
 
-- Current frontend generator version: `ASSET_GENERATOR_VERSION = 6`.
-- Version 6 enlarged map label text for small-panel readability and keeps the visible area map as cached PNG.
+- Current frontend generator version: `ASSET_GENERATOR_VERSION = 9`.
+- Version 9 strengthens the Monster Hunter `palico` archetype so companion portraits visibly read as an 艾露猫: large cat ears, inner ears, cat nose, whiskers, goggles, and a small mantle.

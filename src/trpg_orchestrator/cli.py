@@ -240,6 +240,12 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     parsed = gate["parsed"]
     flavor_report = gate["flavor_report"]
     (OUTBOX_DIR / "chatgpt_clean_output.md").write_text(public_output(parsed), encoding="utf-8", newline="\n")
+    write_json(OUTBOX_DIR / "chatgpt_blocks.json", {
+        "blocks": parsed.blocks,
+        "body": parsed.body,
+        "choices": parsed.choices,
+        "summary": parsed.summary,
+    })
     write_json(OUTBOX_DIR / "state_writeback.json", parsed.writeback)
 
     if flavor_report.get("severity") != "pass":

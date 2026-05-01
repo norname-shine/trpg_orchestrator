@@ -72,6 +72,7 @@ Block rules:
 - Use type="gm_narration" and actor_kind="gm" for environment, consequences, action framing, and GM narration.
 - Echo the player's submitted action as type="player_action", actor_kind="player". The speaker should be "Player ? <character name>". Do not make major new player decisions.
 - Use type="npc_dialogue" and actor_kind="npc" for NPC speech or clear NPC action feedback. speaker, actor_id, and avatar_key must be stable names/IDs so the frontend can reuse local portrait assets.
+  **IMPORTANT**: Every NPC who speaks or has a named action MUST be in their own npc_dialogue block with avatar_key set to their name. Do not embed NPC dialogue inside gm_narration blocks — even short lines like "再停，箱子底就泡了" from a named NPC must be a separate npc_dialogue block. If multiple NPCs appear in one scene, split each into separate npc_dialogue blocks.
 - Use type="system_check" and actor_kind="system" for dice, DC, success/failure, damage, or rule checks. Put skill, roll, modifier, total, dc, and result in check when available.
 - Use type="choice_prompt" and actor_kind="system" only for major choices. choices must contain 2-4 objects with id, label, and risk. Do not force choices when the scene can continue naturally.
 - Player and NPC blocks must set stable actor_id/avatar_key. Use the player character name for the player and the NPC name for NPCs.

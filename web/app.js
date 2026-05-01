@@ -5,7 +5,7 @@
   polling: null,
   sideTab: "quests",
   activePanel: "story",
-  autoScroll: true,
+  autoScroll: false,
   lastJobRunning: false,
   lastCampaignState: {},
   assetCache: {},
@@ -22,10 +22,12 @@
   selectedGalleryKey: "",
   writebackReview: {},
   currentPressurePack: {},
+  ruleFiles: [],
+  selectedRule: "",
 };
 
 const $ = (id) => document.getElementById(id);
-const ASSET_GENERATOR_VERSION = 6;
+const ASSET_GENERATOR_VERSION = 9;
 
 function init() {
   drawBackground();
@@ -42,7 +44,8 @@ function bindControls() {
   $("runTurnBtn").addEventListener("click", runTurn);
   $("prepareBtn").addEventListener("click", prepareOnly);
   $("refreshBtn").addEventListener("click", refresh);
-  $("exportBtn").addEventListener("click", () => window.open("/api/export", "_blank"));
+  $("exportBtn").addEventListener("click", exportCampaign);
+  $("memoryReportBtn").addEventListener("click", loadMemoryReport);
   $("clearInputBtn").addEventListener("click", () => {
     $("actionInput").value = "";
     $("actionInput").focus();
@@ -53,14 +56,24 @@ function bindControls() {
     if (event.target.id === "galleryOverlay") closeGalleryOverlay();
   });
   $("useGalleryAssetBtn").addEventListener("click", useSelectedGalleryAsset);
-  $("rulesBtn").addEventListener("click", showRuntimeRules);
+  $("rulesBtn").addEventListener("click", openRulesBrowser);
+  $("closeRulesOverlay").addEventListener("click", closeRulesOverlay);
+  $("rulesOverlay").addEventListener("click", (event) => {
+    if (event.target.id === "rulesOverlay") closeRulesOverlay();
+  });
+  $("rulesSearchBtn").addEventListener("click", () => loadRulesDirectory($("rulesSearch").value.trim()));
+  $("rulesClearBtn").addEventListener("click", () => {
+    $("rulesSearch").value = "";
+    loadRulesDirectory("");
+  });
+  $("rulesSearch").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") loadRulesDirectory($("rulesSearch").value.trim());
+  });
   $("refreshWritebackBtn").addEventListener("click", loadWritebackReview);
   $("auditWritebackBtn").addEventListener("click", auditWriteback);
   $("applyWritebackBtn").addEventListener("click", applyWriteback);
-  $("createCampaignBtn").addEventListener("click", createCampaign);
-  $("saveBindingBtn").addEventListener("click", saveChatGPTBinding);
-  $("viewAllCampaignsBtn").addEventListener("click", () => {
-    $("newCampaignId")?.focus();
+  $("newCampaignPageBtn").addEventListener("click", () => {
+    window.location.href = "/new-campaign-demo.html";
   });
 
   $("actionInput").addEventListener("keydown", (event) => {
@@ -78,6 +91,7 @@ function bindControls() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeStoryPicker();
     if (event.key === "Escape") closeGalleryOverlay();
+    if (event.key === "Escape") closeRulesOverlay();
   });
 
   document.querySelectorAll("[data-command]").forEach((button) => {
@@ -164,6 +178,11 @@ async function prepareOnly() {
 
 async function runCommand(name) {
   await startJob("/api/command", { name, campaign_id: state.activeCampaign });
+}
+
+function exportCampaign() {
+  const params = state.activeCampaign ? `?campaign_id=${encodeURIComponent(state.activeCampaign)}` : "";
+  window.open(`/api/export-campaign${params}`, "_blank");
 }
 
 async function startJob(path, payload) {
@@ -268,6 +287,15 @@ function renderCachedMap(scene) {
     cache: true,
     objectId,
     scene: { ...scene, map_route: route },
+    metadata: {
+      title: route.title || scene.location || "当前区域地图",
+      detail: routeKey || scene.immediate_pressure || "",
+      meta: "地图 / 结构化路线",
+      source: "map_route",
+      object_id: objectId,
+      map_route: route,
+      visual_assets: state.currentPressurePack?.visual_assets || [],
+    },
     force: true,
   });
 }
@@ -309,26 +337,138 @@ function buildCharacterCard(campaignState, fallbackTitle, scene) {
     identity.class_or_role || identity.role,
     identity.level_or_stage,
   ].filter(Boolean);
-  const fallbackRole = name === "Lee" ? "新晋猎人 / 斩斧 / 正式猎人" : (campaignState.genre || "身份待确认");
-  const progression = normalizeProgression(provided.progression, mode);
+  const fallback = characterFallback(campaignState, name, scene);
+  const fallbackRole = fallback.meta || campaignState.genre || "身份待确认";
+  const progression = normalizeProgression(provided.progression, mode, fallback);
+  const companionSource = provided.companion || prompt.companion_card || identity.companion || null;
   return {
     mode,
     name,
     meta: roleParts.length ? roleParts.join(" / ") : fallbackRole,
     progression,
-    vitals: normalizeVitals(provided.vitals, mode),
+    vitals: normalizeVitals(provided.vitals, mode, fallback),
     conditions: normalizeConditions(provided.conditions, campaignState, scene),
-    attributes: normalizeAttributes(provided.attributes, mode),
-    companion: normalizeCompanion(provided.companion || prompt.companion_card || identity.companion || {}),
+    attributes: normalizeAttributes(provided.attributes, mode, fallback),
+    companion: normalizeCompanion(companionSource),
+  };
+}
+
+function characterFallback(campaignState, name, scene = {}) {
+  const text = normalizeActorName(`${state.activeCampaign} ${campaignState.title || ""} ${campaignState.genre || ""} ${campaignState.tone || ""} ${name}`);
+  const pressured = Boolean(scene?.immediate_pressure);
+  if (text.includes("coc") || text.includes("克苏鲁") || text.includes("调查")) {
+    return {
+      kind: "coc",
+      meta: "COC 调查员",
+      progression: { label: "调查进展", value: pressured ? "线索初开，风险升高" : "案件导入，保持观察", percent: pressured ? 38 : 24 },
+      vitals: [
+        { key: "health", label: "生命值", state: "未受伤", percent: 84, tone: "red" },
+        { key: "sanity", label: "理智值", state: pressured ? "轻微动摇" : "稳定", percent: pressured ? 68 : 78, tone: "blue" },
+        { key: "stamina", label: "体力值", state: "潮湿疲惫", percent: 70, tone: "green" },
+      ],
+      attributes: [
+        { label: "侦", text: "观察" },
+        { label: "图", text: "资料" },
+        { label: "说", text: "话术" },
+        { label: "潜", text: "隐蔽" },
+        { label: "医", text: "急救" },
+        { label: "稳", text: "理智" },
+      ],
+    };
+  }
+  if (text.includes("dnd") || text.includes("奇幻") || text.includes("冒险者")) {
+    return {
+      kind: "dnd",
+      meta: "DND 队伍代表",
+      progression: { label: "冒险进展", value: pressured ? "任务展开，局势紧张" : "第一章，接受委托", percent: pressured ? 34 : 22 },
+      vitals: [
+        { key: "health", label: "生命值", state: "可战斗", percent: 86, tone: "red" },
+        { key: "focus", label: "专注值", state: "警戒", percent: 74, tone: "blue" },
+        { key: "stamina", label: "体力值", state: "整备中", percent: 80, tone: "green" },
+      ],
+      attributes: [
+        { label: "力", text: "近战" },
+        { label: "敏", text: "闪避" },
+        { label: "体", text: "耐久" },
+        { label: "智", text: "知识" },
+        { label: "感", text: "察觉" },
+        { label: "魅", text: "交涉" },
+      ],
+    };
+  }
+  if (text.includes("fate") || text.includes("圣杯") || text.includes("御主") || text.includes("从者")) {
+    return {
+      kind: "fate",
+      meta: "普通高中生 / 新任御主",
+      progression: { label: "同步状态", value: pressured ? "令咒完整，黑痕扩散" : "契约未稳，异常同步", percent: pressured ? 45 : 32 },
+      vitals: [
+        { key: "health", label: "生命值", state: pressured ? "惊惧疲惫" : "可行动", percent: 72, tone: "red" },
+        { key: "focus", label: "专注值", state: "受干扰", percent: 54, tone: "blue" },
+        { key: "stamina", label: "体力值", state: "奔逃后消耗", percent: 58, tone: "green" },
+      ],
+      attributes: [
+        { label: "令", text: "令咒" },
+        { label: "脉", text: "灵脉" },
+        { label: "逃", text: "撤退" },
+        { label: "察", text: "观察" },
+        { label: "匣", text: "井匣" },
+        { label: "契", text: "从者" },
+      ],
+    };
+  }
+  return {
+    kind: "monster_hunter",
+    meta: name === "Lee" ? "新晋猎人 / 斩斧 / 正式猎人" : "猎人 / 生态调查",
+    progression: { label: "成长", value: "新人阶段，稳步成长", percent: 42 },
+    vitals: [
+      { key: "health", label: "生命值", state: "状态良好", percent: 82, tone: "red" },
+      { key: "focus", label: "专注值", state: "稳定", percent: 78, tone: "blue" },
+      { key: "stamina", label: "体力值", state: "有消耗", percent: 72, tone: "green" },
+    ],
+    attributes: [
+      { label: "斧", text: "牵制" },
+      { label: "剑", text: "爆发" },
+      { label: "迹", text: "追踪" },
+      { label: "营", text: "补给" },
+      { label: "捕", text: "陷阱" },
+      { label: "退", text: "保命" },
+    ],
   };
 }
 
 function normalizeCompanion(companion) {
+  if (!companion || typeof companion !== "object") return null;
+  const name = String(companion.name || "").trim();
+  if (!name) return null;
+  const archetype = companion.archetype || companion.species || companion.kind || companion.type || inferCompanionArchetype(name, companion.meta || companion.personality || "");
+  const rawMeta = companion.personality || companion.meta || defaultCompanionMeta(archetype);
   return {
-    name: companion.name || "浩文",
-    meta: companion.personality || companion.meta || "老练但嘴硬",
-    seed: companion.visual_seed || `palico:${state.activeCampaign}:haowen`,
+    name,
+    meta: companionDisplayMeta(rawMeta, archetype),
+    seed: companion.visual_seed || `companion:${state.activeCampaign}:${name}`,
+    archetype,
   };
+}
+
+function defaultCompanionMeta(archetype) {
+  if (normalizeActorName(archetype).includes("palico")) return "老练但嘴硬";
+  if (normalizeActorName(archetype).includes("servant")) return "从者 / 契约伙伴";
+  return "同行伙伴";
+}
+
+function companionDisplayMeta(meta, archetype) {
+  const type = normalizeActorName(archetype);
+  const text = String(meta || "").trim();
+  if (type.includes("palico") && !/艾露猫|艾鲁猫|palico/i.test(text)) return `艾露猫 / ${text || "同行伙伴"}`;
+  if (type.includes("servant") && !/从者|英灵|servant/i.test(text)) return `从者 / ${text || "契约伙伴"}`;
+  return text || "同行伙伴";
+}
+
+function inferCompanionArchetype(name, meta = "") {
+  const text = normalizeActorName(`${state.activeCampaign} ${name} ${meta}`);
+  if (text.includes("fate") || text.includes("servant") || text.includes("从者") || text.includes("英灵")) return "servant";
+  if (text.includes("monsterhunter") || text.includes("怪猎") || text.includes("艾露") || text.includes("palico") || text.includes("浩文")) return "palico";
+  return "companion";
 }
 
 function hasStrictVitals(vitals) {
@@ -339,7 +479,7 @@ function hasStrictAttributes(attributes) {
   return Array.isArray(attributes) && attributes.some((item) => Number.isFinite(item?.value));
 }
 
-function normalizeProgression(progress, mode) {
+function normalizeProgression(progress, mode, fallback = {}) {
   const source = progress || {};
   const current = Number(source.current);
   const max = Number(source.max);
@@ -351,17 +491,17 @@ function normalizeProgression(progress, mode) {
     };
   }
   return {
-    label: source.label || (mode === "strict_stats" ? "经验值" : "成长"),
-    value: source.text || "新人阶段，稳步成长",
-    percent: Number.isFinite(Number(source.percent)) ? Number(source.percent) : 42,
+    label: source.label || fallback.progression?.label || (mode === "strict_stats" ? "经验值" : "成长"),
+    value: source.text || fallback.progression?.value || "新人阶段，稳步成长",
+    percent: Number.isFinite(Number(source.percent)) ? Number(source.percent) : (fallback.progression?.percent || 42),
   };
 }
 
-function normalizeVitals(vitals, mode) {
+function normalizeVitals(vitals, mode, fallback = {}) {
   if (Array.isArray(vitals) && vitals.length) {
     return vitals.map((item, index) => normalizeVital(item, index, mode));
   }
-  return [
+  return fallback.vitals || [
     { key: "health", label: "生命值", state: "状态良好", percent: 82, tone: "red" },
     { key: "focus", label: "专注值", state: "稳定", percent: 78, tone: "blue" },
     { key: "stamina", label: "体力值", state: "有消耗", percent: 72, tone: "green" },
@@ -388,6 +528,16 @@ function normalizeConditions(conditions, campaignState, scene) {
   const labels = rows.map((item) => typeof item === "string" ? item : item.label || item.name).filter(Boolean);
   if (labels.length) return labels.slice(0, 6);
   const mechanics = campaignState.mechanics || {};
+  const kind = characterFallback(campaignState, extractPlayerName(campaignState.player || {}, campaignState.character_prompt || {}), scene).kind;
+  if (kind === "coc") {
+    return ["谨慎", mechanics.use_dice ? "COC检定" : "叙事调查", "潮湿", scene?.immediate_pressure ? "线索压力" : "案件导入"];
+  }
+  if (kind === "dnd") {
+    return ["警戒", mechanics.use_dice ? "D20检定" : "叙事冒险", "整备", scene?.immediate_pressure ? "任务压力" : "酒馆待命"];
+  }
+  if (kind === "fate") {
+    return ["怕死", "令咒完整", "异常同步", scene?.immediate_pressure ? "黑痕压力" : "契约未稳"];
+  }
   return [
     "谨慎",
     mechanics.use_dice ? "严格数值" : "叙事判定",
@@ -396,7 +546,7 @@ function normalizeConditions(conditions, campaignState, scene) {
   ];
 }
 
-function normalizeAttributes(attributes, mode) {
+function normalizeAttributes(attributes, mode, fallback = {}) {
   if (Array.isArray(attributes) && attributes.length) {
     return attributes.map((item) => {
       if (typeof item === "string") return { label: item.slice(0, 1), text: item };
@@ -408,7 +558,7 @@ function normalizeAttributes(attributes, mode) {
       };
     }).slice(0, 6);
   }
-  return [
+  return fallback.attributes || [
     { label: "斧", text: "牵制" },
     { label: "剑", text: "爆发" },
     { label: "迹", text: "追踪" },
@@ -432,11 +582,15 @@ function renderCharacterCard(card) {
 }
 
 function renderCompanionCard(companion) {
+  const card = document.querySelector(".companionCard");
+  if (card) card.hidden = !companion;
+  if (!companion) return;
   setText("palicoName", companion.name);
   setText("palicoMeta", companion.meta);
-  drawPixelPalico(companion.seed || companion.name, {
+  drawCompanionAvatar(companion.seed || companion.name, {
     cache: true,
-    objectId: slugify(companion.name || "palico"),
+    objectId: slugify(companion.name || "companion"),
+    archetype: companion.archetype,
   });
 }
 
@@ -600,12 +754,54 @@ function dedupeRows(rows) {
   });
 }
 
-function renderOutput(output) {
-  const parsed = output.parsed || {};
-  const blocks = Array.isArray(parsed.blocks) ? parsed.blocks : [];
-  renderStoryBlocks(blocks, parsed.body || "暂无正文。");
-  renderChoicePanel(blocks, parsed.choices || "暂无选择点。");
-  renderSummary(parsed.summary || "暂无回合摘要。");
+async function renderOutput(output) {
+  if (output.campaign_id && state.activeCampaign && output.campaign_id !== state.activeCampaign) {
+    renderStoryBlocks([], "当前跑团暂无正文记录。");
+    setText("summaryText", `已拦截其他跑团的正文记录：${output.campaign_id}`);
+    setText("directorText", JSON.stringify({
+      warning: "output campaign mismatch",
+      active_campaign: state.activeCampaign,
+      output_campaign: output.campaign_id,
+    }, null, 2));
+    return;
+  }
+  let blocks = Array.isArray(output.parsed?.blocks) ? output.parsed.blocks : [];
+  let body = output.parsed?.body || "";
+  let choices = output.parsed?.choices || "";
+  let summary = output.parsed?.summary || "";
+
+  // If backend returned no blocks, try parsing public_text as JSON
+  if (!blocks.length && output.public_text) {
+    try {
+      const trimmed = output.public_text.trim();
+      // Check if it starts with { (JSON) or ``` (JSON in code fence)
+      if (trimmed.startsWith("{") || trimmed.startsWith("```")) {
+        let jsonStr = trimmed;
+        if (jsonStr.startsWith("```")) {
+          const lines = jsonStr.split("\n");
+          if (lines[0].startsWith("```")) lines.shift();
+          if (lines.length && lines[lines.length - 1].startsWith("```")) lines.pop();
+          jsonStr = lines.join("\n");
+        }
+        const jsonData = JSON.parse(jsonStr);
+        const rawBlocks = jsonData.blocks || jsonData.narrative_blocks || [];
+        if (Array.isArray(rawBlocks) && rawBlocks.length) {
+          blocks = rawBlocks;
+          body = jsonData.body || joinBlocksText(rawBlocks) || body;
+          choices = jsonData.choices || choicesText(rawBlocks) || choices;
+          summary = jsonData.summary || jsonData.turn_summary || summary;
+        }
+      }
+    } catch (err) {
+      console.warn("inline JSON parse failed", err);
+    }
+  }
+
+  // Preprocess blocks: split NPC dialogue out of gm_narration blocks
+  blocks = splitNpcDialogueBlocks(blocks);
+
+  renderStoryBlocks(blocks, body || "暂无正文。");
+  renderSummary(summary || "暂无回合摘要。");
   const director = {
     pressure_pack: output.pressure_pack || {},
     ai_flavor_report: output.ai_flavor_report || {},
@@ -693,7 +889,7 @@ async function applyWriteback() {
 function renderStoryBlocks(blocks, fallbackText) {
   const container = $("storyText");
   container.innerHTML = "";
-  const visibleBlocks = blocks.filter((block) => !["choice_prompt", "summary"].includes(block.type));
+  const visibleBlocks = blocks.filter((block) => block.type !== "summary");
   const rows = visibleBlocks.length ? visibleBlocks : legacyTextBlocks(fallbackText);
   if (!rows.length) container.textContent = "暂无正文。";
   rows.forEach((block) => container.appendChild(renderMessageBlock(block)));
@@ -701,6 +897,7 @@ function renderStoryBlocks(blocks, fallbackText) {
 }
 
 function renderMessageBlock(block) {
+  if (block.type === "choice_prompt") return renderChoiceBlock(block);
   const role = blockRole(block);
   const card = document.createElement("article");
   card.className = `msg ${role}`;
@@ -708,12 +905,11 @@ function renderMessageBlock(block) {
 
   const avatar = document.createElement("div");
   avatar.className = "msgAvatar";
-  if (role === "player" || role === "npc") {
-    const canvas = document.createElement("canvas");
-    canvas.width = 48;
-    canvas.height = 48;
-    avatar.appendChild(canvas);
-    drawBlockAvatar(canvas, block, role);
+  if (role === "player" || role === "npc" || role === "companion") {
+    const image = document.createElement("img");
+    image.alt = `${block.speaker || defaultSpeaker(block.type)} 头像 PNG`;
+    avatar.appendChild(image);
+    drawBlockAvatar(image, block, role);
   } else {
     avatar.textContent = role === "system" ? "检" : "叙";
   }
@@ -726,7 +922,7 @@ function renderMessageBlock(block) {
   content.className = "msgText";
   content.textContent = block.body || "";
   body.append(title, content);
-  const check = checkMeta(block);
+  const check = block.type === "system_check" ? checkMeta(block) : null;
   if (check) body.appendChild(check);
 
   const time = document.createElement("time");
@@ -771,9 +967,60 @@ function renderChoicePanel(blocks, fallbackText) {
   holder.textContent = choiceBlock?.body || fallbackText || "暂无选择点。";
 }
 
+function renderChoiceBlock(block) {
+  const card = document.createElement("article");
+  card.className = "choiceCard inlineChoice";
+  card.dataset.blockType = "choice_prompt";
+  const header = document.createElement("div");
+  header.className = "choiceTitle";
+  const mark = document.createElement("span");
+  mark.className = "choiceMark";
+  mark.textContent = "抉";
+  const title = document.createElement("strong");
+  title.textContent = block.speaker || "关键抉择";
+  header.append(mark, title);
+  const time = document.createElement("time");
+  time.textContent = block.time || "现在";
+  header.appendChild(time);
+  card.appendChild(header);
+  if (block.body) {
+    const intro = document.createElement("div");
+    intro.className = "choiceIntro";
+    intro.textContent = block.body;
+    card.appendChild(intro);
+  }
+  const choices = Array.isArray(block.choices) ? block.choices : [];
+  if (choices.length) {
+    const grid = document.createElement("div");
+    grid.className = "choiceGrid";
+    choices.slice(0, 4).forEach((choice, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "choiceOption";
+      const id = choice.id || String.fromCharCode(65 + index);
+      const label = choice.label || choice.text || `选择 ${index + 1}`;
+      button.innerHTML = `<b>${escapeHtml(id)}. ${escapeHtml(label)}</b>${choice.risk ? `<small>${escapeHtml(choice.risk)}</small>` : ""}`;
+      button.addEventListener("click", () => {
+        const input = $("actionInput");
+        if (input) {
+          input.value = label;
+          input.focus();
+        }
+      });
+      grid.appendChild(button);
+    });
+    card.appendChild(grid);
+  }
+  return card;
+}
+
 function blockRole(block) {
   if (block.type === "player_action") return "player";
-  if (block.type === "npc_dialogue") return "npc";
+  if (block.type === "npc_dialogue") {
+    const key = block.avatar_key || block.actor_id || block.speaker || "";
+    if (isCompanionActorName(key)) return "companion";
+    return "npc";
+  }
   if (block.type === "system_check") return "system";
   return "gm";
 }
@@ -790,13 +1037,23 @@ function checkMeta(block) {
   if (!check || typeof check !== "object") return null;
   const row = document.createElement("div");
   row.className = "checkMeta";
+  const result = String(check.result || check.outcome || "").toLowerCase();
+  const success = result.includes("success") || result.includes("成功") || check.success === true;
+  const failure = result.includes("fail") || result.includes("失败") || check.success === false;
+  row.classList.toggle("success", success);
+  row.classList.toggle("failure", failure);
+  const total = check.total ?? check.value ?? "";
+  const target = check.dc ?? check.target ?? check.difficulty ?? "";
   const parts = [
-    check.skill || check.name || check.type,
-    check.roll ? `掷骰 ${check.roll}` : "",
-    check.target ? `难度 ${check.target}` : "",
-    check.result || check.outcome || "",
+    `${check.skill || check.name || check.type || "检定"} 检定`,
+    check.roll ? `${check.roll}${check.modifier ? ` + ${check.modifier}` : ""}` : "",
+    total !== "" ? `= ${total}` : "",
+    target !== "" ? `难度 ${target}` : "",
   ].filter(Boolean);
-  row.textContent = parts.join(" · ");
+  const status = document.createElement("b");
+  status.textContent = failure ? "失败" : success ? "成功" : (check.result || check.outcome || "结果待定");
+  row.innerHTML = `<span>${escapeHtml(parts.join("  >  "))}</span>`;
+  row.appendChild(status);
   return parts.length ? row : null;
 }
 
@@ -811,6 +1068,115 @@ function legacyTextBlocks(text) {
       body: part,
       time: "现在",
     }));
+}
+
+/**
+ * Split NPC dialogue segments out of gm_narration blocks.
+ * Detects patterns like "掌车人终于憋不住，从牙缝里挤出一句："..." or "某某某说："
+ * and creates separate npc_dialogue blocks with proper avatar_key.
+ */
+function splitNpcDialogueBlocks(blocks) {
+  const result = [];
+  for (const block of blocks) {
+    if (block.type !== "gm_narration" || !block.body) {
+      result.push(block);
+      continue;
+    }
+    // Try to extract NPC dialogue segments using quote patterns
+    const parts = splitGmBlock(block);
+    for (const part of parts) {
+      result.push(part);
+    }
+  }
+  return result;
+}
+
+/**
+ * Known NPC names extracted from the block content via heuristic.
+ * We match Chinese names (2-3 chars) followed by dialogue verbs.
+ */
+const NPC_VERBS = /(?:终于憋不住|挤出一句|说道|低声开口|喊道|叫道|说|问|答|喊|嚷|嘟囔|咕哝|骂|吼|抱怨|提醒|打断|插嘴|接口|补充|解释|回答|命令|指示| whispered|said|shouted|asked|replied)/;
+
+/**
+ * Try to split a gm_narration block into sub-blocks.
+ * Returns array of blocks (may be just the original if no split needed).
+ */
+function splitGmBlock(block) {
+  const body = block.body;
+  // Match patterns like: "NPC名终于憋不住，从牙缝里挤出一句："...""
+  // or "NPC名说道："..."
+  // This regex captures: leading narration text, then NPC name + verb + dialogue
+  const dialogueRegex = /([\u4e00-\u9fff]{2,3}(?:终于憋不住[^"]*?(?:挤出一句|说道)|低声开口|说道|喊道|叫道|说[^"]*?[：:]|问[^"]*?[：:]|答[^"]*?[：:]|喊[^"]*?[：:]|嚷[^"]*?[：:]|骂[^"]*?[：:]|抱怨[^"]*?[：:]|提醒[^"]*?[：:]|打断[^"]*?[：:]))[：:]\s*"([^"]*)"/g;
+
+  const segments = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = dialogueRegex.exec(body)) !== null) {
+    // Text before this dialogue segment
+    const before = body.substring(lastIndex, match.index);
+    if (before.trim()) {
+      segments.push(createSubBlock(block, "gm_narration", "GM", "", before.trim()));
+    }
+
+    // The NPC dialogue segment
+    const npcName = extractNpcName(match[1]);
+    const dialogueText = match[2];
+    // Include the action context (e.g., "掌车人终于憋不住，从牙缝里")
+    const actionBeforeQuote = match[1].substring(npcName.length);
+    const fullDialogueBody = `${npcName}${actionBeforeQuote}："${dialogueText}"`;
+    segments.push(createSubBlock(block, "npc_dialogue", npcName, npcName, fullDialogueBody));
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining text after last dialogue
+  const remaining = body.substring(lastIndex);
+  if (remaining.trim()) {
+    segments.push(createSubBlock(block, "gm_narration", "GM", "", remaining.trim()));
+  }
+
+  return segments.length > 1 ? segments : [block];
+}
+
+function extractNpcName(actionText) {
+  // Extract NPC name (first 2-3 Chinese chars) from action context
+  const nameMatch = actionText.match(/([\u4e00-\u9fff]{2,3})/);
+  return nameMatch ? nameMatch[1] : "NPC";
+}
+
+function createSubBlock(original, type, speaker, avatarKey, body) {
+  return {
+    type: type,
+    speaker: speaker,
+    actor_id: avatarKey || "",
+    actor_kind: type === "npc_dialogue" ? "npc" : "gm",
+    avatar_key: avatarKey || "",
+    body: body,
+    time: original.time || "现在",
+    check: {},
+    choices: [],
+    tags: [],
+  };
+}
+
+function joinBlocksText(blocks) {
+  return blocks
+    .filter((b) => b.body && !["choice_prompt", "summary"].includes(b.type))
+    .map((b) => b.body)
+    .join("\n\n");
+}
+
+function choicesText(blocks) {
+  const choice = blocks.find((b) => b.type === "choice_prompt");
+  if (!choice) return "";
+  const lines = [choice.body || ""];
+  (choice.choices || []).forEach((c) => {
+    const label = c.label || c.text || "";
+    const risk = c.risk ? `（风险：${c.risk}）` : "";
+    if (label) lines.push(`${label}${risk}`);
+  });
+  return lines.filter(Boolean).join("\n");
 }
 
 function renderSummary(text) {
@@ -866,17 +1232,13 @@ function renderStoryPicker() {
   });
   const selected = availableCampaigns.find((x) => x.campaign_id === state.selectedCampaign) || availableCampaigns[0];
   if (!selected) return;
-  const projectInput = $("bindingProject");
-  const conversationInput = $("bindingConversation");
-  if (projectInput) projectInput.value = selected.project || "";
-  if (conversationInput) conversationInput.value = selected.conversation || "";
   const isActive = selected.campaign_id === state.activeCampaign;
   const detail = document.createElement("div");
   detail.className = "pickerCampaignDetail";
   detail.innerHTML = `
     <b>${escapeHtml(selected.title || selected.name || selected.campaign_id)}</b>
-    <small>${escapeHtml(selected.genre || selected.status || "未记录题材")}</small>
-    <p>${escapeHtml(selected.conversation ? `固定对话：${selected.conversation}` : "固定对话未绑定")}</p>
+    <small>${escapeHtml(selected.genre || "未记录题材")} · ${escapeHtml(selected.status || "active")}</small>
+    <p>${escapeHtml(bindingSafetyText(selected))}</p>
   `;
   const switchBtn = document.createElement("button");
   switchBtn.type = "button";
@@ -885,6 +1247,69 @@ function renderStoryPicker() {
   switchBtn.disabled = isActive;
   switchBtn.addEventListener("click", () => selectCampaign(selected.campaign_id));
   stories.append(detail, switchBtn);
+}
+
+function populateCampaignProfileFields(campaign) {
+  if (!campaign) return;
+  setInputValue("profileTitle", campaign.title || campaign.name || "");
+  setInputValue("profileGenre", campaign.genre || "");
+  setInputValue("profileTone", campaign.tone || "");
+  setInputValue("profileDiceSystem", "");
+  setInputValue("profileStatsStyle", "");
+  setChecked("profileUseDice", false);
+  setChecked("profileUseCombatRules", false);
+  renderBindingSafety(campaign);
+}
+
+async function loadCampaignProfile(campaignId) {
+  if (!campaignId) return;
+  try {
+    const data = await api(`/api/campaign-profile?campaign_id=${encodeURIComponent(campaignId)}`);
+    if (state.selectedCampaign !== campaignId) return;
+    const profile = data.profile || {};
+    const mechanics = profile.mechanics || {};
+    setInputValue("profileTitle", profile.title || "");
+    setInputValue("profileGenre", profile.genre || "");
+    setInputValue("profileTone", profile.tone || "");
+    setInputValue("profileDiceSystem", mechanics.dice_system || "");
+    setInputValue("profileStatsStyle", mechanics.stats_style || "");
+    setChecked("profileUseDice", Boolean(mechanics.use_dice));
+    setChecked("profileUseCombatRules", Boolean(mechanics.use_combat_rules));
+    renderBindingSafety({ ...campaignById(campaignId), ...(data.registry_meta || {}) });
+  } catch (err) {
+    setPickerNotice(err.message);
+  }
+}
+
+function bindingSafetyText(campaign) {
+  const project = campaign.project || campaign.chatgpt_project_name || "";
+  const conversation = campaign.conversation || campaign.chatgpt_conversation_name || "";
+  if (!project || !conversation) return "固定对话未绑定。发送/抓取会由后端安全检查阻止。";
+  return `绑定 Project：${project}；固定对话：${conversation}。只操作此固定对话，不创建、不删除、不切换到其他对话。`;
+}
+
+function renderBindingSafety(campaign) {
+  setText("bindingSafetyHint", bindingSafetyText(campaign || {}));
+  const archived = (campaign?.status || "").toLowerCase() === "archived";
+  const archiveBtn = $("archiveCampaignBtn");
+  const restoreBtn = $("restoreCampaignBtn");
+  if (archiveBtn) archiveBtn.disabled = archived;
+  if (restoreBtn) restoreBtn.disabled = !archived;
+  setText("campaignArchiveHint", archived ? "当前跑团已归档；记忆、日志和素材仍保留，可随时恢复。" : "当前跑团未归档。归档只改变状态，不删除任何文件。");
+}
+
+function campaignById(campaignId) {
+  return state.campaigns.find((campaign) => campaign.campaign_id === campaignId) || {};
+}
+
+function setInputValue(id, value) {
+  const el = $(id);
+  if (el) el.value = value || "";
+}
+
+function setChecked(id, value) {
+  const el = $(id);
+  if (el) el.checked = Boolean(value);
 }
 
 function demoCampaigns() {
@@ -925,6 +1350,7 @@ async function selectCampaign(campaignId) {
 async function createCampaign() {
   const campaignId = $("newCampaignId").value.trim();
   const name = $("newCampaignName").value.trim();
+  const template = $("newCampaignTemplate")?.value || "custom";
   if (!campaignId || !name) {
     setPickerNotice("请填写 campaign_id 和跑团名称。");
     return;
@@ -932,7 +1358,7 @@ async function createCampaign() {
   try {
     await api("/api/init-campaign", {
       method: "POST",
-      body: JSON.stringify({ campaign_id: campaignId, name }),
+      body: JSON.stringify({ campaign_id: campaignId, name, template }),
     });
     state.selectedCampaign = campaignId;
     await refresh();
@@ -962,14 +1388,58 @@ async function saveChatGPTBinding() {
   }
 }
 
+async function saveCampaignProfile() {
+  const campaignId = state.selectedCampaign || state.activeCampaign;
+  if (!campaignId) return setPickerNotice("请先选择跑团。");
+  try {
+    await api("/api/campaign-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        campaign_id: campaignId,
+        title: $("profileTitle").value.trim(),
+        genre: $("profileGenre").value.trim(),
+        tone: $("profileTone").value.trim(),
+        mechanics: {
+          use_dice: $("profileUseDice").checked,
+          use_combat_rules: $("profileUseCombatRules").checked,
+          dice_system: $("profileDiceSystem").value.trim(),
+          stats_style: $("profileStatsStyle").value.trim(),
+        },
+      }),
+    });
+    await refresh();
+    renderStoryPicker();
+    setPickerNotice("跑团基础字段已保存。");
+  } catch (err) {
+    setPickerNotice(err.message);
+  }
+}
+
+async function setCampaignArchiveStatus(status) {
+  const campaignId = state.selectedCampaign || state.activeCampaign;
+  if (!campaignId) return setPickerNotice("请先选择跑团。");
+  try {
+    await api("/api/campaign-status", {
+      method: "POST",
+      body: JSON.stringify({ campaign_id: campaignId, status }),
+    });
+    await refresh();
+    state.selectedCampaign = campaignId;
+    renderStoryPicker();
+    setPickerNotice(status === "archived" ? "跑团已归档，未删除任何文件。" : "跑团已恢复。");
+  } catch (err) {
+    setPickerNotice(err.message);
+  }
+}
+
 function setPickerNotice(text) {
-  const footer = $("viewAllCampaignsBtn");
-  if (footer) footer.querySelector("span").textContent = text || "查看全部跑团";
+  const footer = $("newCampaignPageBtn");
+  if (footer) footer.querySelector("span").textContent = text || "新建跑团";
 }
 
 function showPanel(name) {
   state.activePanel = name;
-  ["story", "choices", "director", "writeback", "logs", "summary"].forEach((item) => {
+  ["story", "director", "writeback", "memory", "logs", "summary"].forEach((item) => {
     const el = $(`${item}Tab`);
     if (el) el.classList.toggle("hidden", item !== name);
   });
@@ -1009,10 +1479,9 @@ function renderGallery(campaignState) {
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `查看资料：${asset.title}`);
-    const canvas = document.createElement("canvas");
-    canvas.width = 96;
-    canvas.height = 96;
-    canvas.className = "galleryCanvas";
+    const image = document.createElement("img");
+    image.className = "galleryThumb";
+    image.alt = `${asset.title} PNG`;
     const text = document.createElement("div");
     text.className = "galleryText";
     const title = document.createElement("b");
@@ -1022,7 +1491,7 @@ function renderGallery(campaignState) {
     const meta = document.createElement("small");
     meta.textContent = asset.meta || galleryKindLabel(asset.kind);
     text.append(title, detail, meta);
-    card.append(canvas, text);
+    card.append(image, text);
     grid.appendChild(card);
     card.addEventListener("click", () => openGalleryOverlay(asset.key));
     card.addEventListener("keydown", (event) => {
@@ -1031,7 +1500,7 @@ function renderGallery(campaignState) {
         openGalleryOverlay(asset.key);
       }
     });
-    drawGalleryAsset(canvas, asset);
+    drawGalleryAsset(image, asset);
   });
   setGalleryFilter(state.galleryFilter);
 }
@@ -1099,20 +1568,20 @@ function renderGalleryDialog() {
 }
 
 function renderGalleryInspector(asset) {
-  const canvas = $("galleryInspectorCanvas");
+  const image = $("galleryInspectorImage");
   const title = $("galleryInspectorTitle");
   const detail = $("galleryInspectorDetail");
   const meta = $("galleryInspectorMeta");
   const useButton = $("useGalleryAssetBtn");
   if (!asset) {
-    if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    if (image) image.removeAttribute("src");
     setText("galleryInspectorTitle", "暂无资料");
     setText("galleryInspectorDetail", "当前筛选下没有可查看的资料。");
     setText("galleryInspectorMeta", "资料");
     if (useButton) useButton.disabled = true;
     return;
   }
-  if (canvas) drawGalleryAsset(canvas, asset);
+  if (image) drawGalleryAsset(image, asset);
   if (title) title.textContent = asset.title;
   if (detail) detail.textContent = galleryDetail(asset);
   if (meta) meta.textContent = asset.meta || galleryKindLabel(asset.kind);
@@ -1137,27 +1606,126 @@ function canUseGalleryAsset(asset) {
   return asset && (asset.kind === "npc" || asset.kind === "item");
 }
 
-async function showRuntimeRules() {
+async function loadMemoryReport() {
   try {
-    const names = [
-      "gallery_asset_rules.md",
-      "visual_asset_protocol.md",
-      "asset_cache_lifecycle_rules.md",
-      "frontend_interaction_rules.md",
-      "encoding_rules.md",
-    ];
-    const blocks = [];
-    for (const name of names) {
-      const data = await api(`/api/rules?name=${encodeURIComponent(name)}`);
-      blocks.push(`## ${name}\n${data.content || ""}`.trim());
-    }
-    closeGalleryOverlay();
-    showPanel("logs");
-    setLog(blocks.join("\n\n"));
+    const params = state.activeCampaign ? `?campaign_id=${encodeURIComponent(state.activeCampaign)}` : "";
+    const data = await api(`/api/memory-report${params}`);
+    renderMemoryReport(data);
+    showPanel("memory");
   } catch (err) {
     showPanel("logs");
     setLog(err.message);
   }
+}
+
+function renderMemoryReport(data) {
+  const stats = $("memoryStats");
+  const recent = $("memoryRecent");
+  const unconfirmed = $("memoryUnconfirmed");
+  const compact = $("memoryCompact");
+  if (stats) {
+    stats.innerHTML = "";
+    (data.files || []).forEach((file) => {
+      const card = document.createElement("div");
+      card.className = "reportMetric";
+      card.innerHTML = `<b>${escapeHtml(file.entries ?? 0)}</b><span>${escapeHtml(file.file)}</span><small>${escapeHtml(file.main_bucket || "条目")}</small>`;
+      stats.appendChild(card);
+    });
+  }
+  renderReportRows(recent, data.recent_writes || [], (row) => `<b>${escapeHtml(row.type || "摘要")}</b><p>${escapeHtml(row.text || "")}</p>`, "暂无最近写入摘要。");
+  renderReportRows(unconfirmed, data.unconfirmed || [], (row) => {
+    const items = (row.items || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    return `<b>${escapeHtml(row.file)} · ${escapeHtml(row.count || 0)} 条</b><ul>${items}</ul>`;
+  }, "暂无未确认内容。");
+  const compaction = data.compaction || {};
+  const rows = [
+    ...(compaction.files || []).filter((row) => row.needs_compaction),
+    ...(compaction.npcs || []).filter((row) => row.needs_compaction),
+  ];
+  renderReportRows(compact, rows, (row) => {
+    if (row.file) return `<b>${escapeHtml(row.file)}</b><p>${escapeHtml(row.bucket)} 当前 ${escapeHtml(row.count)} 条，建议保留最近 ${escapeHtml(row.suggested_keep_recent)} 条。</p>`;
+    return `<b>NPC：${escapeHtml(row.npc)}</b><p>事实 ${escapeHtml(row.facts)} 条，建议整理成稳定人物摘要。</p>`;
+  }, compaction.needs_any_compaction ? "暂无可展示压缩项。" : "当前没有达到压缩阈值的记忆。");
+}
+
+function renderReportRows(container, rows, render, emptyText) {
+  if (!container) return;
+  container.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "reportEmpty";
+    empty.textContent = emptyText;
+    container.appendChild(empty);
+    return;
+  }
+  rows.forEach((row) => {
+    const card = document.createElement("article");
+    card.className = "reportRow";
+    card.innerHTML = render(row);
+    container.appendChild(card);
+  });
+}
+
+async function openRulesBrowser() {
+  closeGalleryOverlay();
+  const overlay = $("rulesOverlay");
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+  await loadRulesDirectory($("rulesSearch")?.value.trim() || "");
+}
+
+function closeRulesOverlay() {
+  const overlay = $("rulesOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+}
+
+async function loadRulesDirectory(query = "") {
+  try {
+    const suffix = query ? `?q=${encodeURIComponent(query)}` : "";
+    const data = await api(`/api/rules${suffix}`);
+    state.ruleFiles = data.rules || [];
+    renderRulesList(data);
+    const first = (data.matches && data.matches[0]) || state.ruleFiles.find((item) => item.name === state.selectedRule) || state.ruleFiles[0];
+    if (first) await openRuleFile(first.name);
+  } catch (err) {
+    setText("rulesViewerTitle", "规则读取失败");
+    setText("rulesContent", err.message);
+  }
+}
+
+function renderRulesList(data) {
+  const list = $("rulesList");
+  if (!list) return;
+  const query = (data.query || "").trim();
+  const rows = query ? (data.matches || []) : (data.rules || []);
+  list.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "rulesEmpty";
+    empty.textContent = "没有匹配的规则文件。";
+    list.appendChild(empty);
+    return;
+  }
+  rows.forEach((rule) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `ruleItem${rule.name === state.selectedRule ? " active" : ""}`;
+    const snippets = (rule.snippets || []).map((item) => `<small>${escapeHtml(item)}</small>`).join("");
+    button.innerHTML = `<b>${escapeHtml(rule.title || rule.name)}</b><span>${escapeHtml(rule.name)}</span>${snippets}`;
+    button.addEventListener("click", () => openRuleFile(rule.name));
+    list.appendChild(button);
+  });
+}
+
+async function openRuleFile(name) {
+  if (!name) return;
+  state.selectedRule = name;
+  document.querySelectorAll(".ruleItem").forEach((item) => item.classList.toggle("active", item.querySelector("span")?.textContent === name));
+  const data = await api(`/api/rules?name=${encodeURIComponent(name)}`);
+  setText("rulesViewerTitle", data.name || name);
+  setText("rulesContent", data.content || "文件为空。");
 }
 
 function galleryDetail(asset) {
@@ -1171,7 +1739,8 @@ function galleryDetail(asset) {
 function buildVisualAssets(campaignState) {
   const recent = campaignState.recent || {};
   const scene = recent.current_scene || {};
-  const pressureAssets = pressureVisualAssets();
+  const protectedActors = protectedActorNames(campaignState);
+  const pressureAssets = pressureVisualAssets(protectedActors);
   const rows = [];
   rows.push({
     kind: "scene",
@@ -1181,7 +1750,10 @@ function buildVisualAssets(campaignState) {
     seed: scene.location || state.activeCampaign || "map",
     scene,
   });
-  (scene.active_npcs || []).slice(0, 4).forEach((name) => {
+  (scene.active_npcs || [])
+    .filter((name) => !isProtectedActorName(name, protectedActors))
+    .slice(0, 4)
+    .forEach((name) => {
     rows.push({
       kind: "npc",
       key: `npc:${name}`,
@@ -1213,7 +1785,7 @@ function buildVisualAssets(campaignState) {
   return dedupeAssets([...rows, ...pressureAssets]).slice(0, 16);
 }
 
-function pressureVisualAssets() {
+function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCampaignState || {})) {
   const assets = Array.isArray(state.currentPressurePack?.visual_assets) ? state.currentPressurePack.visual_assets : [];
   return assets.map((asset, index) => {
     const kind = normalizePressureKind(asset.kind);
@@ -1225,8 +1797,12 @@ function pressureVisualAssets() {
       meta: asset.certainty === "confirmed" ? galleryKindLabel(kind) : `${galleryKindLabel(kind)} / ${asset.certainty || "clue"}`,
       seed: `${asset.id || title}:${asset.detail || ""}`,
       detail: asset.detail || asset.source_memory || "",
+      certainty: asset.certainty || "clue",
+      displayZone: asset.display_zone || "gallery",
+      cachePolicy: asset.cache_policy || "stable",
+      sourceMemory: asset.source_memory || "",
     };
-  });
+  }).filter((asset) => !(asset.kind === "npc" && isProtectedActorName(asset.title, protectedActors)));
 }
 
 function normalizePressureKind(kind) {
@@ -1240,7 +1816,12 @@ function normalizePressureKind(kind) {
 function cachedGalleryAssets() {
   return (state.cachedAssets || []).filter((entry) => {
     const kind = String(entry.kind || "");
-    return entry.exists && entry.metadata && (kind === "map" || kind.startsWith("gallery_"));
+    if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_"))) return false;
+    const normalizedKind = normalizeGalleryKind(kind);
+    if (normalizedKind !== "npc") return true;
+    const metadata = entry.metadata || {};
+    const title = metadata.title || readableAssetTitle(entry.key, normalizedKind);
+    return !isProtectedActorName(title) && !isProtectedActorName(metadata.object_id);
   }).map((entry) => {
     const metadata = entry.metadata || {};
     const normalizedKind = normalizeGalleryKind(entry.kind);
@@ -1257,6 +1838,38 @@ function cachedGalleryAssets() {
       generatorVersion: entry.generator_version,
     };
   });
+}
+
+function protectedActorNames(campaignState = state.lastCampaignState || {}) {
+  const card = buildCharacterCard(campaignState, campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色", campaignState.recent?.current_scene || {});
+  return new Set([
+    card.name,
+    card.companion?.name,
+  ].map(normalizeActorName).filter(Boolean));
+}
+
+function currentCompanion() {
+  return buildCharacterCard(
+    state.lastCampaignState || {},
+    campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色",
+    state.lastCampaignState?.recent?.current_scene || {},
+  ).companion;
+}
+
+function isCompanionActorName(value) {
+  const companion = currentCompanion();
+  return Boolean(companion?.name && normalizeActorName(value) === normalizeActorName(companion.name));
+}
+
+function isProtectedActorName(value, protectedActors = protectedActorNames()) {
+  const raw = String(value || "");
+  const normalized = normalizeActorName(raw.replace(/^[^:]+:/, ""));
+  if (protectedActors.has(normalized)) return true;
+  return Array.from(protectedActors).some((name) => normalized === name || normalized.includes(name));
+}
+
+function normalizeActorName(value) {
+  return String(value || "").toLowerCase().replace(/[\s_：:「」'"]/g, "").trim();
 }
 
 function mergeGalleryAssets(primary, cached) {
@@ -1325,11 +1938,12 @@ function galleryKindLabel(kind) {
   return { npc: "NPC", scene: "场景", item: "物品", monster: "生态" }[kind] || "资料";
 }
 
-function drawGalleryAsset(canvas, asset) {
+function drawGalleryAsset(targetImage, asset) {
   if (asset.cachedUrl) {
-    drawImageToCanvas(canvas, asset.cachedUrl, null);
+    setAssetImage(targetImage, asset.cachedUrl);
     return;
   }
+  const canvas = createAssetCanvas(128, 128);
   const kind = asset.kind === "scene" ? "gallery_map" : `gallery_${asset.kind}`;
   const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" ? "portraits" : "items";
   const draw = () => {
@@ -1341,6 +1955,7 @@ function drawGalleryAsset(canvas, asset) {
   if (state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
+      targetImage,
       kind,
       subdir,
       objectId: slugify(asset.key || asset.title),
@@ -1351,12 +1966,18 @@ function drawGalleryAsset(canvas, asset) {
         meta: asset.meta || galleryKindLabel(asset.kind),
         source: "gallery",
         object_id: asset.key || asset.title,
+        certainty: asset.certainty || undefined,
+        display_zone: asset.displayZone || undefined,
+        cache_policy: asset.cachePolicy || undefined,
+        source_memory: asset.sourceMemory || undefined,
+        kind: asset.kind,
       },
       draw,
     });
     return;
   }
   draw();
+  setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
 function setBusy(running, error = false) {
@@ -1405,13 +2026,28 @@ function hashSeed(text) {
   return h >>> 0;
 }
 
-function drawBlockAvatar(canvas, block, role) {
+function drawBlockAvatar(targetImage, block, role) {
   const actorKey = block.avatar_key || block.actor_id || block.speaker || role;
-  const kind = role === "npc" ? "npc_portrait" : "player_portrait";
-  const draw = () => drawPixelPortraitToCanvas(canvas, actorKey, role);
+  const canvas = createAssetCanvas(96, 96);
+
+  let kind, draw;
+  if (role === "companion") {
+    kind = "companion_portrait";
+    const companion = currentCompanion();
+    draw = () => drawCompanionToCanvas(canvas, actorKey, companion?.archetype);
+  } else if (role === "npc") {
+    kind = "npc_portrait";
+    draw = () => drawPixelPortraitToCanvas(canvas, actorKey, "npc");
+  } else {
+    // Player log avatars reuse the main character portrait cache.
+    kind = "portrait";
+    draw = () => drawPixelAvatar(actorKey, { cache: false, variant: "hunter", canvas, targetImage: null });
+  }
+
   if (state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
+      targetImage,
       kind,
       subdir: "portraits",
       objectId: slugify(actorKey),
@@ -1421,6 +2057,7 @@ function drawBlockAvatar(canvas, block, role) {
     return;
   }
   draw();
+  setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
 function drawPixelPortraitToCanvas(canvas, seedText, role) {
@@ -1508,16 +2145,17 @@ function shadeColor(hex, amount) {
 }
 
 function drawPixelAvatar(seedText, options = {}) {
-  const canvas = $("avatarCanvas");
-  if (!canvas) return;
+  const canvas = options.canvas || createAssetCanvas(96, 96);
+  const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
+      targetImage,
       kind: "portrait",
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
       seedText,
-      draw: () => drawPixelAvatar(seedText, { cache: false, variant: options.variant }),
+      draw: () => drawPixelAvatar(seedText, { cache: false, variant: options.variant, canvas, targetImage: null }),
     });
     return;
   }
@@ -1562,26 +2200,74 @@ function drawPixelAvatar(seedText, options = {}) {
     px(19, 19, 2, 1, "#5d5543");
     px(2, 20, 3, 1, "#5d5543");
   }
+  if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
-function drawPixelPalico(seedText, options = {}) {
-  const canvas = $("palicoCanvas");
-  if (!canvas) return;
+function drawCompanionAvatar(seedText, options = {}) {
+  const canvas = options.canvas || createAssetCanvas(96, 96);
+  const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
-      kind: "palico",
+      targetImage,
+      kind: "companion",
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
       seedText,
-      draw: () => drawPixelPalico(seedText, { cache: false }),
+      draw: () => drawCompanionToCanvas(canvas, seedText, options.archetype),
+    });
+    return;
+  }
+  drawCompanionToCanvas(canvas, seedText, options.archetype);
+  if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function drawCompanionToCanvas(canvas, seedText, archetype = "") {
+  const type = normalizeActorName(archetype || inferCompanionArchetype(seedText));
+  if (type.includes("palico")) {
+    drawPixelPalico(seedText, { cache: false, canvas, targetImage: null });
+    return;
+  }
+  drawPixelPortraitToCanvas(canvas, seedText, "companion");
+  if (type.includes("servant")) drawServantAccent(canvas, seedText);
+}
+
+function drawServantAccent(canvas, seedText) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`servant:${seedText}`);
+  const size = canvas.width;
+  const cell = size / 24;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const accent = ["#c8b45f", "#9cb4d8", "#d6d0ea", "#b96363"][(seed >>> 5) % 4];
+  px(4, 3, 16, 1, accent);
+  px(5, 4, 2, 2, "#f5ecd0");
+  px(17, 4, 2, 2, "#f5ecd0");
+  px(10, 15, 4, 1, accent);
+  px(7, 21, 10, 1, accent);
+}
+
+function drawPixelPalico(seedText, options = {}) {
+  const canvas = options.canvas || createAssetCanvas(96, 96);
+  const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
+  if (options.cache && state.activeCampaign) {
+    cacheCanvasAsset({
+      canvas,
+      targetImage,
+      kind: "companion",
+      subdir: "portraits",
+      objectId: options.objectId || slugify(seedText),
+      seedText,
+      draw: () => drawPixelPalico(seedText, { cache: false, canvas, targetImage: null }),
     });
     return;
   }
   const ctx = canvas.getContext("2d");
   const seed = hashSeed(seedText);
   const size = canvas.width;
-  const cell = 2;
+  const cell = size / 32;
   const px = (x, y, w, h, color) => {
     ctx.fillStyle = color;
     ctx.fillRect(x * cell, y * cell, w * cell, h * cell);
@@ -1592,21 +2278,34 @@ function drawPixelPalico(seedText, options = {}) {
   };
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, size, size);
-  px(0, 0, 32, 32, "#ead7b8");
-  mirror(7, 3, 5, 8, "#69513a");
-  mirror(9, 5, 2, 4, "#f2d7a8");
-  px(9, 8, 14, 13, "#8a6b48");
-  px(10, 10, 12, 9, "#d7b784");
-  mirror(11, 14, 2, 2, "#141716");
+  px(0, 0, 32, 32, "#eadfca");
+  px(5, 3, 7, 9, "#69513a");
+  px(20, 3, 7, 9, "#69513a");
+  px(7, 5, 4, 6, "#f2d7a8");
+  px(21, 5, 4, 6, "#f2d7a8");
+  px(8, 8, 16, 13, "#8a6b48");
+  px(9, 9, 14, 11, "#9b7851");
+  px(10, 11, 12, 8, "#d7b784");
+  px(12, 10, 8, 2, "#f0cf99");
+  mirror(11, 13, 3, 3, "#141716");
   px(15, 15, 2, 2, "#6c4931");
-  px(13, 18, 6, 1, "#4e2c24");
+  px(12, 17, 3, 1, "#6c4931");
+  px(17, 17, 3, 1, "#6c4931");
+  px(13, 19, 6, 1, "#4e2c24");
+  px(5, 15, 5, 1, "#6c4931");
+  px(22, 15, 5, 1, "#6c4931");
+  px(5, 17, 5, 1, "#6c4931");
+  px(22, 17, 5, 1, "#6c4931");
+  px(11, 5, 10, 3, "#5c4b37");
+  px(12, 4, 8, 1, "#d6a23e");
+  px(20, 7, 5, 4, "#d6a23e");
+  px(21, 8, 3, 2, "#f2dfad");
   px(8, 21, 16, 3, "#9f3030");
-  px(21, 19, 5, 5, "#d6a23e");
-  px(22, 20, 3, 3, "#f2dfad");
   px(10, 24, 12, 4, (seed & 1) ? "#3b4e53" : "#5f432b");
   mirror(5, 24, 5, 5, "#6d5a43");
-  mirror(4, 16, 4, 3, "#8a6b48");
-  px(14, 11, 4, 1, "#f0cf99");
+  px(4, 19, 5, 3, "#8a6b48");
+  px(23, 19, 5, 3, "#8a6b48");
+  if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
 function drawPixelMap(seedText, options = {}) {
@@ -1619,6 +2318,7 @@ function drawPixelMap(seedText, options = {}) {
       subdir: "maps",
       objectId: options.objectId || slugify(seedText),
       seedText,
+      metadata: options.metadata || undefined,
       draw: () => drawPixelMap(seedText, { cache: false, canvas, scene: options.scene, compact: options.compact }),
     });
     return;
@@ -1631,7 +2331,7 @@ function drawPixelMap(seedText, options = {}) {
   ctx.imageSmoothingEnabled = true;
   drawMapPaper(ctx, w, h, seed);
   drawMapTerrain(ctx, w, h, seed);
-  drawMapRoute(ctx, w, h, seed);
+  drawMapRoute(ctx, w, h, seed, scene);
   drawMapNodes(ctx, w, h, seed, scene, Boolean(options.compact || h < 180));
 }
 
@@ -1678,7 +2378,18 @@ function drawMapTerrain(ctx, w, h, seed) {
   ctx.restore();
 }
 
-function drawMapRoute(ctx, w, h, seed) {
+function drawMapRoute(ctx, w, h, seed, scene = {}) {
+  const structured = structuredMapLayout(scene, w, h);
+  if (structured.nodes.length) {
+    if (structured.edges.length) {
+      structured.edges.forEach((edge) => drawStructuredMapEdge(ctx, edge, structured.nodeMap, w));
+    } else {
+      for (let i = 0; i < structured.nodes.length - 1; i += 1) {
+        drawStructuredMapEdge(ctx, { from: structured.nodes[i].id, to: structured.nodes[i + 1].id, kind: "route" }, structured.nodeMap, w);
+      }
+    }
+    return;
+  }
   const route = [[w * .12, h * .67], [w * .34, h * .58], [w * .55, h * .48], [w * .82, h * .36]];
   const creek = [[w * .06, h * .32], [w * .2, h * .42], [w * .36, h * .4], [w * .51, h * .52]];
   strokeCurve(ctx, creek, "rgba(78,135,157,.48)", Math.max(9, w / 38));
@@ -1697,6 +2408,13 @@ function drawMapRoute(ctx, w, h, seed) {
 }
 
 function drawMapNodes(ctx, w, h, seed, scene, compact) {
+  const structured = structuredMapLayout(scene, w, h);
+  if (structured.nodes.length) {
+    structured.nodes.forEach((node) => drawMapNode(ctx, node, compact));
+    structured.markers.forEach((marker) => drawMapMarker(ctx, marker, compact));
+    drawMapTitle(ctx, scene.map_route?.title || "结构化路线", w, h, compact);
+    return;
+  }
   const labels = mapLabels(scene);
   const routeNodes = Array.isArray(scene.map_route?.nodes) ? scene.map_route.nodes.slice(0, 5) : [];
   const positions = [[.17, .66], [.36, .54], [.56, .42], [.72, .31], [.84, .48]];
@@ -1725,12 +2443,136 @@ function drawMapNodes(ctx, w, h, seed, scene, compact) {
     });
   });
   nodes.forEach((node) => drawMapNode(ctx, node, compact));
+  drawMapTitle(ctx, scene.map_route?.title || "异常迁徙 / 现场压力", w, h, compact);
+}
+
+function structuredMapLayout(scene, w, h) {
+  const route = scene.map_route || {};
+  const sourceNodes = Array.isArray(route.nodes) ? route.nodes.slice(0, 7) : [];
+  const positions = [[.13, .66], [.29, .54], [.45, .42], [.62, .34], [.78, .43], [.68, .64], [.42, .72]];
+  const nodes = sourceNodes.map((node, index) => {
+    const id = String(node.id || node.label || `node_${index + 1}`);
+    return {
+      id,
+      label: conciseTitle(node.label || node.id || `节点 ${index + 1}`, 12),
+      x: w * positions[index % positions.length][0],
+      y: h * positions[index % positions.length][1],
+      tone: nodeTone(node),
+      kind: "node",
+      certainty: node.certainty || "confirmed",
+    };
+  });
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  nodes.forEach((node) => nodeMap.set(node.label, node));
+  const edges = Array.isArray(route.edges) ? route.edges.slice(0, 10) : [];
+  const markerPositions = [[.58, .25], [.82, .62], [.25, .34], [.52, .78], [.72, .22]];
+  const markers = (Array.isArray(route.markers) ? route.markers.slice(0, 5) : []).map((marker, index) => ({
+    label: conciseTitle(marker.label || marker.kind || "线索", 12),
+    kind: marker.kind || "clue",
+    certainty: marker.certainty || "uncertain",
+    x: w * markerPositions[index % markerPositions.length][0],
+    y: h * markerPositions[index % markerPositions.length][1],
+    tone: markerTone(marker),
+  }));
+  return { nodes, nodeMap, edges, markers };
+}
+
+function nodeTone(node) {
+  if (node.certainty === "clue") return "#a74732";
+  if (node.certainty === "inferred") return "#4b7da8";
+  if (node.certainty === "uncertain") return "#8f7653";
+  return "#b98634";
+}
+
+function markerTone(marker) {
+  const kind = String(marker.kind || "").toLowerCase();
+  if (kind.includes("hazard") || kind.includes("danger") || kind.includes("危险")) return "#a74732";
+  if (kind.includes("trace") || kind.includes("clue") || kind.includes("线索")) return "#4b7da8";
+  if (kind.includes("resource") || kind.includes("资源")) return "#5d956b";
+  if (kind.includes("pressure") || kind.includes("压力")) return "#b98634";
+  return marker.certainty === "confirmed" ? "#536f45" : "#a74732";
+}
+
+function drawStructuredMapEdge(ctx, edge, nodeMap, w) {
+  const from = nodeMap.get(edge.from);
+  const to = nodeMap.get(edge.to);
+  if (!from || !to) return;
+  const kind = String(edge.kind || "route").toLowerCase();
+  const styles = {
+    route: { color: "#8b6a3d", width: Math.max(7, w / 74), dash: [] },
+    blocked: { color: "#8e3f32", width: Math.max(8, w / 68), dash: [18, 10] },
+    trace: { color: "#4b7da8", width: Math.max(5, w / 96), dash: [6, 10] },
+    danger: { color: "#a74732", width: Math.max(9, w / 62), dash: [4, 7] },
+  };
+  const style = styles[kind] || styles.route;
+  ctx.save();
+  ctx.strokeStyle = "rgba(74,53,31,.18)";
+  ctx.lineWidth = style.width + 8;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  ctx.strokeStyle = style.color;
+  ctx.lineWidth = style.width;
+  ctx.setLineDash(style.dash);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  if (kind === "blocked") drawBlockMark(ctx, (from.x + to.x) / 2, (from.y + to.y) / 2, style.width);
+  ctx.restore();
+}
+
+function drawBlockMark(ctx, x, y, size) {
+  ctx.save();
+  ctx.strokeStyle = "#f7ead0";
+  ctx.lineWidth = Math.max(3, size / 2);
+  ctx.beginPath();
+  ctx.moveTo(x - size * 1.4, y - size * 1.4);
+  ctx.lineTo(x + size * 1.4, y + size * 1.4);
+  ctx.moveTo(x + size * 1.4, y - size * 1.4);
+  ctx.lineTo(x - size * 1.4, y + size * 1.4);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMapMarker(ctx, marker, compact) {
+  const size = compact ? 24 : 42;
+  ctx.save();
+  ctx.fillStyle = "rgba(255,250,239,.92)";
+  ctx.strokeStyle = marker.tone;
+  ctx.lineWidth = compact ? 3 : 5;
+  ctx.beginPath();
+  ctx.arc(marker.x, marker.y, size, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = marker.tone;
+  ctx.font = `900 ${compact ? 18 : 28}px Microsoft YaHei`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(markerGlyph(marker.kind), marker.x, marker.y + 1);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = `800 ${compact ? 14 : 24}px Microsoft YaHei`;
+  ctx.fillText(conciseTitle(marker.label, compact ? 6 : 9), marker.x + size + 6, marker.y + (compact ? 5 : 9));
+  ctx.restore();
+}
+
+function markerGlyph(kind) {
+  const value = String(kind || "").toLowerCase();
+  if (value.includes("hazard") || value.includes("danger") || value.includes("危险")) return "!";
+  if (value.includes("resource") || value.includes("Resources")) return "+";
+  if (value.includes("pressure") || value.includes("Pressure")) return "压";
+  return "?";
+}
+
+function drawMapTitle(ctx, title, w, h, compact) {
   ctx.save();
   ctx.font = `800 ${compact ? 22 : 42}px Microsoft YaHei`;
   ctx.fillStyle = "#536f45";
   ctx.strokeStyle = "rgba(255,250,239,.8)";
   ctx.lineWidth = compact ? 6 : 9;
-  const title = scene.map_route?.title || "异常迁徙 / 现场压力";
   ctx.strokeText(conciseTitle(title, compact ? 14 : 18), w * .18, h * .9);
   ctx.fillText(conciseTitle(title, compact ? 14 : 18), w * .18, h * .9);
   ctx.restore();
@@ -1928,13 +2770,31 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-async function cacheCanvasAsset({ canvas, kind, subdir, objectId, seedText, metadata, draw }) {
+function createAssetCanvas(width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function setAssetImage(targetImage, url) {
+  if (!targetImage || !url) return;
+  targetImage.src = url;
+}
+
+async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, seedText, metadata, draw }) {
   const campaignId = state.activeCampaign;
   const safeId = slugify(objectId || seedText || kind);
   const key = `${kind}:${campaignId}:${safeId}:v${ASSET_GENERATOR_VERSION}`;
   const memory = state.assetCache[key];
-  if (memory === "pending") return;
+  if (memory === "pending") {
+    draw();
+    setAssetImage(targetImage, canvas.toDataURL("image/png"));
+    return;
+  }
   if (memory?.url) {
+    setAssetImage(targetImage, memory.url);
+    if (targetImage && canvas.id !== "mapCanvas") return;
     drawImageToCanvas(canvas, memory.url, draw);
     return;
   }
@@ -1944,11 +2804,14 @@ async function cacheCanvasAsset({ canvas, kind, subdir, objectId, seedText, meta
     if (lookup.exists && lookup.url) {
       if (!metadata || lookup.entry?.metadata) {
         state.assetCache[key] = { url: lookup.url };
+        setAssetImage(targetImage, lookup.url);
+        if (targetImage && canvas.id !== "mapCanvas") return;
         drawImageToCanvas(canvas, lookup.url, draw);
         return;
       }
     }
     draw();
+    const dataUrl = canvas.toDataURL("image/png");
     const saved = await api("/api/asset", {
       method: "POST",
       body: JSON.stringify({
@@ -1961,16 +2824,19 @@ async function cacheCanvasAsset({ canvas, kind, subdir, objectId, seedText, meta
         style: "local_canvas_pixel",
         generator_version: ASSET_GENERATOR_VERSION,
         metadata: metadata || undefined,
-        data_url: canvas.toDataURL("image/png"),
+        data_url: dataUrl,
       }),
     });
     state.assetCache[key] = saved.url ? { url: saved.url } : null;
+    setAssetImage(targetImage, saved.url || dataUrl);
     if (saved.url) updateMapImageIfNeeded(canvas, saved.url);
   } catch (err) {
     console.warn("asset cache failed", err);
     state.assetCache[key] = null;
     draw();
-    updateMapImageIfNeeded(canvas, canvas.toDataURL("image/png"));
+    const dataUrl = canvas.toDataURL("image/png");
+    setAssetImage(targetImage, dataUrl);
+    updateMapImageIfNeeded(canvas, dataUrl);
   }
 }
 

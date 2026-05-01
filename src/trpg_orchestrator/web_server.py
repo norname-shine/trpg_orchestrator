@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -16,9 +17,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT, PROMPTS_DIR
+from .config import CAMPAIGNS_DIR, MEMORY_FILE_NAMES, OUTBOX_DIR, PROJECT_ROOT, PROMPTS_DIR
 from .encoding_utils import read_text_auto
 from .json_utils import extract_json_object, read_json, write_json
+from .memory_compactor import build_compaction_report
 from .memory_store import MemoryStore
 from .output_parser import parse_chatgpt_output, public_output
 from .prompt_builder import build_audit_user_prompt, read_prompt
@@ -78,6 +80,17 @@ class JobState:
 
 JOB = JobState()
 
+OUTBOX_SNAPSHOT_NAMES = (
+    "last_player_action.txt",
+    "chatgpt_raw_output.md",
+    "chatgpt_clean_output.md",
+    "chatgpt_blocks.json",
+    "state_writeback.json",
+    "pressure_pack.json",
+    "v4_audit_result.json",
+    "ai_flavor_report.json",
+)
+
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv or sys.argv[1:]
@@ -121,14 +134,26 @@ class Handler(BaseHTTPRequestHandler):
             self._json(status_payload())
             return
         if parsed.path == "/api/output":
-            self._json(output_payload())
+            query = parse_qs(parsed.query)
+            self._json(output_payload(first_query(query, "campaign_id")))
+            return
+        if parsed.path == "/api/raw-output":
+            query = parse_qs(parsed.query)
+            self._json(raw_output_payload(first_query(query, "campaign_id")))
             return
         if parsed.path == "/api/canvas-rules":
             self._json(canvas_rules_payload())
             return
+        if parsed.path == "/api/new-campaign-defaults":
+            self._json(new_campaign_defaults_payload())
+            return
         if parsed.path == "/api/rules":
             query = parse_qs(parsed.query)
-            self._json(rules_payload(first_query(query, "name")))
+            self._json(rules_payload(first_query(query, "name"), first_query(query, "q")))
+            return
+        if parsed.path == "/api/memory-report":
+            query = parse_qs(parsed.query)
+            self._json(memory_report_payload(first_query(query, "campaign_id")))
             return
         if parsed.path == "/api/assets":
             query = parse_qs(parsed.query)
@@ -141,8 +166,16 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             self._json(writeback_review_payload(first_query(query, "campaign_id")))
             return
+        if parsed.path == "/api/campaign-profile":
+            query = parse_qs(parsed.query)
+            self._json(campaign_profile_payload(first_query(query, "campaign_id")))
+            return
         if parsed.path == "/api/export":
             self._download_export()
+            return
+        if parsed.path == "/api/export-campaign":
+            query = parse_qs(parsed.query)
+            self._download_campaign_export(first_query(query, "campaign_id"))
             return
         if parsed.path == "/api/asset":
             query = parse_qs(parsed.query)
@@ -189,9 +222,21 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 self._json(init_campaign_payload(payload))
                 return
+            if parsed.path == "/api/create-campaign-smart":
+                payload = self._read_json()
+                self._json(create_campaign_smart_payload(payload))
+                return
             if parsed.path == "/api/set-chatgpt-binding":
                 payload = self._read_json()
                 self._json(set_chatgpt_binding_payload(payload))
+                return
+            if parsed.path == "/api/campaign-profile":
+                payload = self._read_json()
+                self._json(update_campaign_profile_payload(payload))
+                return
+            if parsed.path == "/api/campaign-status":
+                payload = self._read_json()
+                self._json(update_campaign_status_payload(payload))
                 return
             if parsed.path == "/api/audit-writeback":
                 payload = self._read_json()
@@ -302,6 +347,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _download_campaign_export(self, campaign_id: str = "") -> None:
+        payload = campaign_export_payload(campaign_id)
+        resolved = safe_segment(str(payload.get("campaign_id") or "campaign"))
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "application/json; charset=utf-8")
+        self.send_header("content-disposition", f"attachment; filename={resolved}_campaign_export.json")
+        self.send_header("content-length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
 
 def first_query(query: dict[str, list[str]], key: str) -> str:
     values = query.get(key) or [""]
@@ -330,6 +386,74 @@ def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
     except Exception:
         pass
     return {"assets": {}}
+
+
+def campaign_outbox_dir(campaign_id: str) -> Path:
+    return CAMPAIGNS_DIR / safe_segment(campaign_id) / "outbox"
+
+
+def outbox_has_content(path: Path) -> bool:
+    return any((path / name).exists() for name in OUTBOX_SNAPSHOT_NAMES)
+
+
+def outbox_campaign_id(path: Path) -> str:
+    for name in ("pressure_pack.json", "state_writeback.json", "chatgpt_blocks.json"):
+        candidate = path / name
+        if not candidate.exists():
+            continue
+        try:
+            data = read_json(candidate)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            value = data.get("campaign_id") or data.get("campaign")
+            if value:
+                return str(value)
+    return ""
+
+
+def sync_global_outbox_to_campaign(campaign_id: str) -> Path:
+    target = campaign_outbox_dir(campaign_id)
+    target.mkdir(parents=True, exist_ok=True)
+    for name in OUTBOX_SNAPSHOT_NAMES:
+        source = OUTBOX_DIR / name
+        if source.exists():
+            shutil.copy2(source, target / name)
+    return target
+
+
+def outbox_latest_mtime(path: Path) -> float:
+    mtimes = []
+    for name in OUTBOX_SNAPSHOT_NAMES:
+        candidate = path / name
+        if candidate.exists():
+            try:
+                mtimes.append(candidate.stat().st_mtime)
+            except OSError:
+                pass
+    return max(mtimes) if mtimes else 0.0
+
+
+def resolve_outbox_dir(campaign_id: str = "") -> Path:
+    if not campaign_id:
+        campaign_id = MemoryStore().resolve_campaign_id(None)
+    scoped = campaign_outbox_dir(campaign_id)
+    global_matches = outbox_campaign_id(OUTBOX_DIR) == campaign_id
+    if global_matches and outbox_latest_mtime(OUTBOX_DIR) > outbox_latest_mtime(scoped):
+        return sync_global_outbox_to_campaign(campaign_id)
+    if outbox_has_content(scoped):
+        return scoped
+    if global_matches:
+        return sync_global_outbox_to_campaign(campaign_id)
+    return scoped
+
+
+def require_outbox_campaign(outbox_dir: Path, campaign_id: str) -> None:
+    if not campaign_id:
+        return
+    found = outbox_campaign_id(outbox_dir)
+    if found and found != campaign_id:
+        raise RuntimeError(f"outbox campaign mismatch: expected {campaign_id}, got {found}")
 
 
 def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
@@ -505,6 +629,199 @@ def run_command(command: list[str]) -> None:
 
 
 
+
+
+def new_campaign_defaults_payload() -> dict[str, Any]:
+    return {"ok": True, "defaults": default_rule_bundle(), "modes": ai_mode_options()}
+
+
+def ai_mode_options() -> list[dict[str, str]]:
+    return [
+        {"id": "v4_director_chatgpt_api_actor", "label": "Deepseek V4 \u5bfc\u6f14 + ChatGPT API \u6f14\u5458\u751f\u6210", "director": "deepseek_v4", "actor": "chatgpt_api"},
+        {"id": "v4_api_chatgpt_conversation", "label": "Deepseek V4 API + ChatGPT \u5bf9\u8bdd\u8054\u52a8", "director": "deepseek_v4", "actor": "chatgpt_conversation"},
+        {"id": "deepseek_v4_only", "label": "\u5168\u7a0b\u4ec5\u4f7f\u7528 Deepseek V4 API", "director": "deepseek_v4", "actor": "deepseek_v4"},
+        {"id": "chatgpt_only", "label": "\u5168\u7a0b\u4ec5\u4f7f\u7528 ChatGPT AI", "director": "chatgpt", "actor": "chatgpt"},
+    ]
+
+def default_rule_bundle() -> dict[str, Any]:
+    categories = [
+        {"id": "image", "title": "\u751f\u56fe\u89c4\u5219", "files": ["canvas_asset_generation_rules.md", "chatgpt_image_rules.md"]},
+        {"id": "dialogue", "title": "\u5bf9\u8bdd\u89c4\u5219", "files": ["chatgpt_host_prompt.md", "chatgpt_npc_voice_rules.md"]},
+        {"id": "style", "title": "\u884c\u6587\u89c4\u5219", "files": ["chatgpt_style_rules.md", "ai_flavor_check_rules.md"]},
+        {"id": "npc", "title": "NPC / \u602a\u7269\u8bbe\u5b9a\u89c4\u5219", "files": ["chatgpt_monster_rules.md", "character_card_json_rules.md"]},
+    ]
+    rows = []
+    for category in categories:
+        parts = []
+        used = []
+        for filename in category["files"]:
+            path = PROMPTS_DIR / filename
+            if path.exists():
+                used.append(filename)
+                parts.append(f"## {filename}\n{read_text_auto(path)}".strip())
+        rows.append({"id": category["id"], "title": category["title"], "files": used, "content": "\n\n".join(parts)})
+    return {"categories": rows}
+
+def create_campaign_smart_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip()
+    template = str(payload.get("template") or "custom").strip().lower()
+    ai_mode = str(payload.get("ai_mode") or "v4_director_chatgpt_api_actor").strip()
+    user_prompt = str(payload.get("user_prompt") or "").strip()
+    custom_rules = str(payload.get("custom_rules") or "").strip()
+    if not name:
+        raise RuntimeError("name is required")
+    if not user_prompt:
+        raise RuntimeError("user_prompt is required")
+    if template not in {"fate", "dnd", "coc", "custom"}:
+        raise RuntimeError("template must be fate, dnd, coc, or custom")
+    valid_modes = {row["id"] for row in ai_mode_options()}
+    if ai_mode not in valid_modes:
+        raise RuntimeError("invalid ai mode")
+
+    campaign_id = unique_campaign_id(name)
+    paths = MemoryStore().init_campaign(campaign_id, name)
+    apply_campaign_template(paths.root, name, template)
+    analysis = summarize_campaign_prompt(name, template, user_prompt)
+    routing = classify_custom_rules(custom_rules)
+    generated_project = f"TRPG {name}"
+    generated_conversation = f"{name} \u56fa\u5b9a\u5bf9\u8bdd"
+    MemoryStore().update_chatgpt_binding(campaign_id, generated_project, generated_conversation)
+    select_campaign(campaign_id)
+    apply_smart_campaign_config(paths.root, {
+        "name": name,
+        "template": template,
+        "ai_mode": ai_mode,
+        "user_prompt": user_prompt,
+        "custom_rules": custom_rules,
+        "analysis": analysis,
+        "routing": routing,
+        "generated_project": generated_project,
+        "generated_conversation": generated_conversation,
+    })
+    return {"ok": True, "campaign_id": campaign_id, "analysis": analysis, "routing": routing, "status": status_payload()}
+
+
+def unique_campaign_id(name: str) -> str:
+    base = re.sub(r"[^a-z0-9_.-]+", "_", name.lower()).strip("._-")
+    if not base:
+        base = "campaign"
+    stamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    candidate = f"{base}_{stamp}"
+    root = CAMPAIGNS_DIR / candidate
+    index = 2
+    while root.exists():
+        candidate = f"{base}_{stamp}_{index}"
+        root = CAMPAIGNS_DIR / candidate
+        index += 1
+    return candidate
+
+
+def summarize_campaign_prompt(name: str, template: str, user_prompt: str) -> dict[str, str]:
+    client = DeepSeekClient()
+    if client.is_configured():
+        try:
+            raw = client.complete_json(
+                "Return concise JSON for a TRPG campaign setup. Keys: genre, tone, premise.",
+                json.dumps({"name": name, "template": template, "prompt": user_prompt}, ensure_ascii=False),
+            )
+            data = extract_json_object(raw)
+            return {
+                "genre": stringify_brief(data.get("genre") or infer_genre(user_prompt, template), 80),
+                "tone": stringify_brief(data.get("tone") or infer_tone(user_prompt, template), 100),
+                "premise": stringify_brief(data.get("premise") or user_prompt, 220),
+                "source": "deepseek_v4",
+            }
+        except Exception:
+            pass
+    return {"genre": infer_genre(user_prompt, template), "tone": infer_tone(user_prompt, template), "premise": stringify_brief(user_prompt, 220), "source": "local_heuristic"}
+
+
+def infer_genre(text: str, template: str) -> str:
+    lower = text.lower()
+    if template == "dnd" or any(word in lower for word in ("dragon", "dungeon", "\u9b54\u6cd5", "\u5730\u4e0b\u57ce", "\u738b\u56fd", "\u7cbe\u7075")):
+        return "\u5947\u5e7b\u5192\u9669"
+    if template == "coc" or any(word in lower for word in ("coc", "\u514b\u82cf\u9c81", "\u8c03\u67e5", "\u7406\u667a", "\u90aa\u795e", "\u5bc6\u6559")):
+        return "\u8c03\u67e5\u6050\u6016"
+    if template == "fate" or any(word in lower for word in ("fate", "\u5723\u676f", "\u5fa1\u4e3b", "\u4ece\u8005", "\u82f1\u7075", "\u4ee4\u5492")):
+        return "FATE \u4e9a\u79cd\u5723\u676f\u6218\u4e89 / \u73b0\u4ee3\u57ce\u5e02\u9b54\u672f\u4e8b\u6545"
+    if any(word in lower for word in ("\u730e\u4eba", "\u602a\u7269", "\u751f\u6001", "\u72e9\u730e", "\u516c\u4f1a")):
+        return "\u751f\u6001\u72e9\u730e / \u5192\u9669\u8c03\u67e5"
+    if any(word in lower for word in ("\u8d5b\u535a", "\u592a\u7a7a", "\u661f\u8230", "ai", "\u4e49\u4f53")):
+        return "\u79d1\u5e7b\u5192\u9669"
+    return "\u81ea\u5b9a\u4e49\u8dd1\u56e2"
+
+def infer_tone(text: str, template: str) -> str:
+    lower = text.lower()
+    tones = []
+    for word, label in (("\u9ed1\u6697", "\u9ed1\u6697"), ("\u6050\u6016", "\u538b\u8feb"), ("\u60ac\u7591", "\u60ac\u7591"), ("\u8f7b\u677e", "\u8f7b\u677e"), ("\u7535\u5f71", "\u7535\u5f71\u5316"), ("\u786c\u6838", "\u786c\u6838"), ("\u8352\u91ce", "\u8352\u91ce"), ("\u653f\u6cbb", "\u590d\u6742\u535a\u5f08"), ("\u4fdd\u547d", "\u8c28\u614e\u6c42\u751f")):
+        if word in lower:
+            tones.append(label)
+    if not tones:
+        tones = ["\u82f1\u96c4\u5192\u9669", "\u63a2\u7d22"] if template == "dnd" else ["\u8c03\u67e5", "\u5fc3\u7406\u538b\u529b"] if template == "coc" else ["Fate\u5473", "\u73b0\u4ee3\u57ce\u5e02", "\u5931\u63a7\u4e8b\u6545"] if template == "fate" else ["\u6c89\u6d78", "\u53ef\u63a8\u8fdb"]
+    return "\u3001".join(dict.fromkeys(tones))
+
+def classify_custom_rules(custom_rules: str) -> dict[str, Any]:
+    if not custom_rules:
+        return {"director_rules": [], "actor_rules": [], "source": "empty"}
+    client = DeepSeekClient()
+    if client.is_configured():
+        try:
+            raw = client.complete_json(
+                "Classify user TRPG rules into director_rules and actor_rules JSON arrays. Director rules control plot, memory, pacing, mechanics. Actor rules control prose, dialogue, images, NPC voice.",
+                custom_rules,
+            )
+            data = extract_json_object(raw)
+            return {"director_rules": list(data.get("director_rules") or []), "actor_rules": list(data.get("actor_rules") or []), "source": "deepseek_v4"}
+        except Exception:
+            pass
+    director = []
+    actor = []
+    for line in split_lines(custom_rules):
+        lower = line.lower()
+        if any(word in lower for word in ("\u5267\u60c5", "\u8282\u594f", "\u89c4\u5219", "\u68c0\u5b9a", "\u8bb0\u5fc6", "\u79d8\u5bc6", "\u96be\u5ea6", "\u5bfc\u6f14")):
+            director.append(line)
+        else:
+            actor.append(line)
+    return {"director_rules": director, "actor_rules": actor, "source": "local_heuristic"}
+
+def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
+    profile_path = root / "campaign_profile.json"
+    direction_path = root / "campaign_direction.json"
+    style_path = root / "style_profile.json"
+    image_path = root / "image_profile.json"
+    npc_path = root / "npc_profiles.json"
+    profile = read_json(profile_path)
+    direction = read_json(direction_path)
+    style = read_json(style_path)
+    image = read_json(image_path)
+    npc = read_json(npc_path)
+    analysis = config.get("analysis", {})
+    routing = config.get("routing", {})
+    mode = next((row for row in ai_mode_options() if row["id"] == config.get("ai_mode")), ai_mode_options()[0])
+    profile.update({
+        "title": config.get("name", profile.get("title", "")),
+        "genre": analysis.get("genre", ""),
+        "tone": analysis.get("tone", ""),
+        "initial_prompt": config.get("user_prompt", ""),
+        "ai_mode": mode,
+        "prompt_routing": {
+            "director_receives": ["campaign_profile", "campaign_direction", "director_rules", "memory"],
+            "actor_receives": ["chatgpt_host_prompt", "style_rules", "dialogue_rules", "image_rules", "actor_rules"],
+            "custom_rule_classification": routing,
+        },
+    })
+    direction.setdefault("background_direction", []).append(analysis.get("premise", ""))
+    direction.setdefault("theme_and_tone", []).extend([analysis.get("genre", ""), analysis.get("tone", "")])
+    direction.setdefault("pace_rules", []).extend(routing.get("director_rules", []))
+    style.setdefault("prose_style", []).extend(routing.get("actor_rules", []))
+    image.setdefault("image_generation_rules", []).append("Use merged canvas and image rules from default rule bundle; cache generated PNG assets locally.")
+    npc.setdefault("voice_rules", {})["custom_actor_rules"] = routing.get("actor_rules", [])
+    write_json(profile_path, profile)
+    write_json(direction_path, direction)
+    write_json(style_path, style)
+    write_json(image_path, image)
+    write_json(npc_path, npc)
+
 def canvas_rules_payload() -> dict[str, Any]:
     path = PROMPTS_DIR / "canvas_asset_generation_rules.md"
     return {
@@ -513,7 +830,7 @@ def canvas_rules_payload() -> dict[str, Any]:
         "rules": read_text_auto(path) if path.exists() else "",
     }
 
-def rules_payload(name: str = "") -> dict[str, Any]:
+def rules_payload(name: str = "", query: str = "") -> dict[str, Any]:
     if name:
         if "/" in name or "\\" in name or not name.endswith(".md"):
             raise RuntimeError("invalid rule name")
@@ -526,6 +843,8 @@ def rules_payload(name: str = "") -> dict[str, Any]:
             "exists": path.exists(),
         }
     rules = []
+    matches = []
+    needle = query.strip().lower()
     for path in sorted(PROMPTS_DIR.glob("*.md")):
         content = read_text_auto(path)
         title = path.stem.replace("_", " ")
@@ -533,24 +852,134 @@ def rules_payload(name: str = "") -> dict[str, Any]:
             if line.startswith("# "):
                 title = line[2:].strip()
                 break
-        rules.append({
+        item = {
             "name": path.name,
             "title": title,
             "path": str(path),
             "size": path.stat().st_size,
-        })
-    return {"ok": True, "rules": rules}
+        }
+        rules.append(item)
+        if needle and needle in f"{path.name} {title} {content}".lower():
+            matches.append({**item, "snippets": rule_snippets(content, query, 3)})
+    return {"ok": True, "rules": rules, "query": query, "matches": matches}
+
+
+def rule_snippets(content: str, query: str, limit: int = 3) -> list[str]:
+    needle = query.strip().lower()
+    if not needle:
+        return []
+    rows: list[str] = []
+    for line in content.splitlines():
+        clean = line.strip()
+        if needle in clean.lower():
+            rows.append(clean[:180])
+        if len(rows) >= limit:
+            break
+    if rows:
+        return rows
+    index = content.lower().find(needle)
+    if index < 0:
+        return []
+    return [content[max(0, index - 60):index + len(query) + 100].replace("\n", " ").strip()]
 
 def init_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
     campaign_id = str(payload.get("campaign_id") or "").strip()
     name = str(payload.get("name") or "").strip()
+    template = str(payload.get("template") or "custom").strip().lower()
     if not campaign_id:
         raise RuntimeError("campaign_id is required")
     if not name:
         raise RuntimeError("name is required")
+    if template not in {"fate", "dnd", "coc", "custom"}:
+        raise RuntimeError("template must be fate, dnd, coc, or custom")
     paths = MemoryStore().init_campaign(campaign_id, name)
-    return {"ok": True, "campaign_id": campaign_id, "root": str(paths.root), "status": status_payload()}
+    apply_campaign_template(paths.root, name, template)
+    return {"ok": True, "campaign_id": campaign_id, "template": template, "root": str(paths.root), "status": status_payload()}
 
+
+def apply_campaign_template(root: Path, name: str, template: str) -> None:
+    if template == "custom":
+        return
+    profile_path = root / "campaign_profile.json"
+    direction_path = root / "campaign_direction.json"
+    style_path = root / "style_profile.json"
+    character_path = root / "character_prompt.json"
+    profile = read_json(profile_path)
+    direction = read_json(direction_path)
+    style = read_json(style_path)
+    character = read_json(character_path)
+    if template == "fate":
+        profile.update({
+            "title": profile.get("title") or name,
+            "genre": "FATE \u4e9a\u79cd\u5723\u676f\u6218\u4e89",
+            "tone": "Fate\u5473\u3001\u73b0\u4ee3\u57ce\u5e02\u3001\u6709\u9650\u89c6\u89d2\u3001\u5931\u63a7\u4e8b\u6545\u3001\u4fe1\u606f\u788e\u7247",
+            "world_rules": [
+                "\u4f7f\u7528 Fate \u6838\u5fc3\u6982\u5ff5\uff1a\u5fa1\u4e3b\u3001\u4ece\u8005\u3001\u4ee4\u5492\u3001\u804c\u9636\u3001\u771f\u540d\u3001\u5b9d\u5177\u3001\u9b54\u672f\u56de\u8def\u3001\u7075\u8109\u3001\u5723\u676f\u6218\u4e89\u3001\u9b54\u672f\u534f\u4f1a\u3001\u795e\u79d8\u906e\u853d\u3001\u82f1\u7075\u5ea7\u3002",
+                "\u89d2\u8272\u3001\u57ce\u5e02\u3001\u5723\u676f\u6218\u4e89\u89c4\u5219\u548c\u654c\u65b9\u9635\u8425\u5168\u90e8\u539f\u521b\uff1b\u4e0d\u8ba9\u6b63\u4f5c\u4eba\u7269\u767b\u573a\u6216\u62a2\u4e3b\u7ebf\u3002",
+                "\u73b0\u4ee3\u4e2d\u56fd\u67b6\u7a7a\u57ce\u5e02\u4e2d\u7684\u4e9a\u79cd\u5723\u676f\u6218\u4e89\uff0c\u80dc\u5229\u6761\u4ef6\u88ab\u9690\u85cf\uff0c\u771f\u76f8\u901a\u8fc7\u4e8b\u6545\u3001\u75d5\u8ff9\u3001\u68a6\u5883\u3001NPC \u53cd\u5e94\u548c\u9b54\u672f\u6b8b\u7559\u9010\u6b65\u66b4\u9732\u3002",
+            ],
+            "narration_rules": [
+                "\u53ea\u8f93\u51fa\u8dd1\u56e2\u6b63\u6587\u3001\u5fc5\u8981\u72b6\u6001\u548c\u5173\u952e\u9009\u62e9\uff1b\u4e0d\u5c55\u793a\u601d\u7ef4\u94fe\uff0c\u4e0d\u89e3\u91ca\u5199\u4f5c\u65b9\u6cd5\u3002",
+                "\u4e0d\u7528\u65c1\u767d\u89e3\u91ca\u5371\u9669\uff0c\u8ba9\u96e8\u6c34\u3001\u95e8\u69db\u3001\u706f\u3001\u624b\u673a\u3001\u4e66\u5305\u3001\u9ed1\u6c34\u3001\u94dc\u94b1\u548c\u4eba\u7269\u52a8\u4f5c\u63a8\u52a8\u73b0\u573a\u3002",
+                "NPC \u4e0d\u8bf4\u8bbe\u5b9a\u8bf4\u660e\uff0c\u4fe1\u606f\u5fc5\u987b\u4ece\u6050\u60e7\u3001\u6025\u8e81\u3001\u56de\u907f\u3001\u4e8b\u6545\u548c\u88ab\u6253\u65ad\u7684\u534a\u53e5\u8bdd\u91cc\u6f0f\u51fa\u6765\u3002",
+                "Lee \u662f 16 \u5c81\u666e\u901a\u9ad8\u4e2d\u751f\uff0c\u4f1a\u614c\u3001\u4f1a\u6015\u6b7b\u3001\u4f1a\u72af\u9519\uff1b\u5224\u65ad\u5e94\u8be5\u662f\u4ece\u6050\u60e7\u91cc\u6324\u51fa\u6765\u7684\u3002",
+            ],
+            "hard_limits": [
+                "\u4e0d\u63d0\u524d\u8bf4\u660e\u771f\u5b9e\u5723\u676f\u89c4\u5219\u6216\u80dc\u5229\u6761\u4ef6\u3002",
+                "\u4e0d\u8ba9 Assassin \u50cf\u5bfc\u5e08\u4e00\u6837\u9891\u7e41\u8bf4\u91d1\u53e5\uff0c\u66f4\u591a\u7528\u52a8\u4f5c\u3001\u7ad9\u4f4d\u3001\u6c89\u9ed8\u548c\u4ee3\u4ef7\u8868\u73b0\u3002",
+                "\u4e0d\u628a\u9009\u62e9\u5199\u6210\u5e73\u8861\u653b\u7565\u83dc\u5355\uff0c\u9009\u9879\u8981\u662f\u73b0\u573a\u903c\u51fa\u6765\u7684\u574f\u529e\u6cd5\u3002",
+            ],
+        })
+        profile["mechanics"] = {"use_dice": False, "dice_system": "\u53d9\u4e8b\u5224\u5b9a / \u5fc5\u8981\u65f6\u9690\u6027\u96be\u5ea6", "use_combat_rules": True, "stats_style": "narrative_status"}
+        direction["background_direction"] = [
+            "\u6545\u4e8b\u53d1\u751f\u5728\u73b0\u4ee3\u4e2d\u56fd\u67b6\u7a7a\u5185\u9646\u57ce\u5e02\u9675\u5ddd\u5e02\uff1a\u65e7\u57ce\u533a\u3001\u591c\u5e02\u3001\u5b66\u6821\u3001\u534a\u5730\u4e0b\u7f51\u5427\u3001\u83dc\u5e02\u573a\u3001\u8001\u5c45\u6c11\u697c\u3001\u65e7\u7801\u5934\u548c\u88ab\u57ce\u5e02\u5efa\u8bbe\u8986\u76d6\u7684\u7075\u8109\u8282\u70b9\u3002",
+            "\u9675\u5ddd\u7684\u795e\u79d8\u662f Fate \u5f0f\u5730\u65b9\u9b54\u672f\u57fa\u76d8\uff1a\u6709\u4f20\u627f\u3001\u6709\u4ee3\u4ef7\u3001\u6709\u65ad\u5c42\u3001\u6709\u5931\u63a7\u98ce\u9669\uff0c\u4e0d\u5199\u6210\u4fee\u4ed9\u6216\u7384\u5e7b\u3002",
+            "Lee \u548c\u9648\u822a\u4ece\u84dd\u9cb8\u7f51\u5496\u9003\u5230\u83dc\u5e02\u573a\u9644\u8fd1\u5c0f\u5356\u90e8\u95e8\u53e3\uff0c\u8bb8\u5b88\u4e95\u51fa\u73b0\uff0c\u9ed1\u6c34\u3001\u4e95\u5323\u3001\u83dc\u5e02\u573a\u95e8\u7f1d\u7ea2\u5149\u6b63\u5728\u4e92\u76f8\u547c\u5e94\u3002",
+        ]
+        direction["main_tension"] = [
+            "\u4e9a\u79cd\u5723\u676f\u4eea\u5f0f\u7684\u771f\u5b9e\u80dc\u5229\u6761\u4ef6\u88ab\u9690\u85cf\uff0c\u5723\u676f\u53ef\u80fd\u5728\u7b5b\u9009\u5bb9\u5668\u6216\u94a5\u5319\u3002",
+            "Lee \u8981\u6d3b\u4e0b\u53bb\uff0c\u4f46\u8fd9\u4e2a\u6267\u5ff5\u4f1a\u6162\u6162\u53d8\u6210\uff1a\u6211\u60f3\u6d3b\u4e0b\u53bb\uff0c\u90a3\u522b\u4eba\u5462\uff1f",
+        ]
+        direction["theme_and_tone"] = ["Fate\u5473", "\u73b0\u4ee3\u57ce\u5e02", "\u4e9a\u79cd\u5723\u676f", "\u6709\u9650\u89c6\u89d2", "\u5931\u63a7\u4e8b\u6545", "\u4fe1\u606f\u788e\u7247"]
+        direction["pace_rules"] = ["\u964d\u4f4e\u63a8\u8fdb\u901f\u5ea6\uff0c\u4f18\u5148\u5199\u73b0\u573a\u538b\u529b\u3001\u8eab\u4f53\u53cd\u5e94\u3001\u4eba\u7269\u5e72\u6270\u548c\u88ab\u6253\u65ad\u7684\u4fe1\u606f\u3002", "\u5173\u952e\u9009\u62e9\u624d\u7ed9 2-5 \u4e2a\u52a8\u4f5c\u5316\u9009\u9879\uff0c\u9009\u9879\u8981\u6709\u4ee3\u4ef7\u548c\u574f\u529e\u6cd5\u611f\u3002"]
+        style["prose_style"] = ["\u5c11\u89e3\u91ca\uff0c\u591a\u8ba9\u73b0\u573a\u8bf4\u8bdd\u3002", "\u4e0d\u7528\u6d41\u6c34\u8d26\u548c\u4efb\u52a1\u6d41\u7a0b\u53e3\u543b\u3002", "\u7ec6\u8282\u5fc5\u987b\u5f71\u54cd\u884c\u52a8\uff0c\u4e0d\u53ea\u505a\u6c14\u6c1b\u88c5\u9970\u3002"]
+        style["avoid_patterns"] = ["\u8fd9\u8bf4\u660e", "\u8fd9\u610f\u5473\u7740", "Lee \u610f\u8bc6\u5230", "\u771f\u6b63\u7684\u95ee\u9898\u4e0d\u662f", "\u6f02\u4eae\u4f46\u5047\u7684\u91d1\u53e5"]
+        character["confirmed_identity"] = {"name": "Lee", "gender": "\u7537", "age": 16, "role": "\u666e\u901a\u9ad8\u4e2d\u751f / \u65b0\u4efb\u5fa1\u4e3b", "companion": "Assassin"}
+        character["personality_and_voice"] = ["\u5c11\u5e74\u611f\u3001\u5634\u786c\u3001\u4f1a\u614c\u3001\u6015\u6b7b\uff0c\u7b2c\u4e00\u53cd\u5e94\u662f\u627e\u9000\u8def\u548c\u51fa\u53e3\u3002", "\u4e0d\u559c\u6b22\u901e\u82f1\u96c4\uff0c\u4f46\u88ab\u903c\u5230\u4e0d\u80fd\u9000\u65f6\u4f1a\u54ac\u7259\u505a\u4e00\u4ef6\u81ea\u5df1\u4e5f\u5bb3\u6015\u7684\u4e8b\u3002"]
+        character["abilities_and_limits"] = ["\u539f\u672c\u4e0d\u662f\u9b54\u672f\u5e08\u3002\u4ee4\u5492\u8f6c\u79fb\u540e\u5bf9\u7075\u8109\u3001\u4ece\u8005\u6b8b\u7559\u3001\u4e95\u5323\u548c\u65e7\u7b26\u7eb9\u51fa\u73b0\u5f02\u5e38\u540c\u6b65\u3002", "\u8fc7\u5ea6\u63a5\u89e6\u5f02\u5e38\u4f1a\u5e26\u6765\u5e7b\u89c9\u3001\u8bb0\u5fc6\u6c61\u67d3\u3001\u9ed1\u75d5\u6269\u6563\u548c\u88ab\u4e95\u91cc\u7684\u4e1c\u897f\u6807\u8bb0\u3002"]
+        character["companion_card"] = {"name": "Assassin", "kind": "servant", "archetype": "servant", "class": "Assassin", "true_name": "\u672a\u516c\u5f00", "personality": "\u5e73\u9759\u3001\u514b\u5236\u3001\u5371\u9669\u3001\u4e0d\u54c4\u4eba\u3001\u4e0d\u8f7b\u6613\u89e3\u91ca", "visual_seed": "servant:assassin:lingchuan"}
+    elif template == "dnd":
+        profile.update({
+            "title": profile.get("title") or name,
+            "genre": "DND \u5947\u5e7b\u5192\u9669",
+            "tone": "\u82f1\u96c4\u5192\u9669\u3001\u63a2\u7d22\u3001\u9635\u8425\u4e0e\u4ee3\u4ef7",
+            "world_rules": ["\u4f7f\u7528\u961f\u4f0d\u3001\u5730\u70b9\u3001\u9635\u8425\u548c\u4efb\u52a1\u94a9\u5b50\u63a8\u52a8\u5192\u9669\u3002", "\u9b54\u6cd5\u3001\u804c\u4e1a\u80fd\u529b\u4e0e\u602a\u7269\u80fd\u529b\u9700\u8981\u4fdd\u6301\u524d\u540e\u4e00\u81f4\u3002"],
+            "narration_rules": ["\u5148\u5448\u73b0\u573a\u666f\u53ef\u884c\u52a8\u4fe1\u606f\uff0c\u518d\u7ed9\u51fa\u98ce\u9669\u4e0e\u673a\u4f1a\u3002", "\u6218\u6597\u8f6e\u6b21\u4e2d\u660e\u786e\u8ddd\u79bb\u3001\u76ee\u6807\u3001\u63a9\u62a4\u548c\u8d44\u6e90\u6d88\u8017\u3002"],
+            "hard_limits": ["\u4e0d\u8981\u66ff\u73a9\u5bb6\u51b3\u5b9a\u89d2\u8272\u884c\u52a8\u3002", "\u5173\u952e\u68c0\u5b9a\u548c\u6218\u6597\u540e\u679c\u5fc5\u987b\u53ef\u8ffd\u8e2a\u3002"],
+        })
+        profile["mechanics"] = {"use_dice": True, "dice_system": "d20", "use_combat_rules": True, "stats_style": "strict_stats"}
+        direction["theme_and_tone"] = ["\u5947\u5e7b\u5192\u9669", "\u5730\u4e0b\u57ce\u63a2\u7d22", "\u9635\u8425\u51b2\u7a81", "\u6210\u957f\u4e0e\u9009\u62e9"]
+        direction["pace_rules"] = ["Alternate exploration, social scenes, and combat.", "Give a clear next action entry after each turn."]
+        style["prose_style"] = ["Clear, concrete, adventurous prose.", "Mark rule outcomes in short standalone lines."]
+        character["growth_direction"] = ["Track class, level, resources, equipment, and key feats."]
+    elif template == "coc":
+        profile.update({
+            "title": profile.get("title") or name,
+            "genre": "COC \u514b\u82cf\u9c81\u8c03\u67e5",
+            "tone": "\u8c03\u67e5\u3001\u60ac\u7591\u3001\u5fc3\u7406\u538b\u529b\u3001\u4e0d\u53ef\u77e5\u6050\u60e7",
+            "world_rules": ["Clue chains must be traceable and avoid single failure points.", "Reveal supernatural truth layer by layer, not all at once."],
+            "narration_rules": ["Emphasize environmental details, conflicting testimony, time pressure, and sanity risk.", "Failed checks should still advance with a cost."],
+            "hard_limits": ["Do not reveal truths unknown to investigators.", "Do not write unconfirmed guesses as facts."],
+        })
+        profile["mechanics"] = {"use_dice": True, "dice_system": "d100", "use_combat_rules": False, "stats_style": "strict_stats"}
+        direction["theme_and_tone"] = ["\u8c03\u67e5\u6050\u6016", "\u7ebf\u7d22\u63a8\u7406", "\u7406\u667a\u538b\u529b", "\u4eba\u7c7b\u8106\u5f31\u6027"]
+        direction["pace_rules"] = ["Advance through clues, testimony, and location investigation.", "Give observable warning signs before danger escalates."]
+        style["prose_style"] = ["Restrained, calm prose with oppressive details.", "Avoid plainly explaining the source of horror."]
+        character["growth_direction"] = ["Track investigation skills, sanity, injuries, contacts, and important clues."]
+    write_json(profile_path, profile)
+    write_json(direction_path, direction)
+    write_json(style_path, style)
+    write_json(character_path, character)
 
 def set_chatgpt_binding_payload(payload: dict[str, Any]) -> dict[str, Any]:
     campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
@@ -564,13 +993,196 @@ def set_chatgpt_binding_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "campaign_id": campaign_id, "status": status_payload()}
 
 
-def current_writeback() -> dict[str, Any]:
-    path = OUTBOX_DIR / "state_writeback.json"
+
+
+def campaign_profile_payload(campaign_id: str = "") -> dict[str, Any]:
+    resolved = campaign_id or MemoryStore().resolve_campaign_id(None)
+    root = CAMPAIGNS_DIR / safe_segment(resolved)
+    path = root / "campaign_profile.json"
+    if not path.exists():
+        raise RuntimeError(f"missing campaign_profile.json: {resolved}")
+    registry = MemoryStore().load_registry()
+    meta = registry.get("campaigns", {}).get(resolved, {})
+    return {"ok": True, "campaign_id": resolved, "profile": read_json(path), "registry_meta": meta}
+
+
+def update_campaign_profile_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    path = root / "campaign_profile.json"
+    if not path.exists():
+        raise RuntimeError(f"missing campaign_profile.json: {campaign_id}")
+    profile = read_json(path)
+    for key in ("title", "genre", "tone"):
+        if key in payload:
+            profile[key] = str(payload.get(key) or "").strip()
+    for key in ("world_rules", "narration_rules", "hard_limits"):
+        if key in payload:
+            value = payload.get(key)
+            profile[key] = [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else split_lines(str(value or ""))
+    mechanics = payload.get("mechanics")
+    if isinstance(mechanics, dict):
+        current = profile.setdefault("mechanics", {})
+        for key in ("use_dice", "use_combat_rules"):
+            if key in mechanics:
+                current[key] = bool(mechanics.get(key))
+        for key in ("dice_system", "stats_style"):
+            if key in mechanics:
+                current[key] = str(mechanics.get(key) or "").strip()
+    write_json(path, profile)
+    registry = MemoryStore().load_registry()
+    if campaign_id in registry.get("campaigns", {}):
+        registry["campaigns"][campaign_id]["name"] = profile.get("title") or registry["campaigns"][campaign_id].get("name", campaign_id)
+        registry["campaigns"][campaign_id]["updated_at"] = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        MemoryStore().save_registry(registry)
+    return {"ok": True, "campaign_id": campaign_id, "profile": profile, "status": status_payload()}
+
+
+def update_campaign_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in {"active", "archived"}:
+        raise RuntimeError("status must be active or archived")
+    store = MemoryStore()
+    registry = store.load_registry()
+    campaigns = registry.setdefault("campaigns", {})
+    if campaign_id not in campaigns:
+        raise RuntimeError(f"unknown campaign_id: {campaign_id}")
+    campaigns[campaign_id]["status"] = status
+    campaigns[campaign_id]["updated_at"] = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    if status == "archived" and registry.get("active_campaign") == campaign_id:
+        replacement = next((cid for cid, meta in campaigns.items() if cid != campaign_id and meta.get("status") != "archived"), "")
+        registry["active_campaign"] = replacement or campaign_id
+    if status == "active" and not registry.get("active_campaign"):
+        registry["active_campaign"] = campaign_id
+    store.save_registry(registry)
+    return {"ok": True, "campaign_id": campaign_id, "status": status_payload()}
+
+
+def split_lines(text: str) -> list[str]:
+    return [line.strip() for line in text.replace(";", "\n").replace("|", "\n").splitlines() if line.strip()]
+
+
+def memory_report_payload(campaign_id: str = "") -> dict[str, Any]:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id or None)
+    memory = store.load_campaign_memory(resolved)
+    recent = memory.get("recent_context.json", {})
+    return {
+        "ok": True,
+        "campaign_id": resolved,
+        "files": [memory_file_report(name, memory.get(name, {})) for name in MEMORY_FILE_NAMES],
+        "recent_writes": recent_write_summary(recent),
+        "unconfirmed": unconfirmed_report(memory),
+        "compaction": build_compaction_report(memory),
+    }
+
+
+def memory_file_report(name: str, data: Any) -> dict[str, Any]:
+    return {"file": name, "entries": count_memory_entries(data), "last_updated_turn": data.get("last_updated_turn", "") if isinstance(data, dict) else "", "main_bucket": main_memory_bucket(data)}
+
+
+def count_memory_entries(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        total = 0
+        for item in value.values():
+            if isinstance(item, list):
+                total += len(item)
+            elif isinstance(item, dict):
+                total += len(item)
+        return total or len([key for key in value.keys() if key not in {"campaign_id", "scope", "purpose"}])
+    return 0
+
+
+def main_memory_bucket(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in ("facts", "recent_summary", "main_threads", "side_threads", "profiles", "npcs", "world_updates", "location_updates", "quest_updates", "equipment_updates", "growth_log", "mystery_updates", "prose_style", "background_direction"):
+        if isinstance(data.get(key), (list, dict)) and count_memory_entries(data.get(key)):
+            return key
+    return ""
+
+
+def recent_write_summary(recent: dict[str, Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    summaries = recent.get("recent_summary", []) if isinstance(recent, dict) else []
+    if isinstance(summaries, list):
+        for item in summaries[-5:]:
+            rows.append({"type": "recent_summary", "text": stringify_brief(item)})
+    for key, label in (("last_player_action", "\u73a9\u5bb6\u884c\u52a8"), ("last_outcome", "\u6700\u8fd1\u7ed3\u679c")):
+        text = stringify_brief(recent.get(key, "")) if isinstance(recent, dict) else ""
+        if text:
+            rows.append({"type": label, "text": text})
+    scene = recent.get("current_scene", {}) if isinstance(recent, dict) else {}
+    if isinstance(scene, dict) and scene:
+        rows.append({"type": "\u5f53\u524d\u73b0\u573a", "text": stringify_brief(scene)})
+    return rows[-8:]
+
+
+def unconfirmed_report(memory: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for filename, data in memory.items():
+        if isinstance(data, dict) and isinstance(data.get("uncertain_or_unconfirmed"), list) and data["uncertain_or_unconfirmed"]:
+            rows.append({"file": filename, "count": len(data["uncertain_or_unconfirmed"]), "items": [stringify_brief(item) for item in data["uncertain_or_unconfirmed"][-8:]]})
+    return rows
+
+
+def stringify_brief(value: Any, limit: int = 220) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def campaign_export_payload(campaign_id: str = "") -> dict[str, Any]:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id or None)
+    root = CAMPAIGNS_DIR / safe_segment(resolved)
+    registry = store.load_registry()
+    logs = []
+    log_dir = root / "logs"
+    if log_dir.exists():
+        for path in sorted(log_dir.glob("*.json"))[-20:]:
+            try:
+                logs.append({"name": path.name, "content": read_json(path)})
+            except Exception as exc:
+                logs.append({"name": path.name, "error": str(exc)})
+    return {
+        "ok": True,
+        "schema": "trpg_orchestrator.campaign_export.v1",
+        "campaign_id": resolved,
+        "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "registry_meta": registry.get("campaigns", {}).get(resolved, {}),
+        "memory_files": {name: read_json(root / name) for name in MEMORY_FILE_NAMES if (root / name).exists()},
+        "asset_manifest": load_asset_manifest(resolved),
+        "recent_logs": logs,
+        "outbox": safe_outbox_snapshot(resolved),
+    }
+
+
+def safe_outbox_snapshot(campaign_id: str = "") -> dict[str, Any]:
+    rows: dict[str, Any] = {}
+    outbox_dir = resolve_outbox_dir(campaign_id)
+    for name in OUTBOX_SNAPSHOT_NAMES:
+        path = outbox_dir / name
+        if not path.exists():
+            continue
+        try:
+            rows[name] = read_json(path) if path.suffix == ".json" else path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            rows[name] = {"error": str(exc)}
+    return rows
+
+def current_writeback(campaign_id: str = "") -> dict[str, Any]:
+    outbox_dir = resolve_outbox_dir(campaign_id)
+    require_outbox_campaign(outbox_dir, campaign_id)
+    path = outbox_dir / "state_writeback.json"
     if path.exists():
         data = read_json(path)
         validate_writeback(data)
         return data
-    raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
+    raw_path = outbox_dir / "chatgpt_raw_output.md"
     if not raw_path.exists():
         raise FileNotFoundError("missing outbox/state_writeback.json or chatgpt_raw_output.md")
     parsed = parse_chatgpt_output(raw_path.read_text(encoding="utf-8", errors="replace"))
@@ -583,14 +1195,17 @@ def audit_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
     store = MemoryStore()
     resolved = store.resolve_campaign_id(campaign_id or None)
     memory = store.load_campaign_memory(resolved)
-    writeback = current_writeback()
-    pressure_pack = read_json(OUTBOX_DIR / "pressure_pack.json") if (OUTBOX_DIR / "pressure_pack.json").exists() else {}
+    outbox_dir = resolve_outbox_dir(resolved)
+    require_outbox_campaign(outbox_dir, resolved)
+    writeback = current_writeback(resolved)
+    pressure_path = outbox_dir / "pressure_pack.json"
+    pressure_pack = read_json(pressure_path) if pressure_path.exists() else {}
     audit_result = extract_json_object(DeepSeekClient().complete_json(
         read_prompt("v4_audit_prompt.md"),
         build_audit_user_prompt(resolved, memory, pressure_pack, writeback),
     ))
     validate_audit_result(audit_result)
-    write_json(OUTBOX_DIR / "v4_audit_result.json", audit_result)
+    write_json(outbox_dir / "v4_audit_result.json", audit_result)
     return writeback_review_payload(resolved)
 
 
@@ -602,11 +1217,13 @@ def writeback_review_payload(campaign_id: str = "") -> dict[str, Any]:
     audit_result: dict[str, Any] = {}
     pending_updates: dict[str, Any] = {}
     warnings: list[str] = []
+    outbox_dir = resolve_outbox_dir(resolved)
     try:
-        writeback = current_writeback()
+        require_outbox_campaign(outbox_dir, resolved)
+        writeback = current_writeback(resolved)
     except Exception as exc:
         warnings.append(str(exc))
-    audit_path = OUTBOX_DIR / "v4_audit_result.json"
+    audit_path = outbox_dir / "v4_audit_result.json"
     if audit_path.exists():
         try:
             audit_result = read_json(audit_path)
@@ -640,8 +1257,10 @@ def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
     store = MemoryStore()
     resolved = store.resolve_campaign_id(campaign_id or None)
     memory = store.load_campaign_memory(resolved)
-    writeback = current_writeback()
-    audit_path = OUTBOX_DIR / "v4_audit_result.json"
+    outbox_dir = resolve_outbox_dir(resolved)
+    require_outbox_campaign(outbox_dir, resolved)
+    writeback = current_writeback(resolved)
+    audit_path = outbox_dir / "v4_audit_result.json"
     if not audit_path.exists():
         raise RuntimeError("missing V4 audit result; run audit first")
     audit_result = read_json(audit_path)
@@ -662,11 +1281,12 @@ def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
     if touched:
         store.backup_files(resolved, touched)
         store.write_memory_updates(resolved, updates)
-    raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
-    flavor_path = OUTBOX_DIR / "ai_flavor_report.json"
-    pressure_path = OUTBOX_DIR / "pressure_pack.json"
+    raw_path = outbox_dir / "chatgpt_raw_output.md"
+    flavor_path = outbox_dir / "ai_flavor_report.json"
+    pressure_path = outbox_dir / "pressure_pack.json"
+    action_path = outbox_dir / "last_player_action.txt"
     store.write_log(resolved, {
-        "player_action": (OUTBOX_DIR / "last_player_action.txt").read_text(encoding="utf-8", errors="replace") if (OUTBOX_DIR / "last_player_action.txt").exists() else "",
+        "player_action": action_path.read_text(encoding="utf-8", errors="replace") if action_path.exists() else "",
         "v4_pressure_pack": read_json(pressure_path) if pressure_path.exists() else {},
         "chatgpt_raw_output": raw_path.read_text(encoding="utf-8", errors="replace") if raw_path.exists() else "",
         "ai_flavor_report": read_json(flavor_path) if flavor_path.exists() else {},
@@ -689,7 +1309,7 @@ def status_payload() -> dict[str, Any]:
         "chatgpt_project": current.get("chatgpt_project_name", ""),
         "chatgpt_conversation": current.get("chatgpt_conversation_name", ""),
         "job": JOB.snapshot(),
-        "output": output_payload(),
+        "output": output_payload(cid),
     }
 
 def campaign_list(registry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -705,7 +1325,7 @@ def campaign_list(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "title": profile.get("title") or meta.get("name") or campaign_id,
             "genre": profile.get("genre", ""),
             "tone": profile.get("tone", ""),
-            "chapter": recent.get("current_scene", {}).get("chapter") or recent.get("chapter", "") or recent.get("current_scene", {}).get("time", ""),
+            "chapter": profile.get("chapter", "") or recent.get("current_scene", {}).get("chapter") or recent.get("chapter", "") or recent.get("current_scene", {}).get("time", ""),
             "conversation": meta.get("chatgpt_conversation_name", ""),
             "project": meta.get("chatgpt_project_name", ""),
             "active": campaign_id == active,
@@ -774,30 +1394,49 @@ def export_payload() -> str:
     ]
     return "\n".join(lines)
 
-def output_payload() -> dict[str, Any]:
-    clean_path = OUTBOX_DIR / "chatgpt_clean_output.md"
-    raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
-    pressure_path = OUTBOX_DIR / "pressure_pack.json"
-    audit_path = OUTBOX_DIR / "v4_audit_result.json"
-    flavor_path = OUTBOX_DIR / "ai_flavor_report.json"
+def output_payload(campaign_id: str = "") -> dict[str, Any]:
+    """Return parsed output. Prefer chatgpt_raw_output.md (JSON with rich blocks)."""
+    # Force re-import to pick up code changes
+    import importlib
+    import trpg_orchestrator.output_parser as _op
+    importlib.reload(_op)
+    _parse = _op.parse_chatgpt_output
+
+    resolved = MemoryStore().resolve_campaign_id(campaign_id or None) if campaign_id else MemoryStore().resolve_campaign_id(None)
+    outbox_dir = resolve_outbox_dir(resolved)
+    found_campaign = outbox_campaign_id(outbox_dir)
+    if found_campaign and found_campaign != resolved:
+        return empty_output_payload(resolved, f"outbox campaign mismatch: expected {resolved}, got {found_campaign}")
+    raw_path = outbox_dir / "chatgpt_raw_output.md"
+    clean_path = outbox_dir / "chatgpt_clean_output.md"
+    pressure_path = outbox_dir / "pressure_pack.json"
+    audit_path = outbox_dir / "v4_audit_result.json"
+    flavor_path = outbox_dir / "ai_flavor_report.json"
     text = ""
     parsed: dict[str, Any] = {"body": "", "choices": "", "summary": "", "blocks": []}
     source = ""
-    for path in (clean_path, raw_path):
-        if path.exists():
-            text = path.read_text(encoding="utf-8", errors="replace")
-            source = path.name
-            break
-    if text:
+
+    if raw_path.exists():
         try:
-            p = parse_chatgpt_output(text) if "【状态回写_BEGIN】" in text else None
-            if p:
+            raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+            p = _parse(raw_text)
+            if p.blocks:
                 parsed = {"body": p.body, "choices": p.choices, "summary": p.summary, "blocks": p.blocks}
-            else:
-                parsed = split_public(text)
+                text = raw_text
+                source = raw_path.name
+        except Exception:
+            pass
+
+    if not parsed.get("blocks") and clean_path.exists():
+        text = clean_path.read_text(encoding="utf-8", errors="replace")
+        source = clean_path.name
+        try:
+            p = _parse(text)
+            parsed = {"body": p.body, "choices": p.choices, "summary": p.summary, "blocks": p.blocks}
         except Exception:
             parsed = split_public(text)
     return {
+        "campaign_id": resolved,
         "source": source,
         "public_text": text,
         "parsed": parsed,
@@ -807,17 +1446,59 @@ def output_payload() -> dict[str, Any]:
     }
 
 
+def empty_output_payload(campaign_id: str, warning: str = "") -> dict[str, Any]:
+    payload = {
+        "campaign_id": campaign_id,
+        "source": "",
+        "public_text": "",
+        "parsed": {"body": "", "choices": "", "summary": "", "blocks": []},
+        "pressure_pack": {},
+        "audit_result": {},
+        "ai_flavor_report": {},
+    }
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
 def split_public(text: str) -> dict[str, str]:
     body = ""
     choices = ""
     summary = ""
-    if "【正文】" in text:
-        body = text.split("【正文】", 1)[1].split("【选择点】", 1)[0].strip()
-    if "【选择点】" in text:
-        choices = text.split("【选择点】", 1)[1].split("【回合摘要】", 1)[0].strip()
-    if "【回合摘要】" in text:
-        summary = text.split("【回合摘要】", 1)[1].split("【状态回写_BEGIN】", 1)[0].strip()
+    body_marker = "\u3010\u6b63\u6587\u3011"
+    choices_marker = "\u3010\u9009\u62e9\u70b9\u3011"
+    summary_marker = "\u3010\u56de\u5408\u6458\u8981\u3011"
+    writeback_marker = "\u3010\u72b6\u6001\u56de\u5199_BEGIN\u3011"
+    if body_marker in text:
+        body = text.split(body_marker, 1)[1].split(choices_marker, 1)[0].strip()
+    if choices_marker in text:
+        choices = text.split(choices_marker, 1)[1].split(summary_marker, 1)[0].strip()
+    if summary_marker in text:
+        summary = text.split(summary_marker, 1)[1].split(writeback_marker, 1)[0].strip()
     return {"body": body, "choices": choices, "summary": summary, "blocks": []}
+
+
+def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
+    """Parse chatgpt_raw_output.md directly and return rich blocks."""
+    resolved = MemoryStore().resolve_campaign_id(campaign_id or None) if campaign_id else MemoryStore().resolve_campaign_id(None)
+    outbox_dir = resolve_outbox_dir(resolved)
+    raw_path = outbox_dir / "chatgpt_raw_output.md"
+    if not raw_path.exists():
+        return {"ok": False, "campaign_id": resolved, "error": "no raw output available"}
+    try:
+        from trpg_orchestrator.output_parser import parse_chatgpt_output
+        raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_chatgpt_output(raw_text)
+        return {
+            "ok": True,
+            "campaign_id": resolved,
+            "blocks": parsed.blocks,
+            "body": parsed.body,
+            "choices": parsed.choices,
+            "summary": parsed.summary,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 if __name__ == "__main__":

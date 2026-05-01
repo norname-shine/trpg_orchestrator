@@ -3,108 +3,244 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>新建跑团 Demo</title>
+  <title>新建跑团</title>
   <link rel="stylesheet" href="/app.css">
   <style>
-    .demoShell {
-      width: min(980px, calc(100vw - 28px));
+    .createShell {
+      width: min(1180px, calc(100vw - 28px));
       margin: 0 auto;
-      padding: 28px 0;
+      padding: 22px 0;
     }
-    .demoHero {
-      min-height: calc(100vh - 56px);
+    .createLayout {
+      min-height: calc(100vh - 44px);
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 360px;
-      gap: 18px;
-      align-items: stretch;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      gap: 16px;
     }
-    .demoMain, .demoSide {
-      padding: 22px;
+    .createMain,
+    .rulesSide {
+      min-height: 0;
+      padding: 20px;
     }
-    .demoMain h1 {
-      font-size: 30px;
-      margin-bottom: 10px;
+    .createHeader {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 18px;
     }
-    .demoMain p {
-      margin: 0 0 18px;
+    .createHeader h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.2;
+    }
+    .createHeader p {
+      margin: 6px 0 0;
       color: var(--muted);
-      line-height: 1.8;
+      line-height: 1.65;
     }
-    .demoForm {
+    .createForm {
       display: grid;
       gap: 14px;
-      margin-top: 18px;
     }
-    .demoForm label {
+    .formGrid {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 12px;
+    }
+    .createForm label {
       display: grid;
       gap: 7px;
       color: #6b563b;
       font-weight: 700;
     }
-    .demoForm input, .demoForm textarea {
-      min-height: 46px;
-      resize: vertical;
+    .createForm input,
+    .createForm select,
+    .createForm textarea {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 0 12px;
+      background: rgba(255,255,255,.78);
+      color: var(--ink);
+      font: inherit;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.78);
     }
-    .demoActions {
+    .createForm textarea {
+      min-height: 190px;
+      resize: vertical;
+      padding-top: 11px;
+      line-height: 1.65;
+    }
+    #customRules {
+      min-height: 110px;
+    }
+    .hintLine {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .createActions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-top: 4px;
+    }
+    .buttonRow {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
-      margin-top: 10px;
     }
-    .demoPreview {
+    .createActions button,
+    .ruleToggle {
+      min-height: 42px;
+      border-radius: 12px;
+      padding: 0 16px;
+      font-weight: 800;
+    }
+    .primaryCreate {
+      color: white;
+      border-color: rgba(120, 80, 32, .42);
+      background: linear-gradient(180deg, #b98237, #8b5b22);
+      box-shadow: 0 10px 20px rgba(129, 86, 36, .2);
+    }
+    .notice {
+      min-height: 24px;
+      color: #7c5526;
+      font-weight: 700;
+      line-height: 1.55;
+    }
+    .rulesSide {
       display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
       gap: 12px;
-      margin-top: 16px;
     }
-    .demoPreview .storyThumb {
-      height: 130px;
+    .rulesSideHeader h2,
+    .rulesSideHeader p {
+      margin: 0;
     }
-    @media (max-width: 860px) {
-      .demoHero { grid-template-columns: 1fr; }
+    .rulesSideHeader p {
+      margin-top: 5px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 13px;
+    }
+    .defaultRules {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      align-content: start;
+      gap: 9px;
+    }
+    .ruleCard {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.62);
+      overflow: hidden;
+    }
+    .ruleToggle {
+      width: 100%;
+      justify-content: space-between;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      background: rgba(255,255,255,.52);
+    }
+    .ruleCard pre {
+      max-height: 220px;
+      overflow: auto;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .ruleFiles {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 0 12px 10px;
+      overflow-wrap: anywhere;
+    }
+    @media (max-width: 920px) {
+      .createLayout { grid-template-columns: 1fr; }
+      .formGrid { grid-template-columns: 1fr; }
+      .createHeader { display: grid; }
     }
   </style>
 </head>
 <body>
   <canvas id="rainCanvas" aria-hidden="true"></canvas>
-  <main class="demoShell">
-    <section class="demoHero">
-      <div class="panel demoMain">
-        <h1>新建跑团 Demo</h1>
-        <p>这里先作为新建跑团流程的占位页。后续会接入真实的 campaign 初始化、模板选择、ChatGPT 对话绑定和首轮记忆生成。</p>
-        <div class="demoForm">
+  <main class="createShell">
+    <section class="createLayout">
+      <div class="panel createMain">
+        <div class="createHeader">
+          <div>
+            <h1>新建跑团</h1>
+            <p>只填写玩家能理解的内容。技术字段、题材和基调由后台生成并写入记忆。</p>
+          </div>
+          <button type="button" onclick="window.location.href='/'">返回控制台</button>
+        </div>
+        <form class="createForm" id="createForm">
+          <div class="formGrid">
+            <label>
+              初始化模板
+              <select id="campaignTemplate">
+                <option value="custom">自定义</option>
+                <option value="fate">FATE 亚种圣杯战争</option>
+                <option value="dnd">DND</option>
+                <option value="coc">COC</option>
+              </select>
+            </label>
+            <label>
+              API 调用模式
+              <select id="aiMode">
+                <option value="v4_director_chatgpt_api_actor">Deepseek V4 导演 + ChatGPT API 演员生成</option>
+                <option value="v4_api_chatgpt_conversation">Deepseek V4 API + ChatGPT 对话联动</option>
+                <option value="deepseek_v4_only">全程仅使用 Deepseek V4 API</option>
+                <option value="chatgpt_only">全程仅使用 ChatGPT AI</option>
+              </select>
+            </label>
+          </div>
           <label>
             跑团名称
-            <input id="demoTitle" value="怪物猎人风新大陆远征" aria-label="跑团名称">
+            <input id="campaignNameInput" value="怪物猎人风新大陆远征" autocomplete="off">
           </label>
           <label>
-            题材方向
-            <input id="demoGenre" value="生态调查 / 巨兽狩猎 / 公会委托" aria-label="题材方向">
+            统一 Prompt / 故事钩子
+            <textarea id="userPrompt">新人猎人抵达边境据点，第一份委托来自一支迟迟未归的商队。希望强调真实生态、准备、观察和狩猎风险。</textarea>
           </label>
+          <p class="hintLine">后台会从这里归纳题材类型与故事基调；双模型模式会自动拆分导演端和演员端 Prompt。</p>
           <label>
-            初始钩子
-            <textarea id="demoHook" aria-label="初始钩子">新人猎人抵达边境据点，第一份委托来自一支迟迟未归的商队。</textarea>
+            自定义新增规则
+            <textarea id="customRules" placeholder="例如：不要让 NPC 直接说出秘密；战斗前必须给玩家撤退和准备机会。"></textarea>
           </label>
-        </div>
-        <div class="demoActions">
-          <button class="sendAction" type="button" onclick="history.back()">返回控制台</button>
-          <button type="button" onclick="alert('下一步会接入真实 init-campaign 接口。')">生成 Demo 记忆</button>
-        </div>
+          <p class="hintLine">自定义规则会由后台归类为导演端或演员端上下文，无需手动指定。</p>
+          <div class="createActions">
+            <div class="notice" id="notice"></div>
+            <div class="buttonRow">
+              <button type="button" onclick="window.location.href='/'">取消</button>
+              <button class="primaryCreate" id="createCampaignBtn" type="submit">创建并进入</button>
+            </div>
+          </div>
+        </form>
       </div>
-      <aside class="panel demoSide">
-        <div class="panelTitle"><h2>预览卡片</h2><span>Demo</span></div>
-        <div class="demoPreview">
-          <span class="storyThumb desert"></span>
-          <article class="choiceCard">
-            <div class="choiceTitle">跑团会出现在选择栏</div>
-            <div class="choices">名称、题材、当前章节和固定对话会成为下拉面板中的联动卡片。</div>
-          </article>
+      <aside class="panel rulesSide">
+        <div class="rulesSideHeader">
+          <h2>内置默认规则</h2>
+          <p>后台会自动聚合生图、对话、行文、NPC 设定规则，并随跑团配置一起进入模型上下文。</p>
         </div>
+        <div class="defaultRules" id="defaultRules"></div>
       </aside>
     </section>
   </main>
   <script>
-    const canvas = document.getElementById("rainCanvas");
+    const $ = (id) => document.getElementById(id);
+    const canvas = $("rainCanvas");
     const ctx = canvas.getContext("2d");
+
     function resize() {
       const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.floor(window.innerWidth * dpr);
@@ -113,6 +249,7 @@
       canvas.style.height = `${window.innerHeight}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+
     function frame() {
       ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       ctx.strokeStyle = "rgba(120, 92, 55, .06)";
@@ -123,9 +260,87 @@
       }
       requestAnimationFrame(frame);
     }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { "content-type": "application/json" },
+        ...options,
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    function notice(text) {
+      $("notice").textContent = text || "";
+    }
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    }
+
+    async function loadDefaults() {
+      try {
+        const data = await api("/api/new-campaign-defaults");
+        const rows = data.defaults?.categories || [];
+        $("defaultRules").innerHTML = rows.map((row, index) => `
+          <article class="ruleCard">
+            <button class="ruleToggle" type="button" data-rule-index="${index}">
+              <span>${escapeHtml(row.title)}</span><b>+</b>
+            </button>
+            <span class="ruleFiles">${escapeHtml((row.files || []).join(" / "))}</span>
+            <pre class="hidden">${escapeHtml(row.content || "暂无内容")}</pre>
+          </article>
+        `).join("");
+        document.querySelectorAll("[data-rule-index]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const pre = button.closest(".ruleCard").querySelector("pre");
+            const collapsed = pre.classList.toggle("hidden");
+            button.querySelector("b").textContent = collapsed ? "+" : "−";
+          });
+        });
+      } catch (err) {
+        $("defaultRules").innerHTML = `<p class="hintLine">${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    async function createCampaign(event) {
+      event.preventDefault();
+      const name = $("campaignNameInput").value.trim();
+      const userPrompt = $("userPrompt").value.trim();
+      if (!name || !userPrompt) {
+        notice("请填写跑团名称和统一 Prompt。");
+        return;
+      }
+      const button = $("createCampaignBtn");
+      button.disabled = true;
+      notice("后台正在生成 ID、归纳题材基调并写入规则...");
+      try {
+        const data = await api("/api/create-campaign-smart", {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            template: $("campaignTemplate").value,
+            ai_mode: $("aiMode").value,
+            user_prompt: userPrompt,
+            custom_rules: $("customRules").value.trim(),
+          }),
+        });
+        const genre = data.analysis?.genre || "已归纳";
+        const tone = data.analysis?.tone || "已归纳";
+        notice(`创建完成：${genre} / ${tone}，正在进入控制台。`);
+        window.location.href = "/";
+      } catch (err) {
+        notice(err.message);
+        button.disabled = false;
+      }
+    }
+
     window.addEventListener("resize", resize);
+    $("createForm").addEventListener("submit", createCampaign);
     resize();
     frame();
+    loadDefaults();
   </script>
 </body>
 </html>

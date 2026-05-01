@@ -83,6 +83,7 @@ def build_chatgpt_input(
             read_prompt("visual_asset_protocol.md"),
             read_prompt("chatgpt_npc_voice_rules.md"),
             read_prompt("chatgpt_monster_rules.md"),
+            read_prompt("character_card_json_rules.md"),
         ]
     )
     visible_memory = _pick(memory, CHATGPT_VISIBLE_FILES)

@@ -25,7 +25,7 @@
       <div class="navActions">
         <div class="statusChip" id="jobPill"><span></span><b id="jobText">待机</b></div>
         <button data-command="validate-memory" type="button">校验记忆</button>
-        <button data-command="memory-report" type="button">记忆报告</button>
+        <button id="memoryReportBtn" type="button">记忆报告</button>
         <button id="rulesBtn" type="button">规则</button>
         <button id="refreshBtn" type="button">刷新</button>
         <button class="exportBtn" id="exportBtn" type="button">导出</button>
@@ -41,7 +41,7 @@
           </div>
           <div class="characterHead">
             <div class="avatar">
-              <canvas id="avatarCanvas" width="96" height="96" aria-label="点阵角色头像"></canvas>
+              <img id="avatarImage" alt="角色头像 PNG">
             </div>
             <div>
               <h3 id="characterName">未命名角色</h3>
@@ -67,10 +67,10 @@
             <div><b>退</b><span>保命</span></div>
           </div>
           <div class="companionCard">
-            <canvas id="palicoCanvas" width="64" height="64" aria-label="艾露猫点阵头像"></canvas>
+            <img id="palicoImage" alt="伙伴头像 PNG">
             <div>
-              <b id="palicoName">浩文</b>
-              <span id="palicoMeta">老练但嘴硬</span>
+              <b id="palicoName">伙伴</b>
+              <span id="palicoMeta">同行伙伴</span>
             </div>
           </div>
         </section>
@@ -118,21 +118,15 @@
           <div class="logHeader">
             <h2>跑团记录</h2>
             <button class="tinyBtn active" data-panel-tab="story" type="button">正文</button>
-            <button class="tinyBtn" data-panel-tab="choices" type="button">选择</button>
             <button class="tinyBtn" data-panel-tab="director" type="button">导演</button>
             <button class="tinyBtn" data-panel-tab="writeback" type="button">写回</button>
+            <button class="tinyBtn" data-panel-tab="memory" type="button">记忆</button>
             <button class="tinyBtn" data-panel-tab="logs" type="button">日志</button>
             <button class="tinyBtn" data-panel-tab="summary" type="button">摘要</button>
-            <button class="autoScroll active" id="autoScrollBtn" type="button"><span>自动滚动</span><i></i></button>
+            <button class="autoScroll" id="autoScrollBtn" type="button"><span>自动滚动</span><i></i></button>
           </div>
           <div class="messageFeed" id="storyTab">
             <div id="storyText" class="prose"></div>
-          </div>
-          <div class="messageFeed hidden" id="choicesTab">
-            <div class="choiceCard">
-              <div class="choiceTitle">关键选择</div>
-              <div id="choicesText" class="choices"></div>
-            </div>
           </div>
           <div class="messageFeed hidden" id="directorTab">
             <pre id="directorText"></pre>
@@ -156,6 +150,26 @@
           </div>
           <div class="messageFeed hidden" id="logsTab">
             <pre id="logText"></pre>
+          </div>
+          <div class="messageFeed hidden" id="memoryTab">
+            <div class="memoryReport">
+              <div class="reportSection">
+                <h3>记忆文件条目数</h3>
+                <div id="memoryStats" class="reportGrid"></div>
+              </div>
+              <div class="reportSection">
+                <h3>最近写入摘要</h3>
+                <div id="memoryRecent" class="reportList"></div>
+              </div>
+              <div class="reportSection">
+                <h3>未确认内容</h3>
+                <div id="memoryUnconfirmed" class="reportList"></div>
+              </div>
+              <div class="reportSection">
+                <h3>可压缩建议</h3>
+                <div id="memoryCompact" class="reportList"></div>
+              </div>
+            </div>
           </div>
           <div class="messageFeed hidden" id="summaryTab">
             <div id="summaryText" class="prose"></div>
@@ -213,22 +227,8 @@
       </div>
       <div class="pickerCampaignRail" id="campaignList"></div>
       <div class="storyGridPicker" id="storyList"></div>
-      <div class="setupGrid embeddedSetup">
-        <section>
-          <h3>新建跑团</h3>
-          <label>campaign_id<input id="newCampaignId" type="text" placeholder="example_campaign"></label>
-          <label>跑团名称<input id="newCampaignName" type="text" placeholder="怪猎长夜团"></label>
-          <button id="createCampaignBtn" type="button">创建并注册</button>
-        </section>
-        <section>
-          <h3>绑定固定对话</h3>
-          <label>ChatGPT Project<input id="bindingProject" type="text" placeholder="TRPG 自动主持"></label>
-          <label>固定对话名称<input id="bindingConversation" type="text" placeholder="怪猎长夜团固定对话"></label>
-          <button id="saveBindingBtn" type="button">保存绑定</button>
-        </section>
-      </div>
-      <button class="pickerFooter" id="viewAllCampaignsBtn" type="button">
-        <span>查看全部跑团</span>
+      <button class="pickerFooter newCampaignLink" id="newCampaignPageBtn" type="button">
+        <span>新建跑团</span>
         <b>›</b>
       </button>
     </div>
@@ -245,12 +245,35 @@
       <div class="galleryDialogBody">
         <div class="galleryDialogList" id="galleryDialogList"></div>
         <aside class="galleryInspector" id="galleryInspector">
-          <canvas id="galleryInspectorCanvas" width="192" height="192"></canvas>
+          <img id="galleryInspectorImage" alt="资料图像 PNG">
           <b id="galleryInspectorTitle">选择一项资料</b>
           <p id="galleryInspectorDetail">点击左侧资料查看完整说明。</p>
           <span id="galleryInspectorMeta">资料</span>
           <button id="useGalleryAssetBtn" type="button">引用到行动输入</button>
         </aside>
+      </div>
+    </div>
+  </div>
+  <div class="rulesOverlay hidden" id="rulesOverlay" aria-hidden="true">
+    <div class="rulesDialog" role="dialog" aria-modal="true" aria-labelledby="rulesDialogTitle">
+      <div class="rulesHeader">
+        <div>
+          <h2 id="rulesDialogTitle">规则浏览</h2>
+          <p>查看 prompts 目录中的规则文件，并按关键词搜索。</p>
+        </div>
+        <button id="closeRulesOverlay" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="rulesToolbar">
+        <input id="rulesSearch" type="search" placeholder="搜索规则关键词">
+        <button id="rulesSearchBtn" type="button">搜索</button>
+        <button id="rulesClearBtn" type="button">清空</button>
+      </div>
+      <div class="rulesBody">
+        <div class="rulesList" id="rulesList"></div>
+        <article class="rulesViewer">
+          <h3 id="rulesViewerTitle">选择规则文件</h3>
+          <pre id="rulesContent"></pre>
+        </article>
       </div>
     </div>
   </div>

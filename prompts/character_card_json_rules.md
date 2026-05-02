@@ -63,7 +63,7 @@ Strict example:
 ```json
 {
   "key": "health",
-  "label": "生命值",
+  "label": "Health",
   "current": 28,
   "max": 34,
   "tone": "red"
@@ -75,8 +75,8 @@ Narrative example:
 ```json
 {
   "key": "stamina",
-  "label": "体力",
-  "state": "有消耗但可继续行动",
+  "label": "Stamina",
+  "state": "Spent but still able to act",
   "percent": 72,
   "tone": "green"
 }
@@ -89,8 +89,8 @@ Strict example:
 ```json
 {
   "key": "str",
-  "label": "力量",
-  "short": "力",
+  "label": "Strength",
+  "short": "STR",
   "value": 11,
   "modifier": "+0"
 }
@@ -101,11 +101,18 @@ Narrative example:
 ```json
 {
   "key": "survival",
-  "label": "保命判断",
-  "short": "退",
-  "text": "谨慎撤退、准备优先"
+  "label": "Survival Judgment",
+  "short": "RET",
+  "text": "Cautious retreat and preparation first"
 }
 ```
+
+## Companion
+
+- Companion types are not fixed.
+- Monster Hunter campaigns may use `palico`, Fate campaigns may use `servant`, determined by campaign type. COC or DND campaigns that do not need companion identity should not generate companions.
+- Companion cards must be independent from NPC archives, because companions will update abilities, injuries, trust, contracts, or hidden identities as the story progresses.
+- Companion portraits use `companion` or `companion_portrait` assets and must not be mixed with NPC portraits.
 
 ## Visual Asset Rules
 

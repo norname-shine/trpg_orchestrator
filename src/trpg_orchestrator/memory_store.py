@@ -63,6 +63,15 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "voice_rules": {},
             "relationship_rules": {},
         },
+        "companion_profiles.json": {
+            "campaign_id": campaign_id,
+            "purpose": "Dynamic companion, side-player, servant, palico, familiar, or equivalent long-term profile store.",
+            "profiles": {},
+            "update_rules": [
+                "Companion records are campaign-scoped and may evolve as trust, injuries, revealed abilities, or hidden identity changes.",
+                "Do not hard-code companion type; use archetype/kind from campaign profile or frontend_state.",
+            ],
+        },
         "monster_profiles.json": {
             "campaign_id": campaign_id,
             "purpose": "Long-term enemy, monster, mystery, and ecology prompt for V4 director context.",
@@ -91,9 +100,34 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
         "npc_memory.json": base_memory(campaign_id, "npcs"),
         "world_state.json": base_memory(campaign_id, "world"),
         "location_history.json": base_memory(campaign_id, "locations"),
+        "map_history.json": {
+            "campaign_id": campaign_id,
+            "scope": "maps",
+            "last_updated_turn": 0,
+            "current_map_id": "",
+            "maps": {},
+            "route_history": [],
+            "notes": [],
+        },
         "quest_history.json": base_memory(campaign_id, "quests"),
+        "clue_history.json": {
+            "campaign_id": campaign_id,
+            "scope": "clues",
+            "last_updated_turn": 0,
+            "clues": {},
+            "open_questions": [],
+            "notes": [],
+        },
         "enemy_or_monster_ecology.json": base_memory(campaign_id, "enemy_or_mystery"),
         "equipment_history.json": base_memory(campaign_id, "equipment"),
+        "entity_index.json": {
+            "campaign_id": campaign_id,
+            "scope": "entity_index",
+            "last_updated_turn": 0,
+            "entities": {},
+            "protected_actor_keys": [],
+            "asset_key_index": {},
+        },
         "main_threads.json": {
             "campaign_id": campaign_id,
             "last_updated_turn": 0,
@@ -101,6 +135,14 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "side_threads": [],
             "closed_threads": [],
             "uncertain_or_unconfirmed": [],
+        },
+        "run_records.json": {
+            "campaign_id": campaign_id,
+            "scope": "run_records",
+            "last_updated_turn": 0,
+            "records": [],
+            "source_files": [],
+            "notes": [],
         },
         "recent_context.json": {
             "campaign_id": campaign_id,
@@ -180,6 +222,11 @@ class MemoryStore:
 
     def load_campaign_memory(self, campaign_id: str) -> dict[str, Any]:
         paths = CampaignPaths.from_id(campaign_id)
+        defaults = default_memory(campaign_id, campaign_id)
+        for name in MEMORY_FILE_NAMES:
+            path = paths.root / name
+            if not path.exists() and name in defaults:
+                write_json(path, defaults[name])
         missing = [name for name in MEMORY_FILE_NAMES if not (paths.root / name).exists()]
         if missing:
             raise FileNotFoundError(f"跑团记忆文件缺失: {', '.join(missing)}")

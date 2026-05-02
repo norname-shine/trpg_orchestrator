@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>写回审核</title>
+  <style>
+    body { margin: 0; background: #f4ead8; color: #35291d; font: 14px/1.6 "Microsoft YaHei", sans-serif; }
+    main { max-width: 1040px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    a, button { color: #6e4d1f; }
+    button { min-height: 36px; border: 1px solid #c9ab78; border-radius: 8px; background: #fff7e8; cursor: pointer; padding: 0 12px; }
+    button.primary { background: #6f9ed0; color: white; border-color: #4f7eb0; }
+    section { border: 1px solid #d9c6a4; border-radius: 10px; background: rgba(255,255,255,.72); padding: 14px; margin-bottom: 14px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 56vh; overflow: auto; background: #fffaf0; border-radius: 8px; padding: 12px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .files span { display: inline-block; margin: 0 6px 6px 0; padding: 4px 8px; border-radius: 999px; background: #efe0bf; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>写回审核</h1>
+        <div id="campaign">读取中</div>
+      </div>
+      <div class="actions">
+        <button id="refresh" type="button">刷新预览</button>
+        <button id="audit" type="button">V4 审核</button>
+        <button id="apply" class="primary" type="button">写入记忆</button>
+        <a href="/">返回前台</a>
+      </div>
+    </header>
+    <section>
+      <h2 id="decision">未审核</h2>
+      <p id="hint"></p>
+      <div class="files" id="files"></div>
+    </section>
+    <section>
+      <h2>写回详情</h2>
+      <pre id="payload"></pre>
+    </section>
+  </main>
+  <script>
+    let activeCampaign = "";
+    async function api(path, options = {}) {
+      const res = await fetch(path, { headers: { "content-type": "application/json" }, ...options });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.status);
+      return data;
+    }
+    function render(data) {
+      activeCampaign = data.campaign_id || activeCampaign;
+      document.getElementById("campaign").textContent = activeCampaign;
+      const labels = { accept: "V4 接受", revise: "V4 修订", reject: "V4 拒绝", not_audited: "未审核" };
+      document.getElementById("decision").textContent = labels[data.decision] || data.decision || "未审核";
+      document.getElementById("hint").textContent = data.audit_result?.reason || (data.warnings || []).join("；") || "等待审核。";
+      const files = document.getElementById("files");
+      files.innerHTML = "";
+      (data.memory_files_to_update || []).forEach((name) => {
+        const span = document.createElement("span");
+        span.textContent = name;
+        files.appendChild(span);
+      });
+      document.getElementById("payload").textContent = JSON.stringify(data, null, 2);
+    }
+    async function load() {
+      const status = await api("/api/frontend-state");
+      activeCampaign = status.active_campaign;
+      render(await api(`/api/writeback-review?campaign_id=${encodeURIComponent(activeCampaign)}`));
+    }
+    document.getElementById("refresh").addEventListener("click", load);
+    document.getElementById("audit").addEventListener("click", async () => render(await api("/api/audit-writeback", { method: "POST", body: JSON.stringify({ campaign_id: activeCampaign }) })));
+    document.getElementById("apply").addEventListener("click", async () => render((await api("/api/apply-writeback", { method: "POST", body: JSON.stringify({ campaign_id: activeCampaign }) })).status || {}));
+    load().catch((err) => document.getElementById("payload").textContent = err.message);
+  </script>
+</body>
+</html>

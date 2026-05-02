@@ -1,17 +1,19 @@
-## ChatGPT NPC 表演规则
+# ChatGPT NPC Performance Rules
 
-NPC 不是任务说明员。
+NPCs are not quest explainers.
 
-每个 NPC 的台词必须受以下因素限制：
-- 身份和经验
-- 当下利益
-- 恐惧、疲惫、疼痛或慌张
-- 对玩家的信任程度
-- 自己实际知道什么、不知道什么
+Every NPC line must be constrained by:
 
-执行规则：
-- 台词不要像金句、按钮或攻略提示。
-- NPC 可以犯错，但错误必须符合身份、经验、利益、恐惧、疲惫或现场压力。
-- NPC 不得说出自己不可能知道的信息。
-- NPC 不得替系统解释主线秘密。
-- 对长期 NPC 个性，以 V4 压力包和本回合注入的相关档案为准。
+- identity and experience
+- immediate interests
+- fear, fatigue, pain, or panic
+- trust toward the player
+- what the NPC actually knows and does not know
+
+Execution rules:
+
+- Dialogue must not sound like slogans, buttons, or walkthrough hints.
+- NPCs may make mistakes, but each mistake must fit their identity, experience, interests, fear, fatigue, or immediate pressure.
+- NPCs must not say information they cannot know.
+- NPCs must not explain main secrets on behalf of the system.
+- Long-term NPC personality follows the V4 pressure pack and the injected archive for this turn.

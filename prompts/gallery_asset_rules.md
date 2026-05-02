@@ -10,8 +10,8 @@ These rules define how the local web console treats the right-side gallery. They
 
 ## Citation Input
 
-- NPC citation format: `@NPC名称：`
-- Item citation format: `查看物品「物品名称」：`
+- NPC citation format: `@NPC_NAME:`
+- Item citation format: `Inspect item "ITEM_NAME":`
 - Do not insert scene, monster, ecology, or map citations into the action input by default.
 - A citation only prepares player input; it does not decide the player's action.
 
@@ -20,6 +20,8 @@ These rules define how the local web console treats the right-side gallery. They
 - Gallery cards should show title, short detail, and a type label.
 - Do not show raw JSON.
 - Details should be concise and should prefer confirmed memory facts.
+- The same physical item must appear as one card even if its state changes. Merge state changes into the card detail instead of creating new cards for adjectives, damage, glow, temperature, signal, or contamination states.
+- Use stable item identity before state text. Examples: `heated_well_box` and `glowing_well_box` are still `well_box`; `phone completely has no signal` is still `phone`.
 - Empty states must explain that the current filter has no visible assets.
 - Filtering must work without rebuilding assets.
 

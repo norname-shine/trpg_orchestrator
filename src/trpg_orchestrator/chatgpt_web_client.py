@@ -9,6 +9,7 @@ from typing import Any
 
 from .config import SCRIPTS_DIR
 from .env_loader import load_project_env
+from .encoding_utils import read_runtime_text
 from .output_parser import missing_markers
 
 
@@ -90,6 +91,8 @@ class ChatGPTWebClient:
         ]
         if capture_only:
             command.extend(["--capture-only", "true"])
+        if os.getenv("TRPG_CHATGPT_CREATE_IF_MISSING", "0") == "1":
+            command.extend(["--create-if-missing", "true"])
         completed = subprocess.run(
             command,
             cwd=str(SCRIPTS_DIR.parent),
@@ -103,7 +106,7 @@ class ChatGPTWebClient:
             raise RuntimeError(f"ChatGPT Playwright automation stopped: {detail}")
         if not output_path.exists():
             raise RuntimeError("ChatGPT automation finished but did not create chatgpt_raw_output.md.")
-        captured = output_path.read_text(encoding="utf-8")
+        captured = read_runtime_text(output_path)
         missing = missing_markers(captured)
         if missing:
             raise RuntimeError(f"Captured ChatGPT reply missing markers: {', '.join(missing)}")

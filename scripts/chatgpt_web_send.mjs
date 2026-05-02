@@ -7,8 +7,9 @@ const outputPath = requiredArg(args, "output");
 const projectName = requiredArg(args, "project");
 const conversationName = requiredArg(args, "conversation");
 const captureOnly = args["capture-only"] === "true";
+const createIfMissing = args["create-if-missing"] === "true" || process.env.TRPG_CHATGPT_CREATE_IF_MISSING === "1";
 const userDataDir = process.env.TRPG_BROWSER_USER_DATA_DIR;
-const browserChannel = process.env.TRPG_BROWSER_CHANNEL || "chrome";
+const browserChannel = process.env.TRPG_BROWSER_CHANNEL || "";
 const cdpUrl = process.env.TRPG_BROWSER_CDP_URL || "http://127.0.0.1:9222";
 const M = {
   body: "\u3010\u6b63\u6587\u3011",
@@ -27,7 +28,7 @@ try {
   const page = await chatgptPage(browser);
   await safetyCheck(page);
   await openProject(page, projectName);
-  await openConversation(page, conversationName);
+  await openConversation(page, conversationName, createIfMissing);
   await safetyCheck(page);
   if (captureOnly) {
     const latest = await latestAssistantText(page);
@@ -66,11 +67,12 @@ async function openBrowser() {
   try {
     return await chromium.connectOverCDP(cdpUrl);
   } catch {
-    const context = await chromium.launchPersistentContext(userDataDir, {
-      channel: browserChannel,
+    const launchOptions = {
       headless: false,
       viewport: { width: 1440, height: 1000 },
-    });
+    };
+    if (browserChannel) launchOptions.channel = browserChannel;
+    const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
     shouldCloseBrowser = true;
     return { contexts: () => [context], close: () => context.close() };
   }
@@ -95,13 +97,35 @@ async function openProject(page, name) {
   fail(`Project not found: ${name}`);
 }
 
-async function openConversation(page, name) {
+async function openConversation(page, name, allowCreate = false) {
   if (await page.getByText(name, { exact: true }).first().isVisible({ timeout: 3000 }).catch(() => false)) {
     await page.getByText(name, { exact: true }).first().click({ force: true });
     await page.waitForTimeout(1200);
     return;
   }
+  if (allowCreate) {
+    await openNewChatInCurrentProject(page);
+    return;
+  }
   fail(`Fixed conversation not found: ${name}`);
+}
+
+async function openNewChatInCurrentProject(page) {
+  const candidates = [
+    page.getByText("新聊天", { exact: true }),
+    page.getByText("New chat", { exact: true }),
+    page.locator('a[href="/"]').filter({ hasText: /新聊天|New chat/i }),
+    page.locator('button').filter({ hasText: /新聊天|New chat/i }),
+  ];
+  for (const candidate of candidates) {
+    const first = candidate.first();
+    if (await first.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await first.click({ force: true });
+      await page.waitForTimeout(1200);
+      return;
+    }
+  }
+  fail("Fixed conversation not found and new chat button not found in current project.");
 }
 
 async function safetyCheck(page) {

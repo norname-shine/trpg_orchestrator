@@ -15,5 +15,6 @@
     "project_name": "",
     "conversation_name": ""
   },
-  "hard_limits": []
+  "hard_limits": [],
+  "asset_seed": "6cf075baa1da22a4"
 }

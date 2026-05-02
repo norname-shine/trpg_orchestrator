@@ -1,26 +1,27 @@
-机械检查项：
+# AI Flavor Check Rules
 
-- 流水账流程。
-- NPC 功能台词。
-- 台词过短、过硬、像金句。
-- 旁白解释太多。
-- 出现“这说明/这代表/这意味着”。
-- 频繁出现“不是 A，而是 B”。
-- 选择像游戏按钮。
-- 主角像摄像机。
-- 怪物/敌人/危险登场太规整。
-- 文风太顺、太模板。
-- 细节全部服务伏笔。
-- 剧情跳太快。
-- NPC 性格突变。
-- 新增无来源设定。
-- 违反 forbidden_changes。
-- 状态回写把推测写成事实。
+Mechanical check items:
 
-处理：
+- Step-by-step plot summary instead of lived scene.
+- Functional NPC lines that only explain the task.
+- Dialogue that is too short, too hard, or reads like quotable one-liners.
+- Too much narrator explanation.
+- Phrases equivalent to "this shows", "this represents", or "this means".
+- Frequent contrast formula such as "not A, but B".
+- Choices that read like game buttons.
+- The protagonist acting like a camera instead of a person under pressure.
+- Monsters, enemies, or danger entering in an overly orderly way.
+- Prose that is too smooth, templated, or frictionless.
+- Every detail serving as obvious foreshadowing.
+- Plot jumps too fast.
+- NPC personality changes without cause.
+- New settings with no source.
+- Violation of `forbidden_changes`.
+- State writeback records speculation as fact.
 
-- 轻微问题：要求 ChatGPT 局部重写。
-- 严重问题：交给 DeepSeek V4 生成纠偏指令，再让 ChatGPT 重写。
-- 最多重写 2 次。
-- 超过 2 次仍不合格，停止。
+Handling:
 
+- Minor issue: ask ChatGPT to rewrite the affected part.
+- Severe issue: ask DeepSeek V4 to generate a correction directive, then have ChatGPT rewrite.
+- Rewrite at most 2 times.
+- Stop if the output still fails after 2 rewrites.

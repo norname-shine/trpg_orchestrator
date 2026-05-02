@@ -24,16 +24,19 @@
   currentPressurePack: {},
   ruleFiles: [],
   selectedRule: "",
+  frontendState: {},
+  assetSeed: "",
 };
 
 const $ = (id) => document.getElementById(id);
-const ASSET_GENERATOR_VERSION = 9;
+const ASSET_GENERATOR_VERSION = 14;
 
 function init() {
   drawBackground();
   drawPixelAvatar("TRPG", { cache: false });
   drawPixelMap("TRPG", { cache: false, force: true });
   bindControls();
+  hidePlayerHiddenAdminPanels();
   applyCollapseState();
   loadCanvasRules();
   refresh();
@@ -42,13 +45,21 @@ function init() {
 
 function bindControls() {
   $("runTurnBtn").addEventListener("click", runTurn);
-  $("prepareBtn").addEventListener("click", prepareOnly);
   $("refreshBtn").addEventListener("click", refresh);
   $("exportBtn").addEventListener("click", exportCampaign);
   $("memoryReportBtn").addEventListener("click", loadMemoryReport);
-  $("clearInputBtn").addEventListener("click", () => {
-    $("actionInput").value = "";
-    $("actionInput").focus();
+  document.querySelectorAll("[data-quick]").forEach((button) => {
+    button.addEventListener("click", () => applyQuickAction(button.dataset.quick));
+  });
+  document.getElementById("companionAvatarWrap")?.addEventListener("click", () => {
+    insertCompanionMention();
+  });
+  document.getElementById("viewCompanionDataBtn")?.addEventListener("click", () => {
+    openCompanionOverlay();
+  });
+  $("closeCompanionOverlay")?.addEventListener("click", closeCompanionOverlay);
+  $("companionOverlay")?.addEventListener("click", (event) => {
+    if (event.target.id === "companionOverlay") closeCompanionOverlay();
   });
   $("viewAllBtn").addEventListener("click", openGalleryOverlay);
   $("closeGalleryOverlay").addEventListener("click", closeGalleryOverlay);
@@ -92,6 +103,7 @@ function bindControls() {
     if (event.key === "Escape") closeStoryPicker();
     if (event.key === "Escape") closeGalleryOverlay();
     if (event.key === "Escape") closeRulesOverlay();
+    if (event.key === "Escape") closeCompanionOverlay();
   });
 
   document.querySelectorAll("[data-command]").forEach((button) => {
@@ -201,13 +213,14 @@ async function startJob(path, payload) {
 
 async function refresh() {
   try {
-    const data = await api("/api/status");
+    const data = await api("/api/frontend-state");
+    state.frontendState = data.frontend_state || {};
+    state.assetSeed = state.frontendState.asset_seed || state.frontendState.campaign?.asset_seed || state.activeCampaign || "";
     state.currentPressurePack = data.output?.pressure_pack || {};
+    state.cachedAssets = Array.isArray(data.assets) ? data.assets : [];
     renderStatus(data);
-    await loadCachedAssets();
-    renderCampaignState(data.campaign_state || {});
+    renderFrontendState(state.frontendState, data.campaign_state || {});
     renderOutput(data.output || {});
-    await loadWritebackReview({ silent: true });
   } catch (err) {
     setBusy(false, true);
     showPanel("logs");
@@ -234,9 +247,10 @@ function renderStatus(data) {
   drawPixelAvatar(characterName || state.activeCampaign || "TRPG", {
     cache: true,
     objectId: slugify(characterName || "player"),
-    variant: "hunter",
+    seedText: scopedSeed(characterName || "player"),
+    variant: "player_full_body",
   });
-  renderCachedMap(scene);
+  renderCachedMap(scene, state.frontendState?.map_panel || {});
 
   const job = data.job || {};
   const failed = job.returncode !== null && job.returncode !== 0;
@@ -275,9 +289,9 @@ async function loadCachedAssets() {
   }
 }
 
-function renderCachedMap(scene) {
+function renderCachedMap(scene, mapPanel = {}) {
   const seed = scene.location || state.activeCampaign || "map";
-  const route = state.currentPressurePack?.map_route || {};
+  const route = state.currentPressurePack?.map_route || mapPanel.latest_map?.map_route || {};
   const routeKey = route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
   const objectId = slugify(`${scene.location || "current_map"}:${routeKey || "base"}`);
   const mapKey = `${state.activeCampaign}:${objectId}:v${ASSET_GENERATOR_VERSION}`;
@@ -351,6 +365,111 @@ function buildCharacterCard(campaignState, fallbackTitle, scene) {
     attributes: normalizeAttributes(provided.attributes, mode, fallback),
     companion: normalizeCompanion(companionSource),
   };
+}
+
+function hidePlayerHiddenAdminPanels() {
+  document.querySelectorAll('[data-panel-tab="director"], [data-panel-tab="writeback"]').forEach((button) => {
+    button.hidden = true;
+    button.classList.add("hidden");
+  });
+}
+
+function renderFrontendState(frontendState, campaignState) {
+  const fs = frontendState || {};
+  state.lastCampaignState = campaignState;
+  renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
+  renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
+  renderSidePanel(campaignState, fs);
+  renderMemoryPanel(campaignState);
+  renderGalleryFilters(fs.gallery?.filters || []);
+  renderGallery(campaignState, fs.gallery || {});
+  renderQuickActions(fs.quick_actions || []);
+}
+
+function protocolCharacterCard(card = {}, campaignState = {}) {
+  if (!card || !card.name) {
+    const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
+    const scene = campaignState.recent?.current_scene || {};
+    return buildCharacterCard(campaignState, title, scene);
+  }
+  return {
+    mode: "narrative_status",
+    name: card.name,
+    meta: card.identity || "身份待确认",
+    progression: {
+      label: card.progress?.label || "进展",
+      value: card.progress?.text || "",
+      percent: Number(card.progress?.percent || 0),
+    },
+    vitals: (card.core_stats || []).map((stat, index) => {
+      const current = Number(stat.current);
+      const max = Number(stat.max) || 100;
+      return {
+        key: stat.key || `core_${index}`,
+        label: stat.label || "状态",
+        state: stat.text || (Number.isFinite(current) ? `${current} / ${max}` : ""),
+        percent: Number.isFinite(current) ? Math.max(0, Math.min(100, (current / max) * 100)) : 0,
+        tone: stat.tone || ["red", "blue", "green"][index % 3],
+        current,
+        max,
+      };
+    }),
+    conditions: Array.isArray(card.tags) ? card.tags : [],
+    attributes: Array.isArray(card.attributes) ? card.attributes : [],
+    companion: protocolCompanionCard(state.frontendState?.companion_card, campaignState),
+  };
+}
+
+function protocolCompanionCard(companion = {}, campaignState = {}) {
+  if (companion && companion.name) {
+    return {
+      name: companion.name,
+      meta: companion.identity || companion.archetype || "伙伴",
+      seed: companion.portrait?.asset_key || companion.name,
+      archetype: companion.archetype || "companion",
+      raw: companion.meta || companion,
+    };
+  }
+  const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
+  const scene = campaignState.recent?.current_scene || {};
+  return buildCharacterCard(campaignState, title, scene).companion;
+}
+
+function renderQuickActions(actions) {
+  const composer = document.querySelector(".composer");
+  if (!composer || !Array.isArray(actions) || !actions.length) return;
+  let bar = composer.querySelector(".globalActionBar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "globalActionBar";
+    const input = composer.querySelector(".inputWrap");
+    composer.insertBefore(bar, input || composer.firstChild);
+  }
+  bar.innerHTML = "";
+  actions.forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label || action.action;
+    button.addEventListener("click", () => applyQuickAction(action.action || action.label || ""));
+    bar.appendChild(button);
+  });
+  // 在末尾添加"清空输入"按钮
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.textContent = "清空输入";
+  clearBtn.addEventListener("click", () => {
+    const input = $("actionInput");
+    if (input) { input.value = ""; input.focus(); }
+  });
+  bar.appendChild(clearBtn);
+}
+
+function applyQuickAction(action) {
+  const input = $("actionInput");
+  if (!input || !action) return;
+  input.value = action;
+  input.focus();
+  if (action === "继续") runTurn();
 }
 
 function characterFallback(campaignState, name, scene = {}) {
@@ -447,6 +566,7 @@ function normalizeCompanion(companion) {
     meta: companionDisplayMeta(rawMeta, archetype),
     seed: companion.visual_seed || `companion:${state.activeCampaign}:${name}`,
     archetype,
+    raw: companion,
   };
 }
 
@@ -467,7 +587,7 @@ function companionDisplayMeta(meta, archetype) {
 function inferCompanionArchetype(name, meta = "") {
   const text = normalizeActorName(`${state.activeCampaign} ${name} ${meta}`);
   if (text.includes("fate") || text.includes("servant") || text.includes("从者") || text.includes("英灵")) return "servant";
-  if (text.includes("monsterhunter") || text.includes("怪猎") || text.includes("艾露") || text.includes("palico") || text.includes("浩文")) return "palico";
+  if (text.includes("monsterhunter") || text.includes("怪猎") || text.includes("艾露") || text.includes("艾鲁") || text.includes("palico") || text.includes("浩文")) return "palico";
   return "companion";
 }
 
@@ -555,6 +675,9 @@ function normalizeAttributes(attributes, mode, fallback = {}) {
       return {
         label: item.short || item.label || item.key || "项",
         text: mode === "strict_stats" && value ? `${value}${modifier}` : (item.state || item.text || value || "记录"),
+        value: Number.isFinite(Number(item.value)) ? Number(item.value) : undefined,
+        max: Number.isFinite(Number(item.max)) ? Number(item.max) : undefined,
+        percent: Number.isFinite(Number(item.percent)) ? Number(item.percent) : undefined,
       };
     }).slice(0, 6);
   }
@@ -578,7 +701,7 @@ function renderCharacterCard(card) {
   if (progressBar) progressBar.style.width = `${Math.max(4, Math.min(100, card.progression.percent))}%`;
   renderVitals(card.vitals);
   renderConditionBadges(card.conditions);
-  renderAttributes(card.attributes);
+  renderAttributes(card.attributes, card.name);
 }
 
 function renderCompanionCard(companion) {
@@ -590,6 +713,7 @@ function renderCompanionCard(companion) {
   drawCompanionAvatar(companion.seed || companion.name, {
     cache: true,
     objectId: slugify(companion.name || "companion"),
+    seedText: scopedSeed(companion.seed || companion.name || "companion"),
     archetype: companion.archetype,
   });
 }
@@ -605,9 +729,12 @@ function renderVitals(vitals) {
     label.textContent = vital.label;
     const value = document.createElement("b");
     value.textContent = vital.state;
+    const track = document.createElement("em");
+    track.className = "statTrack";
     const bar = document.createElement("i");
     bar.style.width = `${Math.max(4, Math.min(100, vital.percent || 0))}%`;
-    row.append(label, value, bar);
+    track.appendChild(bar);
+    row.append(label, value, track);
     holder.appendChild(row);
   });
 }
@@ -623,29 +750,147 @@ function renderConditionBadges(labels) {
   });
 }
 
-function renderAttributes(attributes) {
-  const holder = $("attributeGrid");
-  if (!holder) return;
-  holder.innerHTML = "";
-  attributes.slice(0, 6).forEach((item) => {
-    const cell = document.createElement("div");
-    const b = document.createElement("b");
-    b.textContent = item.label;
-    const span = document.createElement("span");
-    span.textContent = item.text;
-    cell.append(b, span);
-    holder.appendChild(cell);
+function renderAttributes(attributes, characterName = "player") {
+  renderAttributeStar(attributes, characterName);
+}
+
+function renderAttributeStar(attributes = [], characterName = "player") {
+  const canvas = $("attributeStarCanvas");
+  const image = $("attributeStarImage");
+  if (!canvas) return;
+  const rows = normalizeStarAttributes(attributes);
+  const signature = rows.map((item) => `${item.label}:${item.text}:${Math.round(item.ratio * 1000)}`).join("|");
+  const objectId = slugify(`${characterName || "player"}_attribute_star_${hashSeed(signature).toString(16)}`);
+  const seedText = scopedSeed(`${characterName || "player"}:${signature}`);
+  const draw = () => drawAttributeStarToCanvas(canvas, rows);
+  if (state.activeCampaign && image) {
+    cacheCanvasAsset({
+      canvas,
+      targetImage: image,
+      kind: "attribute_star",
+      subdir: "portraits",
+      objectId,
+      seedText,
+      metadata: {
+        title: `${characterName || "角色"}六维星图`,
+        kind: "attribute_star",
+        detail: rows.map((item) => `${shortStarLabel(item)}:${Math.round(item.ratio * 100)}`).join(" / "),
+      },
+      draw,
+    });
+    return;
+  }
+  draw();
+  if (image) setAssetImage(image, canvas.toDataURL("image/png"));
+}
+
+function drawAttributeStarToCanvas(canvas, rows) {
+  const ctx = canvas.getContext("2d");
+  const logicalSize = 320;
+  const scale = Math.max(1, canvas.width / logicalSize);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  const w = logicalSize;
+  const h = logicalSize;
+  const cx = w / 2;
+  const cy = h / 2;
+  const outer = w * .34;
+  ctx.clearRect(0, 0, w, h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  const point = (radius, index) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / 6;
+    return [cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius];
+  };
+  const poly = (points) => {
+    ctx.beginPath();
+    points.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.closePath();
+  };
+  for (let ring = 4; ring >= 1; ring -= 1) {
+    poly(Array.from({ length: 6 }, (_, index) => point(outer * ring / 4, index)));
+    ctx.fillStyle = ring % 2 ? "rgba(255,250,239,.55)" : "rgba(185,130,46,.08)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(91,62,30,.22)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "rgba(91,62,30,.2)";
+  ctx.lineWidth = 2;
+  for (let index = 0; index < 6; index += 1) {
+    const [x, y] = point(outer, index);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+  const values = rows.map((item, index) => point(outer * item.ratio, index));
+  poly(values);
+  ctx.fillStyle = "rgba(77,127,168,.34)";
+  ctx.fill();
+  ctx.strokeStyle = "#4d7fa8";
+  ctx.lineWidth = 5;
+  ctx.stroke();
+  rows.forEach((item, index) => {
+    const [x, y] = point(outer + 22, index);
+    ctx.fillStyle = "#fff8e8";
+    ctx.strokeStyle = "rgba(126,95,58,.28)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 17, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#7c5526";
+    const label = shortStarLabel(item);
+    ctx.font = "800 24px Microsoft YaHei";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x, y + 1);
   });
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+function shortStarLabel(item) {
+  const raw = String(item.text || item.label || item.key || "?").trim();
+  const compact = raw.replace(/\s+/g, "");
+  if (/^[a-z0-9_ -]+$/i.test(compact)) return compact.slice(0, 3).toUpperCase();
+  return compact.slice(0, 3);
+}
+
+function normalizeStarAttributes(attributes = []) {
+  const fallback = [
+    { label: "一", text: "属性", ratio: .58 },
+    { label: "二", text: "属性", ratio: .58 },
+    { label: "三", text: "属性", ratio: .58 },
+    { label: "四", text: "属性", ratio: .58 },
+    { label: "五", text: "属性", ratio: .58 },
+    { label: "六", text: "属性", ratio: .58 },
+  ];
+  const rows = Array.isArray(attributes) ? attributes.slice(0, 6) : [];
+  const normalized = rows.map((item, index) => {
+    const value = Number(item.value);
+    const max = Number(item.max);
+    const percent = Number(item.percent);
+    const ratio = Number.isFinite(value) && Number.isFinite(max) && max > 0
+      ? value / max
+      : Number.isFinite(percent) ? percent / 100 : (.5 + (index % 3) * .1);
+    return {
+      label: item.label || item.short || item.key || fallback[index].label,
+      text: item.text || item.state || item.rank || "",
+      ratio: Math.max(.08, Math.min(1, ratio)),
+    };
+  });
+  while (normalized.length < 6) normalized.push(fallback[normalized.length]);
+  return normalized;
 }
 
 function currentCampaignMeta() {
   return state.campaigns.find((campaign) => campaign.campaign_id === state.activeCampaign) || null;
 }
 
-function renderSidePanel(campaignState) {
+function renderSidePanel(campaignState, frontendState = state.frontendState || {}) {
   const list = $("sideList");
   if (!list) return;
-  const rows = state.sideTab === "items" ? itemRows(campaignState) : questRows(campaignState);
+  const rows = state.sideTab === "items" ? protocolInventoryRows(frontendState, campaignState) : protocolQuestRows(frontendState, campaignState);
   const fallback = state.sideTab === "items" ? ["暂无物品记录"] : ["暂无任务记录"];
   list.innerHTML = "";
   (rows.length ? rows.slice(-5) : fallback.map((title) => ({ title, tag: "记录" }))).forEach((row, index) => {
@@ -894,6 +1139,30 @@ function renderStoryBlocks(blocks, fallbackText) {
   if (!rows.length) container.textContent = "暂无正文。";
   rows.forEach((block) => container.appendChild(renderMessageBlock(block)));
   scrollActiveFeed();
+}
+
+function protocolQuestRows(frontendState = {}, campaignState = {}) {
+  const rows = Array.isArray(frontendState.quests) ? frontendState.quests : [];
+  if (rows.length) {
+    return rows.map((row) => ({
+      title: row.short_name || row.title || row.id,
+      detail: row.detail || "",
+      tag: row.priority || row.status || "任务",
+    }));
+  }
+  return questRows(campaignState);
+}
+
+function protocolInventoryRows(frontendState = {}, campaignState = {}) {
+  const rows = Array.isArray(frontendState.inventory) ? frontendState.inventory : [];
+  if (rows.length) {
+    return rows.map((row) => ({
+      title: row.short_name || row.raw_name || row.id,
+      detail: row.detail || "",
+      tag: row.category || row.role || "物品",
+    }));
+  }
+  return itemRows(campaignState);
 }
 
 function renderMessageBlock(block) {
@@ -1223,7 +1492,7 @@ function renderStoryPicker() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `campaignRailItem${campaign.campaign_id === state.selectedCampaign ? " active" : ""}`;
-    button.innerHTML = `<b>${escapeHtml(campaign.title || campaign.name || campaign.campaign_id)}</b><small>${escapeHtml(campaign.status || "进行中")}</small>`;
+    button.innerHTML = `<b>${escapeHtml(campaign.title || campaign.name || campaign.campaign_id)}</b>`;
     button.addEventListener("click", () => {
       state.selectedCampaign = campaign.campaign_id;
       renderStoryPicker();
@@ -1237,7 +1506,7 @@ function renderStoryPicker() {
   detail.className = "pickerCampaignDetail";
   detail.innerHTML = `
     <b>${escapeHtml(selected.title || selected.name || selected.campaign_id)}</b>
-    <small>${escapeHtml(selected.genre || "未记录题材")} · ${escapeHtml(selected.status || "active")}</small>
+    <small>${escapeHtml(selected.genre || "未记录题材")}</small>
     <p>${escapeHtml(bindingSafetyText(selected))}</p>
   `;
   const switchBtn = document.createElement("button");
@@ -1466,10 +1735,11 @@ function setGalleryFilter(filter) {
   if (!$("galleryOverlay")?.classList.contains("hidden")) renderGalleryDialog();
 }
 
-function renderGallery(campaignState) {
+function renderGallery(campaignState, galleryState = {}) {
   const grid = $("galleryGrid");
   if (!grid) return;
-  const assets = mergeGalleryAssets(buildVisualAssets(campaignState), cachedGalleryAssets());
+  const protocolAssets = Array.isArray(galleryState.assets) ? galleryState.assets.map(protocolGalleryAsset) : [];
+  const assets = protocolAssets.length ? mergeGalleryAssets(protocolAssets, cachedGalleryAssets()) : mergeGalleryAssets(buildVisualAssets(campaignState), cachedGalleryAssets());
   state.galleryAssets = assets;
   grid.innerHTML = "";
   assets.forEach((asset) => {
@@ -1505,6 +1775,39 @@ function renderGallery(campaignState) {
   setGalleryFilter(state.galleryFilter);
 }
 
+function renderGalleryFilters(filters) {
+  const holder = $("galleryFilters");
+  if (!holder || !Array.isArray(filters) || !filters.length) return;
+  const current = filters.some((filter) => filter.key === state.galleryFilter) ? state.galleryFilter : "all";
+  state.galleryFilter = current;
+  holder.innerHTML = "";
+  filters.forEach((filter) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.filter = filter.key;
+    button.textContent = filter.label || filter.key;
+    button.classList.toggle("active", filter.key === state.galleryFilter);
+    button.addEventListener("click", () => setGalleryFilter(filter.key));
+    holder.appendChild(button);
+  });
+}
+
+function protocolGalleryAsset(asset) {
+  const kind = asset.kind || "item";
+  const detail = asset.detail || "";
+  return {
+    kind,
+    key: asset.key || `${kind}:${asset.title}`,
+    title: conciseTitle(asset.title || asset.key || "资料", 22),
+    meta: asset.meta || galleryKindLabel(kind),
+    seed: scopedSeed(asset.seed || asset.title || asset.key),
+    detail,
+    cachedUrl: asset.cached_url || asset.url || "",
+    sourceObjectId: asset.source_object_id || "",
+    visualPrompt: asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(asset.title || asset.key || "", detail, kind),
+  };
+}
+
 function openGalleryOverlay(assetKey = "") {
   const requested = state.galleryAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.galleryFilter)) {
@@ -1534,6 +1837,10 @@ function galleryAssetMatchesFilter(asset, filter) {
   const value = filter || "all";
   if (value === "all") return true;
   if (value === "monster") return asset.kind === "monster" || asset.kind === "ecology";
+  if (value === "scene") return asset.kind === "scene" || asset.kind === "location";
+  if (value === "item") return ["item", "weapon", "supply", "material", "ritual_tool"].includes(asset.kind);
+  if (value === "clue") return ["clue", "document", "ritual_tool"].includes(asset.kind);
+  if (value === "character") return ["character", "npc", "companion"].includes(asset.kind);
   return asset.kind === value;
 }
 
@@ -1790,17 +2097,19 @@ function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCa
   return assets.map((asset, index) => {
     const kind = normalizePressureKind(asset.kind);
     const title = asset.title || asset.id || `${galleryKindLabel(kind)} ${index + 1}`;
+    const detail = asset.detail || asset.source_memory || "";
     return {
       kind,
       key: `v4:${kind}:${asset.id || title}:${index}`,
       title: conciseTitle(title, 22),
       meta: asset.certainty === "confirmed" ? galleryKindLabel(kind) : `${galleryKindLabel(kind)} / ${asset.certainty || "clue"}`,
-      seed: `${asset.id || title}:${asset.detail || ""}`,
-      detail: asset.detail || asset.source_memory || "",
+      seed: `${asset.id || title}:${detail}`,
+      detail,
       certainty: asset.certainty || "clue",
       displayZone: asset.display_zone || "gallery",
       cachePolicy: asset.cache_policy || "stable",
       sourceMemory: asset.source_memory || "",
+      visualPrompt: asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(title, detail, kind),
     };
   }).filter((asset) => !(asset.kind === "npc" && isProtectedActorName(asset.title, protectedActors)));
 }
@@ -1854,6 +2163,73 @@ function currentCompanion() {
     campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色",
     state.lastCampaignState?.recent?.current_scene || {},
   ).companion;
+}
+
+function visibleCompanion() {
+  return protocolCompanionCard(state.frontendState?.companion_card, state.lastCampaignState || {}) || currentCompanion();
+}
+
+function insertCompanionMention() {
+  const companion = visibleCompanion();
+  const input = $("actionInput");
+  if (!input || !companion?.name) return;
+  const text = `@${companion.name}：`;
+  input.value = input.value.trim() ? `${input.value.trim()}\n${text}` : text;
+  input.focus();
+}
+
+function openCompanionOverlay() {
+  const companion = visibleCompanion();
+  if (!companion?.name) return;
+  setText("companionDialogName", companion.name);
+  setText("companionDialogMeta", companion.meta || companion.archetype || "同行伙伴");
+  renderCompanionData(companion);
+  const image = $("companionDialogImage");
+  if (image) {
+    drawCompanionAvatar(companion.seed || companion.name, {
+      cache: true,
+      objectId: slugify(companion.name || "companion"),
+      targetImage: image,
+      seedText: scopedSeed(companion.seed || companion.name || "companion"),
+      archetype: companion.archetype,
+    });
+  }
+  const overlay = $("companionOverlay");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function renderCompanionData(companion) {
+  const holder = $("companionDialogData");
+  if (!holder) return;
+  const raw = companion.raw && typeof companion.raw === "object" ? companion.raw : {};
+  const rows = [
+    ["名称", companion.name],
+    ["类型", companion.archetype || raw.archetype || raw.species || raw.kind || "companion"],
+    ["身份", companion.meta || raw.identity || raw.species || raw.kind || ""],
+    ["性格", raw.personality || raw.temperament || ""],
+    ["定位", raw.role || raw.class || raw.job || ""],
+    ["备注", raw.note || raw.description || raw.summary || ""],
+  ].filter((row) => row[1]);
+  holder.innerHTML = "";
+  rows.forEach(([label, value]) => {
+    const item = document.createElement("div");
+    item.className = "companionDataItem";
+    const b = document.createElement("b");
+    b.textContent = label;
+    const span = document.createElement("span");
+    span.textContent = String(value);
+    item.append(b, span);
+    holder.appendChild(item);
+  });
+}
+
+function closeCompanionOverlay() {
+  const overlay = $("companionOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
 }
 
 function isCompanionActorName(value) {
@@ -1945,10 +2321,10 @@ function drawGalleryAsset(targetImage, asset) {
   }
   const canvas = createAssetCanvas(128, 128);
   const kind = asset.kind === "scene" ? "gallery_map" : `gallery_${asset.kind}`;
-  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" ? "portraits" : "items";
+  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master" ? "portraits" : "items";
   const draw = () => {
     if (asset.kind === "scene") drawPixelMap(asset.seed, { cache: false, canvas, scene: asset.scene, compact: true });
-    else if (asset.kind === "npc") drawPixelPortraitToCanvas(canvas, asset.seed, "npc");
+    else if (asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master") drawPixelPortraitToCanvas(canvas, asset.seed, "npc");
     else if (asset.kind === "monster") drawCanvasMonster(canvas, asset);
     else drawCanvasItem(canvas, asset);
   };
@@ -1959,7 +2335,7 @@ function drawGalleryAsset(targetImage, asset) {
       kind,
       subdir,
       objectId: slugify(asset.key || asset.title),
-      seedText: asset.seed || asset.title,
+      seedText: scopedSeed(asset.seed || asset.title),
       metadata: {
         title: asset.title,
         detail: galleryDetail(asset),
@@ -1971,6 +2347,7 @@ function drawGalleryAsset(targetImage, asset) {
         cache_policy: asset.cachePolicy || undefined,
         source_memory: asset.sourceMemory || undefined,
         kind: asset.kind,
+        visual_prompt: asset.visualPrompt || undefined,
       },
       draw,
     });
@@ -2028,20 +2405,21 @@ function hashSeed(text) {
 
 function drawBlockAvatar(targetImage, block, role) {
   const actorKey = block.avatar_key || block.actor_id || block.speaker || role;
+  const actorSeed = scopedSeed(actorKey);
   const canvas = createAssetCanvas(96, 96);
 
   let kind, draw;
   if (role === "companion") {
     kind = "companion_portrait";
     const companion = currentCompanion();
-    draw = () => drawCompanionToCanvas(canvas, actorKey, companion?.archetype);
+    draw = () => drawCompanionToCanvas(canvas, actorSeed, companion?.archetype);
   } else if (role === "npc") {
     kind = "npc_portrait";
-    draw = () => drawPixelPortraitToCanvas(canvas, actorKey, "npc");
+    draw = () => drawPixelPortraitToCanvas(canvas, actorSeed, "npc");
   } else {
     // Player log avatars reuse the main character portrait cache.
     kind = "portrait";
-    draw = () => drawPixelAvatar(actorKey, { cache: false, variant: "hunter", canvas, targetImage: null });
+    draw = () => drawPixelAvatar(actorSeed, { cache: false, variant: "hunter", canvas, targetImage: null });
   }
 
   if (state.activeCampaign) {
@@ -2051,7 +2429,7 @@ function drawBlockAvatar(targetImage, block, role) {
       kind,
       subdir: "portraits",
       objectId: slugify(actorKey),
-      seedText: actorKey,
+      seedText: actorSeed,
       draw,
     });
     return;
@@ -2147,6 +2525,7 @@ function shadeColor(hex, amount) {
 function drawPixelAvatar(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(96, 96);
   const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
+  const effectiveSeed = options.seedText || seedText;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -2154,13 +2533,18 @@ function drawPixelAvatar(seedText, options = {}) {
       kind: "portrait",
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
-      seedText,
-      draw: () => drawPixelAvatar(seedText, { cache: false, variant: options.variant, canvas, targetImage: null }),
+      seedText: effectiveSeed,
+      draw: () => drawPixelAvatar(effectiveSeed, { cache: false, variant: options.variant, canvas, targetImage: null }),
     });
     return;
   }
+  if (options.variant === "player_full_body") {
+    drawPlayerFullBodyToCanvas(canvas, effectiveSeed);
+    if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
+    return;
+  }
   const ctx = canvas.getContext("2d");
-  const seed = hashSeed(seedText);
+  const seed = hashSeed(effectiveSeed);
   const size = canvas.width;
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, size, size);
@@ -2203,9 +2587,65 @@ function drawPixelAvatar(seedText, options = {}) {
   if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
+function drawPlayerFullBodyToCanvas(canvas, seedText) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`full:${seedText}`);
+  const size = canvas.width;
+  const cell = size / 32;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const mirror = (x, y, w, h, color) => {
+    px(x, y, w, h, color);
+    px(32 - x - w, y, w, h, color);
+  };
+  const bg = ["#d8c7a8", "#d3ccb7", "#d6c2a5"][(seed >>> 2) % 3];
+  const skin = ["#d7a06c", "#c48a5c", "#e0b17d", "#b9794f"][seed % 4];
+  const hair = ["#241d17", "#463423", "#1d2528", "#6b4a2e"][(seed >>> 4) % 4];
+  const coat = ["#384548", "#314c5d", "#4a3e58", "#3d513e"][(seed >>> 7) % 4];
+  const leather = ["#7b5734", "#65452b", "#8a623b"][(seed >>> 11) % 3];
+  const accent = ["#d2b56b", "#9fb7c7", "#b66c45", "#c9c0a0"][(seed >>> 14) % 4];
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, size, size);
+  px(0, 0, 32, 32, bg);
+  px(5, 28, 22, 2, "rgba(76, 58, 39, .28)");
+  px(11, 3, 10, 3, hair);
+  px(9, 5, 14, 3, hair);
+  mirror(8, 7, 3, 4, hair);
+  px(10, 7, 12, 8, skin);
+  mirror(9, 9, 2, 4, shadeColor(skin, -18));
+  px(12, 9, 8, 3, "#e7bd89");
+  mirror(12, 10, 2, 1, "#101615");
+  px(15, 12, 2, 1, "#805338");
+  px(13, 14, 6, 1, "#4e2c24");
+  px(10, 15, 12, 2, "#5a3b24");
+  px(9, 17, 14, 8, coat);
+  mirror(6, 17, 4, 8, leather);
+  px(11, 17, 10, 1, accent);
+  px(12, 19, 8, 5, shadeColor(coat, -12));
+  px(8, 24, 6, 5, "#3a3329");
+  px(18, 24, 6, 5, "#3a3329");
+  px(7, 29, 7, 1, "#25221d");
+  px(18, 29, 7, 1, "#25221d");
+  px(23, 12, 2, 13, accent);
+  px(24, 11, 1, 3, "#efe0ad");
+  if (normalizeActorName(state.activeCampaign).includes("fate")) {
+    px(25, 16, 2, 9, "#1e2531");
+    px(24, 15, 4, 1, "#c9b76a");
+  } else if (normalizeActorName(state.activeCampaign).includes("coc")) {
+    px(6, 20, 5, 4, "#d8d0b6");
+    px(7, 21, 3, 1, "#5b4a35");
+  } else if (normalizeActorName(state.activeCampaign).includes("dnd")) {
+    px(5, 17, 4, 6, "#8b8f93");
+    px(4, 16, 2, 8, "#b9c0c8");
+  }
+}
+
 function drawCompanionAvatar(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(96, 96);
   const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
+  const effectiveSeed = options.seedText || seedText;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -2213,18 +2653,18 @@ function drawCompanionAvatar(seedText, options = {}) {
       kind: "companion",
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
-      seedText,
-      draw: () => drawCompanionToCanvas(canvas, seedText, options.archetype),
+      seedText: effectiveSeed,
+      draw: () => drawCompanionToCanvas(canvas, effectiveSeed, options.archetype),
     });
     return;
   }
-  drawCompanionToCanvas(canvas, seedText, options.archetype);
+  drawCompanionToCanvas(canvas, effectiveSeed, options.archetype);
   if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
 function drawCompanionToCanvas(canvas, seedText, archetype = "") {
   const type = normalizeActorName(archetype || inferCompanionArchetype(seedText));
-  if (type.includes("palico")) {
+  if (type.includes("palico") || type.includes("艾露") || type.includes("艾鲁") || normalizeActorName(seedText).includes("浩文")) {
     drawPixelPalico(seedText, { cache: false, canvas, targetImage: null });
     return;
   }
@@ -2252,6 +2692,7 @@ function drawServantAccent(canvas, seedText) {
 function drawPixelPalico(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(96, 96);
   const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
+  const effectiveSeed = options.seedText || seedText;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -2259,13 +2700,13 @@ function drawPixelPalico(seedText, options = {}) {
       kind: "companion",
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
-      seedText,
-      draw: () => drawPixelPalico(seedText, { cache: false, canvas, targetImage: null }),
+      seedText: effectiveSeed,
+      draw: () => drawPixelPalico(effectiveSeed, { cache: false, canvas, targetImage: null }),
     });
     return;
   }
   const ctx = canvas.getContext("2d");
-  const seed = hashSeed(seedText);
+  const seed = hashSeed(effectiveSeed);
   const size = canvas.width;
   const cell = size / 32;
   const px = (x, y, w, h, color) => {
@@ -2311,22 +2752,23 @@ function drawPixelPalico(seedText, options = {}) {
 function drawPixelMap(seedText, options = {}) {
   const canvas = options.canvas || $("mapCanvas");
   if (!canvas) return;
+  const effectiveSeed = options.seedText || scopedSeed(seedText);
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       kind: "map",
       subdir: "maps",
       objectId: options.objectId || slugify(seedText),
-      seedText,
+      seedText: effectiveSeed,
       metadata: options.metadata || undefined,
-      draw: () => drawPixelMap(seedText, { cache: false, canvas, scene: options.scene, compact: options.compact }),
+      draw: () => drawPixelMap(seedText, { cache: false, canvas, scene: options.scene, compact: options.compact, seedText: effectiveSeed }),
     });
     return;
   }
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
-  const seed = hashSeed(seedText);
+  const seed = hashSeed(effectiveSeed);
   const scene = options.scene || {};
   ctx.imageSmoothingEnabled = true;
   drawMapPaper(ctx, w, h, seed);
@@ -2629,13 +3071,51 @@ function drawCanvasItem(canvas, asset) {
   const ctx = canvas.getContext("2d");
   const seed = hashSeed(asset.seed || asset.title);
   drawIconBase(ctx, canvas.width, canvas.height, "#cfb88d", "#7f603d");
-  const text = `${asset.title}${asset.detail || ""}`;
+  const prompt = asset.visualPrompt || asset.visual_prompt || inferItemVisualPrompt(asset.title, asset.detail, asset.kind);
+  const type = String(prompt.type || "").toLowerCase();
+  const silhouette = String(prompt.silhouette || "").toLowerCase();
+  const text = `${asset.title}${asset.detail || ""}${asset.meta || ""}${asset.kind || ""}${type}${silhouette}`;
+  if (type === "switch_axe" || silhouette.includes("transforming_axe")) return drawSwitchAxeIcon(ctx, canvas.width, canvas.height, seed);
+  if (type === "sealed_relic_box" || silhouette.includes("sealed_square_box")) return drawRelicBoxIcon(ctx, canvas.width, canvas.height, seed);
+  if (type === "phone" || silhouette.includes("smartphone")) return drawPhoneIcon(ctx, canvas.width, canvas.height, seed);
+  if (type === "mud_armor_fragment" || silhouette.includes("armor_fragment")) return drawMudArmorFragmentIcon(ctx, canvas.width, canvas.height, seed);
+  if (/手机|电话|信号|拨号|屏幕|phone|smartphone/.test(text)) return drawPhoneIcon(ctx, canvas.width, canvas.height, seed);
+  if (/ritual|仪式|占卜|骨|匣|盒|钥匙/.test(text)) return drawRitualIcon(ctx, canvas.width, canvas.height, seed);
   if (/泥|痕/.test(text)) return drawMudIcon(ctx, canvas.width, canvas.height, seed);
-  if (/药|瓶/.test(text)) return drawBottleIcon(ctx, canvas.width, canvas.height, seed);
-  if (/斧|装备|武器/.test(text)) return drawAxeIcon(ctx, canvas.width, canvas.height, seed);
-  if (/登记|任务板|木牌|记录/.test(text)) return drawSignIcon(ctx, canvas.width, canvas.height, seed);
-  if (/羽|鳞|素材|碎片/.test(text)) return drawScaleIcon(ctx, canvas.width, canvas.height, seed);
+  if (/药|瓶|supply/.test(text)) return drawBottleIcon(ctx, canvas.width, canvas.height, seed);
+  if (/斧|装备|武器|weapon/.test(text)) return drawAxeIcon(ctx, canvas.width, canvas.height, seed);
+  if (/登记|任务板|木牌|记录|document|文献|信|照片|书/.test(text)) return drawSignIcon(ctx, canvas.width, canvas.height, seed);
+  if (/羽|鳞|素材|碎片|material/.test(text)) return drawScaleIcon(ctx, canvas.width, canvas.height, seed);
   return drawSatchelIcon(ctx, canvas.width, canvas.height, seed);
+}
+
+function inferItemVisualPrompt(title = "", detail = "", kind = "") {
+  const text = `${title} ${detail} ${kind}`;
+  let type = "satchel";
+  let category = "misc";
+  let role = "record";
+  let material = "";
+  let silhouette = "";
+  if (/手机|电话|信号|拨号|屏幕|phone|smartphone/i.test(text)) {
+    type = "phone"; category = "device"; role = "communication_or_clue"; material = "glass_and_plastic"; silhouette = "smartphone";
+  } else if (/斩斧|switch\s*axe/i.test(text)) {
+    type = "switch_axe"; category = "weapon"; role = "equipment"; material = "bone_and_metal"; silhouette = "long_transforming_axe_sword";
+  } else if (/井匣|金属盒|盒|匣/.test(text)) {
+    type = "sealed_relic_box"; category = "ritual_tool"; role = "clue"; material = "dark_metal"; silhouette = "sealed_square_box";
+  } else if (/泥甲|泥壳|甲片/.test(text)) {
+    type = "mud_armor_fragment"; category = "material"; role = "loot_or_trace"; material = "mud_shell"; silhouette = "broken_armor_fragment";
+  } else if (/鳞|羽|素材|碎片|样本/.test(text)) {
+    type = "material"; category = "material"; role = "loot_or_trace"; material = "organic_material"; silhouette = "fragment";
+  } else if (/药|瓶|补给|绷带|食物/.test(text)) {
+    type = "bottle"; category = "supply"; role = "resource"; material = "glass_or_wood_crate"; silhouette = "supply_container";
+  } else if (/信|照片|书|文件|登记|地图|记录|document/.test(text)) {
+    type = "paper"; category = "document"; role = "clue"; material = "paper"; silhouette = "document";
+  } else if (/骨|符|钥匙|仪式|占卜/.test(text)) {
+    type = "ritual_bone"; category = "ritual_tool"; role = "clue"; material = "bone_or_talisman"; silhouette = "ritual_object";
+  } else if (/斧|剑|弓|枪|武器|刀|weapon/.test(text)) {
+    type = "weapon"; category = "weapon"; role = "equipment"; material = "metal_or_bone"; silhouette = "weapon";
+  }
+  return { type, category, role, material, silhouette, source_text: conciseTitle(text, 120) };
 }
 
 function drawCanvasMonster(canvas, asset) {
@@ -2689,6 +3169,40 @@ function drawMudIcon(ctx, w, h) {
   });
 }
 
+function drawMudArmorFragmentIcon(ctx, w, h) {
+  ctx.save();
+  ctx.translate(w * .5, h * .54);
+  ctx.rotate(-0.18);
+  ctx.fillStyle = "#8a6a43";
+  ctx.beginPath();
+  ctx.moveTo(-w * .26, -h * .22);
+  ctx.lineTo(w * .2, -h * .31);
+  ctx.lineTo(w * .32, -h * .03);
+  ctx.lineTo(w * .14, h * .25);
+  ctx.lineTo(-w * .22, h * .18);
+  ctx.lineTo(-w * .35, -h * .04);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#4f3725";
+  ctx.lineWidth = Math.max(4, w * .035);
+  ctx.stroke();
+  ctx.strokeStyle = "#d2b16f";
+  ctx.lineWidth = Math.max(3, w * .025);
+  ctx.beginPath();
+  ctx.moveTo(-w * .18, -h * .08);
+  ctx.lineTo(w * .16, -h * .13);
+  ctx.moveTo(-w * .1, h * .06);
+  ctx.lineTo(w * .18, h * .02);
+  ctx.stroke();
+  ctx.fillStyle = "#5e422b";
+  for (let i = 0; i < 5; i += 1) {
+    ctx.beginPath();
+    ctx.ellipse(-w * .2 + i * w * .1, h * (.16 - (i % 2) * .08), w * .035, h * .02, i, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawBottleIcon(ctx, w, h) {
   ctx.fillStyle = "#dbe9c9";
   roundRectPath(ctx, w * .42, h * .26, w * .22, h * .48, 8);
@@ -2705,6 +3219,36 @@ function drawBottleIcon(ctx, w, h) {
   ctx.stroke();
 }
 
+function drawPhoneIcon(ctx, w, h) {
+  ctx.fillStyle = "#2b2b27";
+  roundRectPath(ctx, w * .31, h * .18, w * .38, h * .64, 9);
+  ctx.fill();
+  ctx.fillStyle = "#111716";
+  roundRectPath(ctx, w * .35, h * .24, w * .3, h * .46, 4);
+  ctx.fill();
+  ctx.strokeStyle = "#8b6635";
+  ctx.lineWidth = 4;
+  roundRectPath(ctx, w * .35, h * .24, w * .3, h * .46, 4);
+  ctx.stroke();
+  ctx.fillStyle = "#b23b2e";
+  ctx.fillRect(w * .43, h * .43, w * .14, h * .05);
+  ctx.fillRect(w * .48, h * .35, w * .04, h * .21);
+  ctx.fillStyle = "#6f6046";
+  ctx.fillRect(w * .43, h * .73, w * .14, h * .025);
+  ctx.strokeStyle = "#c0a15c";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(w * .38, h * .2);
+  ctx.lineTo(w * .46, h * .1);
+  ctx.moveTo(w * .5, h * .18);
+  ctx.lineTo(w * .5, h * .08);
+  ctx.moveTo(w * .62, h * .2);
+  ctx.lineTo(w * .54, h * .1);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,245,215,.58)";
+  ctx.fillRect(w * .38, h * .28, w * .16, h * .035);
+}
+
 function drawAxeIcon(ctx, w, h) {
   ctx.strokeStyle = "#4c3824";
   ctx.lineWidth = 9;
@@ -2719,6 +3263,60 @@ function drawAxeIcon(ctx, w, h) {
   ctx.lineTo(w * .62, h * .45);
   ctx.closePath();
   ctx.fill();
+}
+
+function drawSwitchAxeIcon(ctx, w, h) {
+  ctx.save();
+  ctx.translate(w * .5, h * .54);
+  ctx.rotate(-0.72);
+  ctx.strokeStyle = "#4c3824";
+  ctx.lineWidth = 10;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-w * .34, h * .22);
+  ctx.lineTo(w * .28, -h * .24);
+  ctx.stroke();
+  ctx.fillStyle = "#d8c089";
+  ctx.beginPath();
+  ctx.moveTo(w * .18, -h * .32);
+  ctx.lineTo(w * .43, -h * .17);
+  ctx.lineTo(w * .2, h * .02);
+  ctx.lineTo(w * .05, -h * .1);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#7b5734";
+  ctx.fillRect(-w * .05, -h * .03, w * .14, h * .1);
+  ctx.fillStyle = "#9c7a45";
+  ctx.fillRect(-w * .24, h * .07, w * .22, h * .08);
+  ctx.fillStyle = "#e6d3a4";
+  ctx.fillRect(w * .22, -h * .2, w * .15, h * .04);
+  ctx.restore();
+  ctx.fillStyle = "#5f4a2e";
+  ctx.fillRect(w * .25, h * .78, w * .5, h * .04);
+}
+
+function drawRelicBoxIcon(ctx, w, h) {
+  ctx.fillStyle = "#3b3b3a";
+  roundRectPath(ctx, w * .25, h * .25, w * .5, h * .5, 10);
+  ctx.fill();
+  ctx.strokeStyle = "#b28b47";
+  ctx.lineWidth = 5;
+  roundRectPath(ctx, w * .29, h * .29, w * .42, h * .42, 7);
+  ctx.stroke();
+  ctx.fillStyle = "#171918";
+  ctx.fillRect(w * .34, h * .42, w * .32, h * .08);
+  ctx.fillStyle = "#9c1f2c";
+  ctx.beginPath();
+  ctx.arc(w * .5, h * .5, w * .075, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#d0a24d";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(w * .5, h * .31);
+  ctx.lineTo(w * .5, h * .69);
+  ctx.moveTo(w * .31, h * .5);
+  ctx.lineTo(w * .69, h * .5);
+  ctx.stroke();
 }
 
 function drawSignIcon(ctx, w, h) {
@@ -2741,6 +3339,31 @@ function drawScaleIcon(ctx, w, h) {
     ctx.quadraticCurveTo(w * (.52 + i * .04), h * .78, w * (.28 + i * .08), h * (.68 - i * .05));
     ctx.fill();
   }
+}
+
+function drawRitualIcon(ctx, w, h) {
+  ctx.fillStyle = "#e5d0a2";
+  ctx.beginPath();
+  ctx.ellipse(w * .5, h * .58, w * .24, h * .15, -.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#5b3a25";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(w * .3, h * .62);
+  ctx.quadraticCurveTo(w * .5, h * .34, w * .72, h * .58);
+  ctx.stroke();
+  ctx.fillStyle = "#7a4e2c";
+  ctx.fillRect(w * .47, h * .35, w * .08, h * .34);
+  ctx.fillStyle = "#c09a4a";
+  ctx.beginPath();
+  ctx.arc(w * .5, h * .3, w * .08, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#ead7a4";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(w * .35, h * .74);
+  ctx.lineTo(w * .65, h * .74);
+  ctx.stroke();
 }
 
 function drawSatchelIcon(ctx, w, h) {
@@ -2779,13 +3402,19 @@ function createAssetCanvas(width, height) {
 
 function setAssetImage(targetImage, url) {
   if (!targetImage || !url) return;
+  if (url.startsWith("/campaign-assets/")) {
+    targetImage.src = `${url}${url.includes("?") ? "&" : "?"}v=${ASSET_GENERATOR_VERSION}`;
+    return;
+  }
   targetImage.src = url;
 }
 
 async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, seedText, metadata, draw }) {
   const campaignId = state.activeCampaign;
+  const campaignSeed = state.assetSeed || campaignId || "campaign";
   const safeId = slugify(objectId || seedText || kind);
-  const key = `${kind}:${campaignId}:${safeId}:v${ASSET_GENERATOR_VERSION}`;
+  const key = `${kind}:${campaignId}:${campaignSeed}:${safeId}:v${ASSET_GENERATOR_VERSION}`;
+  const safeSeed = slugify(campaignSeed).slice(0, 24) || "seed";
   const memory = state.assetCache[key];
   if (memory === "pending") {
     draw();
@@ -2819,8 +3448,9 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
         key,
         kind,
         subdir,
-        filename: `${kind}_${safeId}`,
+        filename: `${kind}_${safeSeed}_${safeId}_v${ASSET_GENERATOR_VERSION}`,
         seed: String(seedText || key),
+        asset_seed: state.assetSeed || undefined,
         style: "local_canvas_pixel",
         generator_version: ASSET_GENERATOR_VERSION,
         metadata: metadata || undefined,
@@ -2867,6 +3497,13 @@ function slugify(value) {
     .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 64) || "asset";
+}
+
+function scopedSeed(value) {
+  const seed = state.assetSeed || state.activeCampaign || "campaign";
+  const raw = String(value || "asset");
+  const prefix = `${seed}:`;
+  return raw.startsWith(prefix) ? raw : `${prefix}${raw}`;
 }
 
 function drawBackground() {

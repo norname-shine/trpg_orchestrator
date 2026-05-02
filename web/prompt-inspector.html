@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prompt / 规则 / 返回查看</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f5ecdc;
+      --panel: rgba(255, 252, 245, .88);
+      --line: #d8c4a0;
+      --ink: #31271d;
+      --muted: #756757;
+      --accent: #3f7db8;
+      --accent-soft: #e7f0fa;
+      --gold: #b78737;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 20% 12%, rgba(183, 135, 55, .11), transparent 26rem),
+        linear-gradient(135deg, #f8f0df, var(--paper));
+      color: var(--ink);
+      font: 14px/1.55 "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+    }
+    header {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 250, 240, .72);
+      backdrop-filter: blur(10px);
+    }
+    h1 { margin: 0; font-size: 18px; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    button, a.button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff8ea;
+      color: #65451d;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+    }
+    button.active {
+      border-color: #6d9dcc;
+      background: var(--accent-soft);
+      color: #225f9b;
+    }
+    input {
+      height: 34px;
+      width: min(34vw, 360px);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px;
+      background: #fffaf1;
+      color: var(--ink);
+    }
+    main {
+      height: calc(100vh - 64px);
+      display: grid;
+      grid-template-columns: 250px minmax(360px, 1.1fr) minmax(360px, 1fr);
+      gap: 12px;
+      padding: 12px;
+      min-width: 0;
+    }
+    aside, section {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: 0 10px 32px rgba(76, 53, 25, .08);
+      overflow: hidden;
+    }
+    .sideHeader, .paneHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 48px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(216, 196, 160, .72);
+      background: rgba(255, 248, 234, .74);
+    }
+    .sideHeader b, .paneHeader b { font-size: 15px; }
+    .list {
+      height: calc(100% - 48px);
+      overflow: auto;
+      padding: 10px;
+    }
+    .groupTitle {
+      margin: 10px 4px 6px;
+      color: #8a682d;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .fileBtn {
+      width: 100%;
+      justify-content: flex-start;
+      margin-bottom: 6px;
+      text-align: left;
+      background: rgba(255, 255, 255, .64);
+      color: var(--ink);
+    }
+    .fileBtn small {
+      display: block;
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .tabBar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .langSwitch {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .langSwitch button {
+      min-height: 28px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+    pre {
+      margin: 0;
+      height: calc(100% - 48px);
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding: 14px;
+      background: rgba(255, 253, 248, .64);
+      font: 12px/1.58 Consolas, "Microsoft YaHei", monospace;
+    }
+    #viewer { height: calc(100% - 81px); }
+    .split {
+      height: calc(100% - 48px);
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      min-height: 0;
+    }
+    .split pre { height: 100%; border-top: 1px solid rgba(216, 196, 160, .62); }
+    .empty { color: var(--muted); }
+    @media (max-width: 980px) {
+      body { overflow: auto; height: auto; }
+      header { height: auto; align-items: flex-start; flex-direction: column; }
+      main { height: auto; grid-template-columns: 1fr; }
+      aside, section { height: 70vh; }
+      input { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Prompt / 规则 / 返回查看</h1>
+      <div class="sub" id="campaignLine">读取中</div>
+    </div>
+    <div class="actions">
+      <input id="search" type="search" placeholder="搜索 prompt / 规则关键词">
+      <button id="searchBtn" type="button">搜索</button>
+      <button id="refreshBtn" type="button">刷新</button>
+      <a class="button" href="/director-debug.html">导演调试</a>
+      <a class="button" href="/writeback-review.html">写回审核</a>
+      <a class="button" href="/">返回前台</a>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <div class="sideHeader">
+        <b>Prompt / 规则文件</b>
+        <span class="sub" id="fileCount">0</span>
+      </div>
+      <div class="list" id="fileList"></div>
+    </aside>
+
+    <section>
+      <div class="paneHeader">
+        <b id="viewerTitle">选择文件</b>
+        <div class="langSwitch">
+          <button id="chineseBtn" class="active" type="button">中文包</button>
+          <button id="englishBtn" type="button">英文主文件</button>
+        </div>
+      </div>
+      <div class="sub" id="viewerMeta" style="padding: 6px 12px; border-bottom: 1px solid rgba(216,196,160,.5);"></div>
+      <pre id="viewer" class="empty">左侧选择一个 prompt 或规则文件。</pre>
+    </section>
+
+    <section>
+      <div class="paneHeader">
+        <b>本回合返回</b>
+        <div class="tabBar" id="returnTabs"></div>
+      </div>
+      <pre id="returnViewer" class="empty">读取中</pre>
+    </section>
+  </main>
+
+  <script>
+    const returnTabs = [
+      ["v4_director_input.md", "V4 输入"],
+      ["pressure_pack.json", "V4 压力包"],
+      ["chatgpt_input.md", "GPT 输入"],
+      ["chatgpt_raw_output.md", "GPT 原文"],
+      ["chatgpt_blocks.json", "正文 blocks"],
+      ["state_writeback.json", "状态写回"],
+      ["v4_audit_result.json", "V4 审核"],
+      ["parsed_raw_output", "解析结果"],
+    ];
+    let state = null;
+    let activeFile = "";
+    let activeFileRecord = null;
+    let activeLanguage = "cn";
+    let activeReturn = "pressure_pack.json";
+
+    async function api(path) {
+      const response = await fetch(path);
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw new Error(data.error || response.status);
+      return data;
+    }
+
+    function asText(value) {
+      if (value === undefined || value === null || value === "") return "";
+      if (typeof value === "string") return value;
+      return JSON.stringify(value, null, 2);
+    }
+
+    function matchesSearch(file) {
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      if (!q) return true;
+      return `${file.name}\n${file.content}\n${file.cn?.name || ""}\n${file.cn?.content || ""}`.toLowerCase().includes(q);
+    }
+
+    function renderFiles() {
+      const list = document.getElementById("fileList");
+      list.innerHTML = "";
+      let count = 0;
+      for (const group of state.groups || []) {
+        const files = (group.files || []).filter(matchesSearch);
+        if (!files.length) continue;
+        const title = document.createElement("div");
+        title.className = "groupTitle";
+        title.textContent = group.title;
+        list.appendChild(title);
+        for (const file of files) {
+          count += 1;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `fileBtn ${activeFile === file.name ? "active" : ""}`;
+          button.innerHTML = `<b>${escapeHtml(file.name)}</b><small>${escapeHtml(file.exists ? `${file.content.length} 字符` : "文件不存在")}</small>`;
+          button.addEventListener("click", () => selectFile(file));
+          list.appendChild(button);
+        }
+      }
+      document.getElementById("fileCount").textContent = `${count} 个`;
+      if (!activeFile) {
+        const first = (state.groups || []).flatMap((group) => group.files || []).find((file) => file.exists);
+        if (first) selectFile(first);
+      }
+    }
+
+    function selectFile(file) {
+      activeFile = file.name;
+      activeFileRecord = file;
+      activeLanguage = file.cn?.exists ? "cn" : "en";
+      renderSelectedFile();
+      renderFiles();
+    }
+
+    function renderSelectedFile() {
+      const file = activeFileRecord;
+      if (!file) return;
+      const cn = file.cn || {};
+      const usingCn = activeLanguage === "cn";
+      const content = usingCn ? cn.content : file.content;
+      const exists = usingCn ? cn.exists : file.exists;
+      const name = usingCn ? cn.name : file.name;
+      const path = usingCn ? cn.path : file.path;
+      document.getElementById("viewerTitle").textContent = file.name;
+      document.getElementById("viewerMeta").textContent = `${name || ""}  ${path || ""}`;
+      document.getElementById("englishBtn").classList.toggle("active", !usingCn);
+      document.getElementById("chineseBtn").classList.toggle("active", usingCn);
+      document.getElementById("chineseBtn").disabled = !cn.exists;
+      const viewer = document.getElementById("viewer");
+      viewer.classList.toggle("empty", !content);
+      viewer.textContent = content || (exists ? "文件内容为空。" : "对应文件不存在。");
+    }
+
+    function renderReturnTabs() {
+      const box = document.getElementById("returnTabs");
+      box.innerHTML = "";
+      for (const [key, label] of returnTabs) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = key === activeReturn ? "active" : "";
+        button.textContent = label;
+        button.addEventListener("click", () => {
+          activeReturn = key;
+          renderReturnTabs();
+          renderReturn();
+        });
+        box.appendChild(button);
+      }
+    }
+
+    function renderReturn() {
+      const viewer = document.getElementById("returnViewer");
+      const value = activeReturn === "parsed_raw_output"
+        ? state.parsed_raw_output
+        : (state.outbox || {})[activeReturn];
+      const text = asText(value);
+      viewer.classList.toggle("empty", !text);
+      viewer.textContent = text || "当前团还没有生成这个返回文件。";
+    }
+
+    async function load() {
+      state = await api("/api/prompt-inspector");
+      document.getElementById("campaignLine").textContent = `当前跑团：${state.campaign_id}`;
+      renderFiles();
+      renderReturnTabs();
+      renderReturn();
+    }
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      }[char]));
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", load);
+    document.getElementById("englishBtn").addEventListener("click", () => {
+      activeLanguage = "en";
+      renderSelectedFile();
+    });
+    document.getElementById("chineseBtn").addEventListener("click", () => {
+      activeLanguage = "cn";
+      renderSelectedFile();
+    });
+    document.getElementById("searchBtn").addEventListener("click", renderFiles);
+    document.getElementById("search").addEventListener("input", renderFiles);
+    load().catch((error) => {
+      document.getElementById("returnViewer").textContent = error.message;
+    });
+  </script>
+</body>
+</html>

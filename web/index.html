@@ -21,7 +21,11 @@
           <p>本地记忆、导演指令和正文回写的统一操作台</p>
         </div>
       </div>
-      <div></div>
+      <nav class="campaignBar topCampaignBar">
+        <button class="selectBtn" id="storySelectBtn" type="button">选择跑团 <span>▾</span></button>
+        <div class="displayPill wide" id="activeCampaignBtn"><span>故事</span><strong id="campaignName">-</strong></div>
+        <div class="displayPill wide" id="chapterBtn"><span>章节</span><strong id="chapterName"></strong></div>
+      </nav>
       <div class="navActions">
         <div class="statusChip" id="jobPill"><span></span><b id="jobText">待机</b></div>
         <button data-command="validate-memory" type="button">校验记忆</button>
@@ -58,20 +62,19 @@
           <div class="badges" id="characterBadges">
             <span>谨慎</span><span>斩斧</span><span>生态调查</span><span>新人猎人</span>
           </div>
-          <div class="attributeGrid" id="attributeGrid">
-            <div><b>斧</b><span>牵制</span></div>
-            <div><b>剑</b><span>爆发</span></div>
-            <div><b>迹</b><span>追踪</span></div>
-            <div><b>营</b><span>补给</span></div>
-            <div><b>捕</b><span>陷阱</span></div>
-            <div><b>退</b><span>保命</span></div>
+          <div class="attributeStar" id="attributeStar">
+            <img id="attributeStarImage" alt="六维属性六芒星 PNG">
+            <canvas id="attributeStarCanvas" class="attributeStarSource" width="640" height="640" aria-hidden="true"></canvas>
           </div>
           <div class="companionCard">
-            <img id="palicoImage" alt="伙伴头像 PNG">
-            <div>
-              <b id="palicoName">伙伴</b>
-              <span id="palicoMeta">同行伙伴</span>
+            <div class="companionLeft" id="companionAvatarWrap">
+              <img id="palicoImage" alt="伙伴头像 PNG">
+              <div>
+                <b id="palicoName">伙伴</b>
+                <span id="palicoMeta">同行伙伴</span>
+              </div>
             </div>
+            <button id="viewCompanionDataBtn" type="button">查看伙伴数据</button>
           </div>
         </section>
 
@@ -108,12 +111,6 @@
       </aside>
 
       <section class="centerColumn">
-        <nav class="campaignBar inWorkspace">
-          <button class="selectBtn" id="storySelectBtn" type="button">选择跑团 <span>▾</span></button>
-          <div class="displayPill wide" id="activeCampaignBtn"><span>故事</span><strong id="campaignName">-</strong></div>
-          <div class="displayPill wide" id="chapterBtn"><span>章节</span><strong id="chapterName"></strong></div>
-        </nav>
-
         <section class="panel logPanel">
           <div class="logHeader">
             <h2>跑团记录</h2>
@@ -189,12 +186,7 @@
             <button id="runTurnBtn" class="sendAction" type="button">发送行动</button>
           </div>
           <div class="quickBar">
-            <button id="prepareBtn" type="button">只生成输入</button>
-            <button data-command="send" type="button">发送到 ChatGPT</button>
-            <button data-command="capture" type="button">抓取回复</button>
-            <button data-command="ingest" type="button">解析写回</button>
-            <button data-command="run-rewrite" type="button">执行重写</button>
-            <button id="clearInputBtn" type="button">清空输入</button>
+            <!-- quickBar 按钮已迁移到 globalActionBar，保留 ID 兼容性 -->
           </div>
         </section>
       </section>
@@ -251,6 +243,25 @@
           <span id="galleryInspectorMeta">资料</span>
           <button id="useGalleryAssetBtn" type="button">引用到行动输入</button>
         </aside>
+      </div>
+    </div>
+  </div>
+  <div class="companionOverlay hidden" id="companionOverlay" aria-hidden="true">
+    <div class="companionDialog" role="dialog" aria-modal="true" aria-labelledby="companionDialogTitle">
+      <div class="companionDialogHeader">
+        <div>
+          <h2 id="companionDialogTitle">伙伴数据</h2>
+          <p id="companionDialogHint">当前跑团绑定的伙伴 / 副玩家资料。</p>
+        </div>
+        <button id="closeCompanionOverlay" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="companionDialogBody">
+        <img id="companionDialogImage" alt="伙伴头像 PNG">
+        <div class="companionDialogText">
+          <b id="companionDialogName">伙伴</b>
+          <span id="companionDialogMeta">同行伙伴</span>
+          <div id="companionDialogData" class="companionDataGrid"></div>
+        </div>
       </div>
     </div>
   </div>

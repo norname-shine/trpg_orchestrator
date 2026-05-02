@@ -61,6 +61,9 @@ These rules describe how the local frontend generates visual assets. They are ru
 ## Item And Clue Icon Rules
 
 - Item and clue icons must be generated from local memory rows, recent scene resources, equipment history, and confirmed writeback facts.
+- The same item in different states must remain one card/entity. Update the latest status in the detail text and entity metadata; do not create separate cards such as `well_box`, `glowing_well_box`, and `heated_well_box`.
+- Item semantic analysis must identify the physical object first, then its state. For example, `phone completely has no signal` is a `phone` device with a no-signal state, not a generic document or an item named `no_signal`.
+- Recurring item assets must use stable entity ids such as `well_box`, `phone`, `switch_axe`, and update metadata/details instead of changing asset identity every turn.
 - Split long resource strings into separate clauses before generating cards.
 - Do not show raw JSON objects in the UI.
 - Each card should have a short title, optional detail, and a type label.
@@ -84,4 +87,4 @@ These rules describe how the local frontend generates visual assets. They are ru
 ## Current Generator Version Note
 
 - Current frontend generator version: `ASSET_GENERATOR_VERSION = 9`.
-- Version 9 strengthens the Monster Hunter `palico` archetype so companion portraits visibly read as an 艾露猫: large cat ears, inner ears, cat nose, whiskers, goggles, and a small mantle.
+- Version 9 strengthens the Monster Hunter `palico` archetype so companion portraits visibly read as a palico: large cat ears, inner ears, cat nose, whiskers, goggles, and a small mantle.

@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import base64
@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import CAMPAIGNS_DIR, MEMORY_FILE_NAMES, OUTBOX_DIR, PROJECT_ROOT, PROMPTS_DIR
-from .encoding_utils import read_text_auto
+from .encoding_utils import read_runtime_text, read_text_auto
 from .json_utils import extract_json_object, read_json, write_json
 from .memory_compactor import build_compaction_report
 from .memory_store import MemoryStore
@@ -82,6 +82,8 @@ JOB = JobState()
 
 OUTBOX_SNAPSHOT_NAMES = (
     "last_player_action.txt",
+    "v4_director_input.md",
+    "chatgpt_input.md",
     "chatgpt_raw_output.md",
     "chatgpt_clean_output.md",
     "chatgpt_blocks.json",
@@ -130,8 +132,21 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/map-item-preview.html":
             self._send_file(STATIC_DIR / "map-item-preview.html", "text/html; charset=utf-8")
             return
+        if parsed.path == "/director-debug.html":
+            self._send_file(STATIC_DIR / "director-debug.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/writeback-review.html":
+            self._send_file(STATIC_DIR / "writeback-review.html", "text/html; charset=utf-8")
+            return
+        if parsed.path == "/prompt-inspector.html":
+            self._send_file(STATIC_DIR / "prompt-inspector.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self._json(status_payload())
+            return
+        if parsed.path == "/api/frontend-state":
+            query = parse_qs(parsed.query)
+            self._json(frontend_state_response(first_query(query, "campaign_id")))
             return
         if parsed.path == "/api/output":
             query = parse_qs(parsed.query)
@@ -150,6 +165,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/rules":
             query = parse_qs(parsed.query)
             self._json(rules_payload(first_query(query, "name"), first_query(query, "q")))
+            return
+        if parsed.path == "/api/prompt-inspector":
+            query = parse_qs(parsed.query)
+            self._json(prompt_inspector_payload(first_query(query, "campaign_id")))
             return
         if parsed.path == "/api/memory-report":
             query = parse_qs(parsed.query)
@@ -377,15 +396,40 @@ def asset_manifest_path(campaign_id: str) -> Path:
 def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
     path = asset_manifest_path(campaign_id)
     if not path.exists():
-        return {"assets": {}}
+        return {"campaign_id": campaign_id, "asset_seed": campaign_asset_seed(campaign_id), "assets": {}}
     try:
         data = read_json(path)
         if isinstance(data, dict):
+            data.setdefault("campaign_id", campaign_id)
+            data.setdefault("asset_seed", campaign_asset_seed(campaign_id))
             data.setdefault("assets", {})
             return data
     except Exception:
         pass
-    return {"assets": {}}
+    return {"campaign_id": campaign_id, "asset_seed": campaign_asset_seed(campaign_id), "assets": {}}
+
+
+def campaign_asset_seed(campaign_id: str) -> str:
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    profile_path = root / "campaign_profile.json"
+    if profile_path.exists():
+        try:
+            profile = read_json(profile_path)
+            if profile.get("asset_seed"):
+                return str(profile["asset_seed"])
+        except Exception:
+            pass
+    registry_path = CAMPAIGNS_DIR / "campaign_registry.json"
+    if registry_path.exists():
+        try:
+            registry = read_json(registry_path)
+            seed = registry.get("campaigns", {}).get(campaign_id, {}).get("asset_seed")
+            if seed:
+                return str(seed)
+        except Exception:
+            pass
+    import hashlib
+    return hashlib.sha256(f"trpg-assets:{campaign_id}".encode("utf-8")).hexdigest()[:16]
 
 
 def campaign_outbox_dir(campaign_id: str) -> Path:
@@ -415,11 +459,30 @@ def outbox_campaign_id(path: Path) -> str:
 def sync_global_outbox_to_campaign(campaign_id: str) -> Path:
     target = campaign_outbox_dir(campaign_id)
     target.mkdir(parents=True, exist_ok=True)
+    marker_mtime = max(
+        file_mtime(OUTBOX_DIR / "pressure_pack.json"),
+        file_mtime(OUTBOX_DIR / "state_writeback.json"),
+    )
     for name in OUTBOX_SNAPSHOT_NAMES:
         source = OUTBOX_DIR / name
         if source.exists():
+            if name in {"chatgpt_raw_output.md", "chatgpt_clean_output.md", "chatgpt_blocks.json"} and is_stale_public_output(source, marker_mtime):
+                continue
             shutil.copy2(source, target / name)
     return target
+
+
+def file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime if path.exists() else 0.0
+    except OSError:
+        return 0.0
+
+
+def is_stale_public_output(path: Path, marker_mtime: float) -> bool:
+    if not marker_mtime:
+        return False
+    return bool(file_mtime(path) and file_mtime(path) + 60 < marker_mtime)
 
 
 def outbox_latest_mtime(path: Path) -> float:
@@ -491,6 +554,7 @@ def asset_entry_payload(campaign_id: str, key: str, entry: dict[str, Any]) -> di
         "key": key,
         "exists": bool(rel_path and full.exists()),
         "url": f"/campaign-assets/{safe_segment(campaign_id)}/{url_path}" if rel_path else "",
+        "asset_seed": entry.get("asset_seed") or campaign_asset_seed(campaign_id),
         **entry,
     }
 
@@ -508,6 +572,687 @@ def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
         entries.append(asset_entry_payload(campaign_id, key, entry))
     entries.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
     return {"ok": True, "campaign_id": campaign_id, "assets": entries}
+
+
+def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:
+    store = MemoryStore()
+    registry = store.load_registry()
+    resolved = store.resolve_campaign_id(campaign_id or None)
+    campaigns = registry.get("campaigns", {})
+    current = campaigns.get(resolved, {})
+    state = campaign_state(resolved)
+    output = output_payload(resolved)
+    assets = asset_list(resolved).get("assets", [])
+    frontend = build_frontend_state(resolved, current, state, output, assets)
+    return {
+        "ok": True,
+        "project_root": str(PROJECT_ROOT),
+        "active_campaign": resolved,
+        "campaigns": campaigns,
+        "campaign_list": campaign_list(registry),
+        "campaign_state": state,
+        "chatgpt_project": current.get("chatgpt_project_name", ""),
+        "chatgpt_conversation": current.get("chatgpt_conversation_name", ""),
+        "job": JOB.snapshot(),
+        "output": output,
+        "assets": assets,
+        "frontend_state": frontend,
+    }
+
+
+def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
+    recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
+    scene = recent.get("current_scene", {}) if isinstance(recent.get("current_scene"), dict) else {}
+    profile = {
+        "id": campaign_id,
+        "title": state.get("title") or meta.get("name") or campaign_id,
+        "asset_seed": campaign_asset_seed(campaign_id),
+        "genre": state.get("genre", ""),
+        "tone": state.get("tone", ""),
+        "chapter": campaign_chapter(campaign_id),
+        "status": meta.get("status", ""),
+        "binding": {
+            "project_name": meta.get("chatgpt_project_name", ""),
+            "conversation_name": meta.get("chatgpt_conversation_name", ""),
+        },
+        "scene": scene,
+    }
+    gallery = frontend_gallery(campaign_id, state, output, assets)
+    return {
+        "schema": "trpg_orchestrator.frontend_state.v1",
+        "asset_seed": profile["asset_seed"],
+        "campaign": profile,
+        "character_card": frontend_character_card(campaign_id, state),
+        "companion_card": frontend_companion_card(state),
+        "map_panel": frontend_map_panel(campaign_id, scene, output, assets),
+        "quests": frontend_quests(state),
+        "inventory": frontend_inventory(state),
+        "gallery": gallery,
+        "story_log": {
+            "campaign_id": output.get("campaign_id", campaign_id),
+            "source": output.get("source", ""),
+            "blocks": output.get("parsed", {}).get("blocks", []) if isinstance(output.get("parsed"), dict) else [],
+            "summary": output.get("parsed", {}).get("summary", "") if isinstance(output.get("parsed"), dict) else "",
+            "record_tabs": ["story", "summary", "logs"],
+            "mode_tabs": ["immersive", "story", "logs"],
+            "admin_pages": {
+                "director": "/director-debug.html",
+                "writeback": "/writeback-review.html",
+            },
+        },
+        "quick_actions": [
+            {"id": "continue", "label": "继续", "action": "继续"},
+            {"id": "observe", "label": "观察周围", "action": "观察周围"},
+            {"id": "talk", "label": "与 NPC 对话", "action": "与 NPC 对话"},
+            {"id": "inspect_item", "label": "检查物品", "action": "检查物品"},
+            {"id": "recap", "label": "复盘", "action": "复盘"},
+        ],
+    }
+
+
+def campaign_chapter(campaign_id: str) -> str:
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    profile = read_json(root / "campaign_profile.json") if (root / "campaign_profile.json").exists() else {}
+    recent = read_json(root / "recent_context.json") if (root / "recent_context.json").exists() else {}
+    scene = recent.get("current_scene", {}) if isinstance(recent.get("current_scene"), dict) else {}
+    return profile.get("chapter", "") or scene.get("chapter", "") or recent.get("chapter", "") or scene.get("time", "")
+
+
+def frontend_character_card(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
+    player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
+    provided = first_dict(player.get("character_card"), prompt.get("character_card"))
+    identity = first_dict(provided.get("identity"), player.get("confirmed_identity"), prompt.get("confirmed_identity"))
+    recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
+    scene = recent.get("current_scene", {}) if isinstance(recent.get("current_scene"), dict) else {}
+    fallback = character_fallback_profile(campaign_id, state, scene)
+    name = str(identity.get("name") or inferred_player_name(player, prompt) or state.get("title") or "玩家角色")
+    identity_text = " / ".join([str(x) for x in (identity.get("ancestry"), identity.get("class_or_role") or identity.get("role"), identity.get("level_or_stage")) if x]) or fallback["identity"]
+    return {
+        "name": name,
+        "identity": identity_text,
+        "portrait": {
+            "asset_key": f"portrait:{safe_segment(name)}",
+            "type": "player_full_body_pixel",
+            "quality": "high",
+        },
+        "progress": normalize_frontend_progress(provided.get("progression"), fallback["progress"]),
+        "core_stats": normalize_frontend_core_stats(provided.get("vitals"), fallback["core_stats"]),
+        "tags": normalize_frontend_tags(provided.get("conditions"), fallback["tags"]),
+        "attributes": normalize_frontend_attributes(provided.get("attributes"), fallback["attributes"]),
+    }
+
+
+def frontend_companion_card(state: dict[str, Any]) -> dict[str, Any]:
+    prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
+    player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
+    provided = first_dict(player.get("character_card"), prompt.get("character_card"))
+    identity = first_dict(provided.get("identity"), player.get("confirmed_identity"), prompt.get("confirmed_identity"))
+    source = first_dict(provided.get("companion"), prompt.get("companion_card"))
+    if not source and isinstance(identity.get("companion"), dict):
+        source = identity.get("companion")
+    if not source:
+        return {}
+    name = str(source.get("name") or "").strip()
+    if not name:
+        return {}
+    archetype = normalize_companion_archetype(str(source.get("archetype") or source.get("kind") or source.get("species") or source.get("type") or source.get("name") or "companion"))
+    identity_text = str(source.get("identity") or source.get("class") or source.get("species") or source.get("kind") or "伙伴")
+    return {
+        "name": name,
+        "identity": identity_text,
+        "archetype": archetype,
+        "portrait": {"asset_key": f"companion:{safe_segment(name)}", "type": "companion_portrait_pixel"},
+        "meta": source,
+    }
+
+
+def frontend_map_panel(campaign_id: str, scene: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
+    pressure = output.get("pressure_pack", {}) if isinstance(output.get("pressure_pack"), dict) else {}
+    route = pressure.get("map_route", {}) if isinstance(pressure.get("map_route"), dict) else {}
+    latest = next((item for item in assets if item.get("kind") == "map" or str(item.get("kind", "")).startswith("gallery_map")), {})
+    return {
+        "latest_map": {
+            "asset_key": latest.get("key") or f"map:{safe_segment(scene.get('location') or campaign_id)}",
+            "url": latest.get("url", ""),
+            "source": "director_ascii_grid" if scene.get("ascii_grid") else "cached_or_generated",
+            "ascii_grid": scene.get("ascii_grid", ""),
+            "generated_at_turn": scene.get("turn_index", ""),
+            "title": route.get("title") or scene.get("location") or "当前区域地图",
+            "map_route": route,
+            "visual_assets": pressure.get("visual_assets", []),
+        },
+        "keep_previous": True,
+    }
+
+
+def frontend_quests(state: dict[str, Any]) -> list[dict[str, Any]]:
+    quests = state.get("quests", {}) if isinstance(state.get("quests"), dict) else {}
+    rows = []
+    for index, row in enumerate(normalize_memory_rows(quests.get("quest_updates")) + normalize_memory_rows(quests.get("facts"))):
+        rows.append({"id": f"quest_{index + 1}", "short_name": concise_text(row["title"], 18), "detail": row["detail"], "status": "active", "priority": "main"})
+    return rows[:12]
+
+
+def frontend_inventory(state: dict[str, Any]) -> list[dict[str, Any]]:
+    equipment = state.get("equipment", {}) if isinstance(state.get("equipment"), dict) else {}
+    recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
+    source = []
+    items = equipment.get("items") if isinstance(equipment.get("items"), dict) else {}
+    for item_id, item in items.items():
+        if not isinstance(item, dict):
+            continue
+        confirmed = item.get("confirmed") if isinstance(item.get("confirmed"), dict) else {}
+        uncertain = item.get("uncertain") if isinstance(item.get("uncertain"), list) else []
+        detail = "；".join(str(x) for x in [
+            confirmed.get("observed_reaction"),
+            confirmed.get("appearance"),
+            confirmed.get("current_status"),
+            *uncertain[:2],
+        ] if x)
+        source.append({
+            "title": str(item.get("display_name") or item.get("name") or item_id),
+            "detail": detail,
+            "tag": str(item.get("category") or "物品"),
+        })
+    source.extend(normalize_memory_rows(equipment.get("equipment_updates")) + normalize_memory_rows(equipment.get("facts")))
+    scene = recent.get("short_term_state", {}) if isinstance(recent.get("short_term_state"), dict) else {}
+    for key in ("resources",):
+        if scene.get(key):
+            source.extend(split_clause_rows(scene.get(key), "物品"))
+    keywords = re.compile(r"手机|信号|拨号|屏幕|电话|斧|剑|药|瓶|盒|匣|钥匙|书|信|照片|骨|素材|装备|物件|货车|泥|痕|油灯|登记册|任务板|缰绳|行囊|鳞|补给|样本|碎片")
+    merged: dict[str, dict[str, Any]] = {}
+    for item in [row for row in source if keywords.search(row["title"] + row["detail"]) and is_inventory_candidate(row)]:
+        analysis = analyze_inventory_item(item["title"], item["detail"])
+        if analysis["category"] == "misc" and analysis["role"] == "record":
+            continue
+        entity_id = stable_inventory_entity_id(item["title"], item["detail"], analysis)
+        detail = item["detail"] or item["title"]
+        if entity_id in merged:
+            merged[entity_id]["detail"] = merge_detail_text(merged[entity_id]["detail"], detail)
+            merged[entity_id]["raw_name"] = merge_detail_text(merged[entity_id]["raw_name"], item["title"])
+            continue
+        merged[entity_id] = {
+            "id": entity_id,
+            "raw_name": item["title"],
+            "short_name": analysis["short_name"],
+            "category": analysis["category"],
+            "role": analysis["role"],
+            "detail": detail,
+            "visual_prompt": analysis["visual_prompt"],
+            "asset_key": f"item:{safe_segment(entity_id)}",
+        }
+    return list(merged.values())[:16]
+
+
+def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
+    filters = gallery_filters_for_campaign(campaign_id, state)
+    rows = []
+    scene = state.get("recent", {}).get("current_scene", {}) if isinstance(state.get("recent"), dict) else {}
+    protected = protected_actor_names(state)
+    active_npc_names = [str(name) for name in scene.get("active_npcs", []) if str(name).strip()] if isinstance(scene.get("active_npcs"), list) else []
+    active_npc_ids = {stable_actor_entity_id(name) for name in active_npc_names}
+    npc_row_by_id: dict[str, dict[str, Any]] = {}
+    inventory = frontend_inventory(state)
+    inventory_titles = {normalized_name(item.get("short_name")) for item in inventory}
+    inventory_ids = {str(item.get("id") or "") for item in inventory}
+    inventory_row_by_id = {str(item.get("id") or ""): item for item in inventory}
+    for name in active_npc_names:
+        if normalized_name(name) in protected:
+            continue
+        actor_id = stable_actor_entity_id(name)
+        row = {"kind": "npc", "key": f"npc:{actor_id}", "title": name, "meta": "NPC", "detail": "当前场景角色"}
+        npc_row_by_id[actor_id] = row
+        rows.append(row)
+    for item in inventory[:8]:
+        rows.append({"kind": "item", "key": item["asset_key"], "title": item["short_name"], "meta": item["category"], "detail": item["detail"], "visual_prompt": item.get("visual_prompt", {})})
+    pressure = output.get("pressure_pack", {}) if isinstance(output.get("pressure_pack"), dict) else {}
+    for index, asset in enumerate(pressure.get("visual_assets", []) if isinstance(pressure.get("visual_assets"), list) else []):
+        kind = normalize_frontend_gallery_kind(asset.get("kind"))
+        title = str(asset.get("title") or asset.get("id") or kind)
+        detail = str(asset.get("detail") or asset.get("source_memory") or "")
+        if kind == "npc":
+            actor_id = stable_actor_entity_id(title)
+            if actor_id in npc_row_by_id:
+                npc_row_by_id[actor_id]["detail"] = merge_detail_text(npc_row_by_id[actor_id].get("detail", ""), detail)
+                npc_row_by_id[actor_id]["meta"] = asset.get("certainty") or npc_row_by_id[actor_id].get("meta") or "NPC"
+                continue
+        row = {"kind": kind, "key": f"v4:{kind}:{asset.get('id') or index}", "title": title, "meta": asset.get("certainty") or kind, "detail": detail}
+        if kind in {"item", "clue", "document", "anomaly"}:
+            analysis = analyze_inventory_item(title, detail)
+            entity_id = stable_inventory_entity_id(title, detail, analysis)
+            if entity_id in inventory_row_by_id:
+                inventory_row_by_id[entity_id]["detail"] = merge_detail_text(inventory_row_by_id[entity_id].get("detail", ""), detail)
+                continue
+            row["kind"] = "item" if kind in {"clue", "document", "anomaly"} else kind
+            row["meta"] = analysis["category"] if analysis["category"] != "misc" else row["meta"]
+            row["visual_prompt"] = analysis["visual_prompt"]
+        rows.append(row)
+    for asset in assets:
+        kind = normalize_frontend_gallery_kind(asset.get("kind"))
+        metadata = asset.get("metadata", {}) if isinstance(asset.get("metadata"), dict) else {}
+        title = metadata.get("title") or readable_asset_name(asset.get("key", ""), kind)
+        if not is_gallery_cache_asset(asset, protected, inventory_titles, inventory_ids, active_npc_ids, kind, title):
+            continue
+        rows.append({"kind": kind, "key": asset.get("key", ""), "title": title, "meta": metadata.get("meta") or kind, "detail": metadata.get("detail") or "", "cached_url": asset.get("url", ""), "visual_prompt": metadata.get("visual_prompt") or {}})
+    return {"filters": filters, "assets": dedupe_frontend_assets(rows)[:32]}
+
+
+def first_dict(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def normalize_companion_archetype(value: str) -> str:
+    text = value.lower()
+    if "palico" in text or "艾露" in text or "艾鲁" in text or "浩文" in text:
+        return "palico"
+    if "servant" in text or "从者" in text or "英灵" in text or "assassin" in text:
+        return "servant"
+    return text or "companion"
+
+
+def normalized_name(value: Any) -> str:
+    return re.sub(r"[\s_：:「」'\"]+", "", str(value or "").lower())
+
+
+def stable_actor_entity_id(name: Any) -> str:
+    text = str(name or "")
+    text = re.sub(r"[（(].*?[）)]", "", text)
+    text = re.sub(r"\s+", "", text)
+    if "许守井" in text:
+        return "xu_shoujing"
+    if "陈航" in text:
+        return "chen_hang"
+    if re.search(r"assassin|从者|英灵", text, re.I):
+        return "assassin"
+    if re.search(r"lee", text, re.I):
+        return "lee"
+    return safe_segment(normalized_name(text) or "actor")
+
+
+def protected_actor_names(state: dict[str, Any]) -> set[str]:
+    prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
+    player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
+    provided = first_dict(player.get("character_card"), prompt.get("character_card"))
+    identity = first_dict(provided.get("identity"), player.get("confirmed_identity"), prompt.get("confirmed_identity"))
+    names = {identity.get("name"), prompt.get("confirmed_identity", {}).get("name") if isinstance(prompt.get("confirmed_identity"), dict) else ""}
+    companion = first_dict(provided.get("companion"), prompt.get("companion_card"))
+    names.add(companion.get("name"))
+    return {normalized_name(name) for name in names if name}
+
+
+def is_inventory_candidate(row: dict[str, str]) -> bool:
+    title = str(row.get("title", "")).strip()
+    detail = str(row.get("detail", "")).strip()
+    if not title or re.fullmatch(r"\d+[.、]?", title):
+        return False
+    if re.match(r"^\d+[.、]\s*", title):
+        return False
+    if title.endswith("：") or title.endswith(":"):
+        return False
+    if title in {"主要经历", "当前重要物件"}:
+        return False
+    text = f"{title} {detail}"
+    if re.search(r"接触|完成|参与|调查|学会|发现|确认|升级|封锁", title) and not re.search(r"手机|信号|拨号|屏幕|电话|斧|剑|药|瓶|盒|匣|钥匙|书|信|照片|骨|素材|装备|物件|油灯|登记册|任务板|缰绳|行囊|鳞|补给|样本|碎片", title):
+        return False
+    return bool(re.search(r"手机|信号|拨号|屏幕|电话|斧|剑|药|瓶|盒|匣|钥匙|书|信|照片|骨|素材|装备|物件|油灯|登记册|任务板|缰绳|行囊|鳞|补给|样本|碎片", text))
+
+
+def is_gallery_cache_asset(asset: dict[str, Any], protected: set[str], inventory_titles: set[str] | None = None, inventory_ids: set[str] | None = None, active_npc_ids: set[str] | None = None, normalized_kind: str = "", title: str = "") -> bool:
+    kind = str(asset.get("kind", ""))
+    key = str(asset.get("key", ""))
+    metadata = asset.get("metadata", {}) if isinstance(asset.get("metadata"), dict) else {}
+    title = str(title or metadata.get("title") or readable_asset_name(key, kind))
+    if normalized_name(title) in protected or normalized_name(metadata.get("object_id")) in protected:
+        return False
+    if kind in {"portrait", "player_portrait", "companion", "companion_portrait", "npc_portrait"}:
+        return False
+    if not (kind == "map" or kind.startswith("gallery_")):
+        return False
+    if normalized_kind == "npc" and active_npc_ids is not None:
+        actor_id = stable_actor_entity_id(title or metadata.get("title") or metadata.get("object_id") or key)
+        if actor_id in active_npc_ids and normalized_name(title) not in {normalized_name("许守井"), normalized_name("陈航")}:
+            return False
+    if normalized_kind == "item":
+        detail = str(metadata.get("detail") or "")
+        analysis = analyze_inventory_item(title, detail)
+        entity_id = stable_inventory_entity_id(title, detail, analysis)
+        if inventory_ids is not None and entity_id not in inventory_ids:
+            return False
+        if inventory_titles is not None and normalized_name(title) not in inventory_titles:
+            return False
+    if re.fullmatch(r"\d+[.、]?", title.strip()):
+        return False
+    if str(metadata.get("meta", "")).lower() in {"misc", "record"}:
+        return False
+    return True
+
+
+def inferred_player_name(player: dict[str, Any], prompt: dict[str, Any]) -> str:
+    identity = first_dict(player.get("confirmed_identity"), prompt.get("confirmed_identity"))
+    if identity.get("name"):
+        return str(identity.get("name"))
+    facts = " ".join(str(x) for x in player.get("facts", []) if isinstance(player.get("facts", []), list))
+    if "Lee" in facts:
+        return "Lee"
+    return ""
+
+
+def character_fallback_profile(campaign_id: str, state: dict[str, Any], scene: dict[str, Any]) -> dict[str, Any]:
+    text = f"{campaign_id} {state.get('title', '')} {state.get('genre', '')} {state.get('tone', '')}".lower()
+    pressured = bool(scene.get("immediate_pressure"))
+    if "coc" in text or "克苏鲁" in text or "调查" in text:
+        return {
+            "identity": "COC 调查员",
+            "progress": {"label": "调查进展", "text": "线索初开，风险升高" if pressured else "案件导入，保持观察", "percent": 38 if pressured else 24},
+            "core_stats": [
+                {"key": "health", "label": "生命值", "current": 84, "max": 100, "tone": "red", "text": "未受伤"},
+                {"key": "sanity", "label": "理智值", "current": 68 if pressured else 78, "max": 100, "tone": "blue", "text": "轻微动摇" if pressured else "稳定"},
+                {"key": "stamina", "label": "体力值", "current": 70, "max": 100, "tone": "green", "text": "潮湿疲惫"},
+            ],
+            "tags": ["谨慎", "COC检定", "潮湿", "线索压力" if pressured else "案件导入"],
+            "attributes": [{"key": "observe", "label": "侦", "text": "观察"}, {"key": "library", "label": "图", "text": "资料"}, {"key": "talk", "label": "说", "text": "话术"}, {"key": "stealth", "label": "潜", "text": "隐蔽"}, {"key": "first_aid", "label": "医", "text": "急救"}, {"key": "sanity", "label": "稳", "text": "理智"}],
+        }
+    if "dnd" in text or "奇幻" in text or "冒险" in text:
+        return {
+            "identity": "DND 队伍代表",
+            "progress": {"label": "冒险进展", "text": "任务展开，局势紧张" if pressured else "第一章，接受委托", "percent": 34 if pressured else 22},
+            "core_stats": [
+                {"key": "hp", "label": "生命值", "current": 86, "max": 100, "tone": "red", "text": "可战斗"},
+                {"key": "focus", "label": "专注值", "current": 74, "max": 100, "tone": "blue", "text": "警戒"},
+                {"key": "stamina", "label": "体力值", "current": 80, "max": 100, "tone": "green", "text": "整备中"},
+            ],
+            "tags": ["警戒", "D20检定", "整备", "任务压力" if pressured else "酒馆待命"],
+            "attributes": [{"key": "str", "label": "力", "text": "近战"}, {"key": "dex", "label": "敏", "text": "闪避"}, {"key": "con", "label": "体", "text": "耐久"}, {"key": "int", "label": "智", "text": "知识"}, {"key": "wis", "label": "感", "text": "察觉"}, {"key": "cha", "label": "魅", "text": "交涉"}],
+        }
+    if "fate" in text or "圣杯" in text or "御主" in text or "从者" in text:
+        return {
+            "identity": "普通高中生 / 新任御主",
+            "progress": {"label": "同步状态", "text": "令咒完整，黑痕扩散" if pressured else "契约未稳，异常同步", "percent": 45 if pressured else 32},
+            "core_stats": [
+                {"key": "health", "label": "生命值", "current": 72, "max": 100, "tone": "red", "text": "惊惧疲惫" if pressured else "可行动"},
+                {"key": "focus", "label": "专注值", "current": 54, "max": 100, "tone": "blue", "text": "受干扰"},
+                {"key": "stamina", "label": "体力值", "current": 58, "max": 100, "tone": "green", "text": "奔逃后消耗"},
+            ],
+            "tags": ["怕死", "令咒完整", "异常同步", "黑痕压力" if pressured else "契约未稳"],
+            "attributes": [{"key": "command_spell", "label": "令", "text": "令咒"}, {"key": "leyline", "label": "脉", "text": "灵脉"}, {"key": "escape", "label": "逃", "text": "撤退"}, {"key": "observe", "label": "察", "text": "观察"}, {"key": "box", "label": "匣", "text": "井匣"}, {"key": "contract", "label": "契", "text": "从者"}],
+        }
+    return {
+        "identity": "猎人 / 生态调查",
+        "progress": {"label": "成长", "text": "新人阶段，稳步成长", "percent": 42},
+        "core_stats": [
+            {"key": "health", "label": "生命值", "current": 82, "max": 100, "tone": "red", "text": "状态良好"},
+            {"key": "focus", "label": "专注值", "current": 78, "max": 100, "tone": "blue", "text": "稳定"},
+            {"key": "stamina", "label": "体力值", "current": 72, "max": 100, "tone": "green", "text": "有消耗"},
+        ],
+        "tags": ["谨慎", "叙事判定", "生态调查", "任务压力" if pressured else "整备中"],
+        "attributes": [{"key": "axe", "label": "斧", "text": "牵制"}, {"key": "sword", "label": "剑", "text": "爆发"}, {"key": "track", "label": "迹", "text": "追踪"}, {"key": "camp", "label": "营", "text": "补给"}, {"key": "trap", "label": "捕", "text": "陷阱"}, {"key": "retreat", "label": "退", "text": "保命"}],
+    }
+
+
+def normalize_frontend_progress(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    current = number_or_none(source.get("current"))
+    max_value = number_or_none(source.get("max"))
+    if current is not None and max_value and max_value > 0:
+        return {"label": source.get("label", fallback.get("label", "进展")), "text": f"{current:g} / {max_value:g}", "percent": max(0, min(100, current / max_value * 100))}
+    return {"label": source.get("label") or fallback.get("label", "进展"), "text": source.get("text") or fallback.get("text", ""), "percent": source.get("percent") if isinstance(source.get("percent"), (int, float)) else fallback.get("percent", 0)}
+
+
+def normalize_frontend_core_stats(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = value if isinstance(value, list) and value else fallback
+    normalized = []
+    for index, row in enumerate(rows[:3]):
+        if not isinstance(row, dict):
+            continue
+        current = number_or_none(row.get("current"))
+        max_value = number_or_none(row.get("max"))
+        percent = number_or_none(row.get("percent"))
+        if current is None:
+            current = percent if percent is not None else 66
+        if not max_value:
+            max_value = 100
+        normalized.append({"key": row.get("key") or f"core_{index}", "label": row.get("label") or "状态", "current": current, "max": max_value, "text": row.get("state") or row.get("text") or "", "tone": row.get("tone") or ["red", "blue", "green"][index % 3]})
+    return normalized
+
+
+def normalize_frontend_tags(value: Any, fallback: list[str]) -> list[str]:
+    rows = value if isinstance(value, list) and value else fallback
+    labels = []
+    for item in rows:
+        label = item if isinstance(item, str) else item.get("label") or item.get("name") if isinstance(item, dict) else ""
+        if label:
+            labels.append(str(label))
+    return labels[:8]
+
+
+def normalize_frontend_attributes(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = value if isinstance(value, list) and value else fallback
+    attrs = []
+    for index, item in enumerate(rows[:6]):
+        if isinstance(item, str):
+            attrs.append({"key": f"attr_{index}", "label": item[:1], "text": item})
+        elif isinstance(item, dict):
+            attrs.append({"key": item.get("key") or f"attr_{index}", "label": item.get("short") or item.get("label") or item.get("key") or "项", "text": item.get("text") or item.get("state") or item.get("rank") or str(item.get("value", ""))})
+    return attrs
+
+
+def number_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_memory_rows(rows: Any) -> list[dict[str, str]]:
+    values = rows if isinstance(rows, list) else [rows] if rows else []
+    output = []
+    for row in values:
+        if isinstance(row, str):
+            output.append(split_fact_text(row))
+        elif isinstance(row, dict):
+            text = row.get("value") or row.get("summary") or row.get("title") or row.get("name") or row.get("text") or row.get("description") or row.get("id") or ""
+            parsed = split_fact_text(str(text))
+            parsed["tag"] = str(row.get("kind") or row.get("type") or row.get("field") or parsed.get("tag") or "记录")
+            output.append(parsed)
+    return [row for row in output if row.get("title")]
+
+
+def split_fact_text(text: str) -> dict[str, str]:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return {"title": "", "detail": "", "tag": "记录"}
+    parts = [part.strip() for part in re.split(r"[；;。]", clean) if part.strip()]
+    title = parts[0][:42] if parts else clean[:42]
+    return {"title": title, "detail": "；".join(parts[1:])[:160], "tag": "记录"}
+
+
+def split_clause_rows(value: Any, tag: str = "记录") -> list[dict[str, str]]:
+    text = value if isinstance(value, str) else "；".join(str(x) for x in value) if isinstance(value, list) else ""
+    rows = []
+    for part in re.split(r"[；;。]", text):
+        row = split_fact_text(part)
+        if row.get("title"):
+            row["tag"] = tag
+            rows.append(row)
+    return rows
+
+
+def analyze_inventory_item(title: str, detail: str = "") -> dict[str, Any]:
+    text = f"{title} {detail}"
+    category = "misc"
+    role = "record"
+    visual_type = "satchel"
+    material = ""
+    silhouette = ""
+    if re.search(r"手机|电话|信号|拨号|屏幕", text):
+        category, role, visual_type = "device", "communication_or_clue", "phone"
+        material = "glass_and_plastic"
+        silhouette = "smartphone"
+    elif re.search(r"斩斧|switch\s*axe", text, re.I):
+        category, role, visual_type = "weapon", "equipment", "switch_axe"
+        material = "bone_and_metal"
+        silhouette = "long_transforming_axe_sword"
+    elif re.search(r"斧|剑|弓|枪|武器|刀", text):
+        category, role, visual_type = "weapon", "equipment", "weapon"
+        material = "metal_or_bone"
+        silhouette = "weapon"
+    elif re.search(r"药|瓶|补给|绷带|食物", text):
+        category, role, visual_type = "supply", "resource", "bottle"
+        material = "glass_or_wood_crate"
+        silhouette = "supply_container"
+    elif re.search(r"信|照片|书|文件|登记|地图|记录", text):
+        category, role, visual_type = "document", "clue", "paper"
+        material = "paper"
+        silhouette = "document"
+    elif re.search(r"井匣|金属盒|盒|匣", text):
+        category, role, visual_type = "ritual_tool", "clue", "sealed_relic_box"
+        material = "dark_metal"
+        silhouette = "sealed_square_box"
+    elif re.search(r"骨|符|匣|盒|钥匙|仪式|占卜", text):
+        category, role, visual_type = "ritual_tool", "clue", "ritual_bone"
+        material = "bone_or_talisman"
+        silhouette = "ritual_object"
+    elif re.search(r"泥甲|泥壳|甲片", text):
+        category, role, visual_type = "material", "loot_or_trace", "mud_armor_fragment"
+        material = "mud_shell"
+        silhouette = "broken_armor_fragment"
+    elif re.search(r"鳞|羽|素材|碎片|样本|痕", text):
+        category, role, visual_type = "material", "loot_or_trace", "material"
+        material = "organic_material"
+        silhouette = "fragment"
+    return {
+        "short_name": shorten_item_name(title),
+        "category": category,
+        "role": role,
+        "visual_prompt": {
+            "type": visual_type,
+            "category": category,
+            "role": role,
+            "material": material,
+            "silhouette": silhouette,
+            "source_text": concise_text(text, 120),
+        },
+    }
+
+
+def stable_inventory_entity_id(title: str, detail: str, analysis: dict[str, Any]) -> str:
+    text = f"{title} {detail}"
+    if re.search(r"井匣|金属盒|盒面|符纹|盒子", text):
+        return "well_box"
+    if re.search(r"手机|电话|信号|拨号|屏幕", text):
+        return "phone"
+    if re.search(r"骨制斩斧|骨斩斧|斩斧", text):
+        return "switch_axe"
+    if re.search(r"旧红伞|红伞", text):
+        return "red_umbrella"
+    if re.search(r"药货箱", text):
+        return "medicine_crate"
+    return safe_segment(analysis.get("short_name") or title or "item")
+
+
+def merge_detail_text(current: str, new: str, limit: int = 180) -> str:
+    parts = []
+    seen = set()
+    for value in re.split(r"[；;。]\s*", f"{current}；{new}"):
+        item = value.strip()
+        if not item:
+            continue
+        key = normalized_name(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(item)
+    return concise_text("；".join(parts), limit)
+
+
+def shorten_item_name(name: str) -> str:
+    text = re.sub(r"[《》「」\"']", "", str(name or "")).strip()
+    replacements = [("蛇身骨质占卜", "骨占卜"), ("骨制斩斧", "骨斩斧"), ("大怪鸟碎羽", "碎羽"), ("金属盒", "井匣"), ("旧红伞", "红伞")]
+    for source, target in replacements:
+        if source in text:
+            return target
+    if re.search(r"手机|电话|信号|拨号|屏幕", text):
+        return "手机"
+    if re.search(r"井匣|盒面|符纹|盒子|金属盒", text):
+        return "井匣"
+    text = re.sub(r"(当前重要物件|主要经历|装备|物品|线索|记录)[:：]?", "", text).strip()
+    if "药货箱" in text:
+        return "药货箱"
+    if "药油" in text:
+        return "药油"
+    if "防泥片" in text:
+        return "防泥片"
+    if len(text) <= 6:
+        return text or "物品"
+    for token in re.split(r"[、,，/ ]+", text):
+        token = token.strip()
+        if 1 < len(token) <= 6:
+            return token
+    return text[:6]
+
+
+def gallery_filters_for_campaign(campaign_id: str, state: dict[str, Any]) -> list[dict[str, str]]:
+    text = f"{campaign_id} {state.get('genre', '')} {state.get('title', '')}".lower()
+    if "fate" in text or "圣杯" in text:
+        rows = [("all", "全部"), ("servant", "从者"), ("master", "御主"), ("npc", "NPC"), ("scene", "场景"), ("item", "物品")]
+    elif "coc" in text or "克苏鲁" in text:
+        rows = [("all", "全部"), ("clue", "线索"), ("npc", "NPC"), ("scene", "地点"), ("document", "文献"), ("anomaly", "异常")]
+    elif "dnd" in text:
+        rows = [("all", "全部"), ("character", "角色"), ("monster", "怪物"), ("scene", "地点"), ("item", "装备"), ("quest", "任务")]
+    else:
+        rows = [("all", "全部"), ("monster", "怪物"), ("npc", "NPC"), ("scene", "场景"), ("item", "物品")]
+    return [{"key": key, "label": label} for key, label in rows]
+
+
+def normalize_frontend_gallery_kind(kind: Any) -> str:
+    value = str(kind or "").lower()
+    if "servant" in value or "从者" in value:
+        return "servant"
+    if "master" in value or "御主" in value:
+        return "master"
+    if "document" in value or "文献" in value:
+        return "document"
+    if "clue" in value or "线索" in value:
+        return "clue"
+    if "anomaly" in value or "异常" in value:
+        return "anomaly"
+    if "map" in value or "scene" in value or "location" in value:
+        return "scene"
+    if "npc" in value or "portrait" in value:
+        return "npc"
+    if "monster" in value or "ecology" in value:
+        return "monster"
+    return "item"
+
+
+def readable_asset_name(key: str, kind: str) -> str:
+    text = re.sub(r"^[^:]+:", "", str(key or kind or "asset"))
+    text = re.sub(r":v\d+$", "", text).replace("_", " ").strip()
+    return concise_text(text or kind, 18)
+
+
+def dedupe_frontend_assets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    output = []
+    for row in rows:
+        key = f"{row.get('kind')}:{normalized_name(row.get('title'))}" if row.get("title") else str(row.get("key") or row.get("kind"))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
+
+
+def concise_text(value: Any, limit: int = 42) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:limit] + ("..." if len(text) > limit else "")
+
 def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
     campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
     key = str(payload.get("key") or "").strip()
@@ -527,10 +1272,13 @@ def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
     target.write_bytes(raw)
 
     manifest = load_asset_manifest(campaign_id)
+    manifest.setdefault("campaign_id", campaign_id)
+    manifest.setdefault("asset_seed", campaign_asset_seed(campaign_id))
     manifest.setdefault("assets", {})[key] = {
         "path": rel_path.as_posix(),
         "kind": str(payload.get("kind") or subdir),
         "seed": str(payload.get("seed") or key),
+        "asset_seed": str(payload.get("asset_seed") or campaign_asset_seed(campaign_id)),
         "style": str(payload.get("style") or "canvas_pixel"),
         "generator_version": int(payload.get("generator_version") or 1),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -645,7 +1393,9 @@ def ai_mode_options() -> list[dict[str, str]]:
 
 def default_rule_bundle() -> dict[str, Any]:
     categories = [
-        {"id": "image", "title": "\u751f\u56fe\u89c4\u5219", "files": ["canvas_asset_generation_rules.md", "chatgpt_image_rules.md"]},
+        {"id": "architecture", "title": "\u7cfb\u7edf\u67b6\u6784\u89c4\u5219", "files": ["model_layer_contract_rules.md", "codex_system_architecture_rules.md"]},
+        {"id": "image", "title": "\u751f\u56fe\u89c4\u5219", "files": ["chatgpt_image_rules.md"]},
+        {"id": "codex_visual", "title": "Codex \u89c6\u89c9\u8d44\u4ea7\u89c4\u5219", "files": ["visual_asset_protocol.md", "canvas_asset_generation_rules.md", "gallery_asset_rules.md"]},
         {"id": "dialogue", "title": "\u5bf9\u8bdd\u89c4\u5219", "files": ["chatgpt_host_prompt.md", "chatgpt_npc_voice_rules.md"]},
         {"id": "style", "title": "\u884c\u6587\u89c4\u5219", "files": ["chatgpt_style_rules.md", "ai_flavor_check_rules.md"]},
         {"id": "npc", "title": "NPC / \u602a\u7269\u8bbe\u5b9a\u89c4\u5219", "files": ["chatgpt_monster_rules.md", "character_card_json_rules.md"]},
@@ -862,6 +1612,68 @@ def rules_payload(name: str = "", query: str = "") -> dict[str, Any]:
         if needle and needle in f"{path.name} {title} {content}".lower():
             matches.append({**item, "snippets": rule_snippets(content, query, 3)})
     return {"ok": True, "rules": rules, "query": query, "matches": matches}
+
+
+PROMPT_INSPECTOR_GROUPS = [
+    {
+        "id": "contract",
+        "title": "模型分层契约",
+        "files": ["model_layer_contract_rules.md"],
+    },
+    {
+        "id": "director",
+        "title": "DeepSeek V4 导演层",
+        "files": ["v4_director_prompt.md", "v4_campaign_context_prompt.md", "v4_audit_prompt.md"],
+    },
+    {
+        "id": "actor",
+        "title": "ChatGPT 演员层",
+        "files": ["chatgpt_host_prompt.md", "chatgpt_style_rules.md", "chatgpt_image_rules.md", "chatgpt_npc_voice_rules.md", "chatgpt_monster_rules.md", "character_card_json_rules.md"],
+    },
+    {
+        "id": "visual",
+        "title": "Codex 视觉资产规则",
+        "files": ["visual_asset_protocol.md", "canvas_asset_generation_rules.md", "gallery_asset_rules.md"],
+    },
+    {
+        "id": "codex",
+        "title": "Codex 本地工程层",
+        "files": ["codex_system_architecture_rules.md", "codex_computer_use_prompt.md", "encoding_rules.md", "campaign_data_lifecycle_rules.md", "frontend_interaction_rules.md"],
+    },
+]
+
+
+def prompt_inspector_payload(campaign_id: str = "") -> dict[str, Any]:
+    resolved = MemoryStore().resolve_campaign_id(campaign_id or None)
+    groups = []
+    for group in PROMPT_INSPECTOR_GROUPS:
+        files = []
+        for filename in group["files"]:
+            path = PROMPTS_DIR / filename
+            cn_path = PROMPTS_DIR / f"{Path(filename).stem}_CN.md"
+            files.append({
+                "name": filename,
+                "exists": path.exists(),
+                "path": str(path),
+                "content": read_text_auto(path) if path.exists() else "",
+                "cn": {
+                    "name": cn_path.name,
+                    "exists": cn_path.exists(),
+                    "path": str(cn_path),
+                    "content": read_text_auto(cn_path) if cn_path.exists() else "",
+                },
+            })
+        groups.append({**group, "files": files})
+    outbox = safe_outbox_snapshot(resolved)
+    raw = raw_output_payload(resolved)
+    return {
+        "ok": True,
+        "campaign_id": resolved,
+        "groups": groups,
+        "rules": rules_payload().get("rules", []),
+        "outbox": outbox,
+        "parsed_raw_output": raw,
+    }
 
 
 def rule_snippets(content: str, query: str, limit: int = 3) -> list[str]:
@@ -1169,7 +1981,7 @@ def safe_outbox_snapshot(campaign_id: str = "") -> dict[str, Any]:
         if not path.exists():
             continue
         try:
-            rows[name] = read_json(path) if path.suffix == ".json" else path.read_text(encoding="utf-8", errors="replace")
+            rows[name] = read_json(path) if path.suffix == ".json" else read_runtime_text(path)
         except Exception as exc:
             rows[name] = {"error": str(exc)}
     return rows
@@ -1185,7 +1997,7 @@ def current_writeback(campaign_id: str = "") -> dict[str, Any]:
     raw_path = outbox_dir / "chatgpt_raw_output.md"
     if not raw_path.exists():
         raise FileNotFoundError("missing outbox/state_writeback.json or chatgpt_raw_output.md")
-    parsed = parse_chatgpt_output(raw_path.read_text(encoding="utf-8", errors="replace"))
+    parsed = parse_chatgpt_output(read_runtime_text(raw_path))
     validate_writeback(parsed.writeback)
     write_json(path, parsed.writeback)
     return parsed.writeback
@@ -1286,9 +2098,9 @@ def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
     pressure_path = outbox_dir / "pressure_pack.json"
     action_path = outbox_dir / "last_player_action.txt"
     store.write_log(resolved, {
-        "player_action": action_path.read_text(encoding="utf-8", errors="replace") if action_path.exists() else "",
+        "player_action": read_runtime_text(action_path) if action_path.exists() else "",
         "v4_pressure_pack": read_json(pressure_path) if pressure_path.exists() else {},
-        "chatgpt_raw_output": raw_path.read_text(encoding="utf-8", errors="replace") if raw_path.exists() else "",
+        "chatgpt_raw_output": read_runtime_text(raw_path) if raw_path.exists() else "",
         "ai_flavor_report": read_json(flavor_path) if flavor_path.exists() else {},
         "v4_audit_result": audit_result,
         "final_write": updates,
@@ -1412,13 +2224,17 @@ def output_payload(campaign_id: str = "") -> dict[str, Any]:
     pressure_path = outbox_dir / "pressure_pack.json"
     audit_path = outbox_dir / "v4_audit_result.json"
     flavor_path = outbox_dir / "ai_flavor_report.json"
+    public_marker_mtime = max(
+        file_mtime(pressure_path),
+        file_mtime(outbox_dir / "state_writeback.json"),
+    )
     text = ""
     parsed: dict[str, Any] = {"body": "", "choices": "", "summary": "", "blocks": []}
     source = ""
 
-    if raw_path.exists():
+    if raw_path.exists() and not is_stale_public_output(raw_path, public_marker_mtime):
         try:
-            raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+            raw_text = read_runtime_text(raw_path)
             p = _parse(raw_text)
             if p.blocks:
                 parsed = {"body": p.body, "choices": p.choices, "summary": p.summary, "blocks": p.blocks}
@@ -1427,8 +2243,8 @@ def output_payload(campaign_id: str = "") -> dict[str, Any]:
         except Exception:
             pass
 
-    if not parsed.get("blocks") and clean_path.exists():
-        text = clean_path.read_text(encoding="utf-8", errors="replace")
+    if not parsed.get("blocks") and clean_path.exists() and not is_stale_public_output(clean_path, public_marker_mtime):
+        text = read_runtime_text(clean_path)
         source = clean_path.name
         try:
             p = _parse(text)
@@ -1487,7 +2303,7 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
         return {"ok": False, "campaign_id": resolved, "error": "no raw output available"}
     try:
         from trpg_orchestrator.output_parser import parse_chatgpt_output
-        raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+        raw_text = read_runtime_text(raw_path)
         parsed = parse_chatgpt_output(raw_text)
         return {
             "ok": True,

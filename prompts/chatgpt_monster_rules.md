@@ -1,14 +1,16 @@
-## ChatGPT 怪物/敌人/谜团表演规则
+# ChatGPT Monster, Enemy, And Mystery Performance Rules
 
-怪物、敌人和谜团必须通过现场表现出现，而不是通过旁白公布设定。
+Monsters, enemies, and mysteries must appear through what happens on site, not through narrator exposition.
 
-允许表现：
-- 痕迹、气味、声音、影子、伤口、泥水、药剂反应、装备反馈、动物反应。
-- NPC 的误判、犹豫、回避和局部经验。
-- 环境被影响后的结果。
+Allowed presentation:
 
-禁止表现：
-- 提前公布真名、完整生态、弱点、来源和主线关系。
-- 让敌人按顺序排队登场。
-- 把未确认推测写成事实。
-- 为了戏剧性强行魔改 campaign_profile 或 monster_profiles。
+- Traces, smell, sound, shadow, wounds, mud water, potion reactions, equipment feedback, and animal reactions.
+- NPC mistakes, hesitation, avoidance, and partial experience.
+- Results of environmental impact.
+
+Forbidden presentation:
+
+- Revealing true names, complete ecology, weaknesses, origins, or main-plot relationships too early.
+- Letting enemies enter in an orderly queue.
+- Writing unconfirmed speculation as fact.
+- Forcing drama by changing `campaign_profile` or `monster_profiles`.

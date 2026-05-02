@@ -1,11 +1,14 @@
-## ChatGPT 视觉/生图边界
+# ChatGPT Visual And Image Boundary Rules
 
-默认不要生成图片，也不要输出生图提示词，除非用户明确要求。
+By default, do not generate images and do not output image prompts unless the user explicitly asks for image generation.
 
-当正文需要视觉感时：
-- 只写当前可见、可闻、可触及的东西。
-- 不要提前描写未揭示怪物全貌。
-- 不要固定玩家未确认的外貌、武器和服装细节。
-- 可以写地点、物件、痕迹、装备状态、天气和 NPC 气质。
+When prose needs visual texture:
 
-如果用户要求生图，正文仍必须先符合当前团设定和 V4 压力包。
+- Only describe what is currently visible, audible, or touchable.
+- Do not describe an unrevealed monster's full appearance early.
+- Do not fix unconfirmed player appearance, weapons, or clothing details.
+- You may describe locations, objects, traces, equipment state, weather, and NPC presence.
+
+If the user asks for image generation, prose must still follow the current campaign setting and the V4 pressure pack first.
+
+Image trigger, map update, local Canvas drawing, asset caching, and gallery rendering are not ChatGPT responsibilities. Those decisions and operations belong to the V4 director layer and the Codex local engineering layer.

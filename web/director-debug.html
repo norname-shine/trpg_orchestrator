@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>导演调试</title>
+  <style>
+    body { margin: 0; background: #f4ead8; color: #35291d; font: 14px/1.6 "Microsoft YaHei", sans-serif; }
+    main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    a, button { color: #6e4d1f; }
+    button { min-height: 34px; border: 1px solid #c9ab78; border-radius: 8px; background: #fff7e8; cursor: pointer; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    section { border: 1px solid #d9c6a4; border-radius: 10px; background: rgba(255,255,255,.72); padding: 14px; min-width: 0; }
+    h1, h2 { margin: 0 0 10px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 68vh; overflow: auto; background: #fffaf0; border-radius: 8px; padding: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>导演调试</h1>
+        <div id="campaign">读取中</div>
+      </div>
+      <div>
+        <button id="refresh" type="button">刷新</button>
+        <a href="/">返回前台</a>
+      </div>
+    </header>
+    <div class="grid">
+      <section>
+        <h2>Pressure Pack</h2>
+        <pre id="pressure"></pre>
+      </section>
+      <section>
+        <h2>AI Flavor / Audit</h2>
+        <pre id="audit"></pre>
+      </section>
+      <section>
+        <h2>Frontend State</h2>
+        <pre id="frontend"></pre>
+      </section>
+      <section>
+        <h2>Raw Output Meta</h2>
+        <pre id="output"></pre>
+      </section>
+    </div>
+  </main>
+  <script>
+    async function api(path) {
+      const res = await fetch(path);
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.status);
+      return data;
+    }
+    function show(id, value) {
+      document.getElementById(id).textContent = JSON.stringify(value || {}, null, 2);
+    }
+    async function load() {
+      const data = await api("/api/frontend-state");
+      document.getElementById("campaign").textContent = `${data.active_campaign} / ${data.frontend_state?.campaign?.title || ""}`;
+      show("pressure", data.output?.pressure_pack);
+      show("audit", { audit_result: data.output?.audit_result, ai_flavor_report: data.output?.ai_flavor_report });
+      show("frontend", data.frontend_state);
+      show("output", { campaign_id: data.output?.campaign_id, source: data.output?.source, blocks: data.output?.parsed?.blocks?.length || 0 });
+    }
+    document.getElementById("refresh").addEventListener("click", load);
+    load().catch((err) => document.body.insertAdjacentHTML("beforeend", `<pre>${err.message}</pre>`));
+  </script>
+</body>
+</html>

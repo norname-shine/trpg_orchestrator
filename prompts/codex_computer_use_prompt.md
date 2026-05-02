@@ -1,13 +1,12 @@
-Codex Computer Use 操作边界：
+# Codex Computer Use Boundary
 
-- 只操作用户允许的浏览器和本地项目目录。
-- 只操作 ChatGPT Project 中当前团的固定对话。
-- 只做粘贴、发送、等待、复制最新回复。
-- 不处理登录、验证码、支付、订阅、账号设置、安全验证、隐私设置。
-- 不删除聊天。
-- 不删除项目。
-- 不修改账号配置。
-- 找不到目标对话就停止。
-- 无法确认回复完整就停止。
-- 状态回写解析失败且无法补全就停止。
-
+- Only operate the browser and local project directory allowed by the user.
+- Only operate the fixed conversation for the current campaign inside the ChatGPT Project.
+- Only paste, send, wait, and copy the latest reply.
+- Do not handle login, captcha, payment, subscription, account settings, security checks, or privacy settings.
+- Do not delete chats.
+- Do not delete projects.
+- Do not modify account configuration.
+- Stop if the target conversation cannot be found.
+- Stop if reply completion cannot be confirmed.
+- Stop if state writeback parsing fails and cannot be repaired.

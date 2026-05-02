@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -55,14 +55,16 @@ def build_director_user_prompt(campaign_id: str, player_action: str, memory: dic
     return "\n\n".join(
         [
             f"campaign_id: {campaign_id}",
-            "玩家行动：",
+            "Model layer contract:",
+            read_prompt("model_layer_contract_rules.md"),
+            "Player action:",
             player_action,
-            "V4 导演层长期资料：",
+            "V4 director-layer long-term context rules:",
             read_prompt("v4_campaign_context_prompt.md"),
             "```json\n" + json.dumps(director_context, ensure_ascii=False, indent=2) + "\n```",
-            "本回合运行记忆：",
+            "Runtime memory for this turn:",
             "```json\n" + json.dumps(runtime_memory, ensure_ascii=False, indent=2) + "\n```",
-            "请根据长期资料和运行记忆，只输出严格 JSON 现场压力包。不要写正文，不要写剧情大纲。",
+            "Based on long-term records and runtime memory, output only strict JSON for the scene pressure pack and macro director decisions. Do not write player-readable prose. Do not expand into a full plot outline.",
         ]
     )
 
@@ -73,14 +75,12 @@ def build_chatgpt_input(
     memory: dict[str, Any],
     pressure_pack: dict[str, Any],
 ) -> str:
+    layer_contract = read_prompt("model_layer_contract_rules.md")
     host_rules = read_prompt("chatgpt_host_prompt.md")
     actor_rules = "\n\n".join(
         [
             read_prompt("chatgpt_style_rules.md"),
             read_prompt("chatgpt_image_rules.md"),
-            read_prompt("canvas_asset_generation_rules.md"),
-            read_prompt("gallery_asset_rules.md"),
-            read_prompt("visual_asset_protocol.md"),
             read_prompt("chatgpt_npc_voice_rules.md"),
             read_prompt("chatgpt_monster_rules.md"),
             read_prompt("character_card_json_rules.md"),
@@ -89,22 +89,24 @@ def build_chatgpt_input(
     visible_memory = _pick(memory, CHATGPT_VISIBLE_FILES)
     return "\n\n".join(
         [
-            "# ChatGPT TRPG 回合输入",
-            "## 你的分工",
-            "你是演员层正文主持。V4 是导演，Codex 是本地场记和质检。你不得抢导演层权限。",
-            "## 固定输出规则",
+            "# ChatGPT TRPG Turn Input",
+            "## Your Role",
+            "You are the actor-layer prose host. V4 is the director. Codex is the local script supervisor and QA layer. Do not take director-layer authority.",
+            "## Model Layer Contract",
+            layer_contract,
+            "## Fixed Output Rules",
             host_rules,
-            "## 演员层细化规则",
+            "## Actor-Layer Detail Rules",
             actor_rules,
             "## campaign_id",
             campaign_id,
-            "## 玩家行动",
+            "## Player Action",
             player_action,
-            "## 本回合可见记忆",
-            "这些资料只用于维持表演一致性。不要扩写其中未确认内容，不要自行发明长期设定。",
+            "## Visible Memory For This Turn",
+            "These records are only for performance consistency. Do not expand unconfirmed content. Do not invent long-term setting.",
             "```json\n" + json.dumps(visible_memory, ensure_ascii=False, indent=2) + "\n```",
-            "## DeepSeek V4 现场压力包",
-            "V4 压力包是本回合导演指令。必须服从其中的压力、边界、NPC 方向、禁止事项和选择要求。不要照搬结构。",
+            "## DeepSeek V4 Scene Pressure Pack",
+            "The V4 pressure pack is this turn's director instruction. Follow its pressure, boundaries, NPC direction, forbidden items, and choice requirements. Do not copy its structure directly.",
             "```json\n" + json.dumps(pressure_pack, ensure_ascii=False, indent=2) + "\n```",
             "Output strict JSON only: blocks, summary, and state_writeback. No text outside JSON.",
         ]
@@ -125,12 +127,11 @@ def build_audit_user_prompt(
     return "\n\n".join(
         [
             f"campaign_id: {campaign_id}",
-            "本地记忆 JSON：",
+            "Local memory JSON:",
             json.dumps(audit_memory, ensure_ascii=False, indent=2),
-            "本回合压力包 JSON：",
+            "This turn's pressure pack JSON:",
             json.dumps(pressure_pack, ensure_ascii=False, indent=2),
-            "ChatGPT 状态回写 JSON：",
+            "ChatGPT state writeback JSON:",
             json.dumps(writeback, ensure_ascii=False, indent=2),
         ]
     )
-

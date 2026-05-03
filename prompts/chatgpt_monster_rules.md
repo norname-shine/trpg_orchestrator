@@ -1,4 +1,4 @@
-# ChatGPT Monster, Enemy, And Mystery Performance Rules
+# Monster, Enemy, And Mystery Performance Rules
 
 Monsters, enemies, and mysteries must appear through what happens on site, not through narrator exposition.
 

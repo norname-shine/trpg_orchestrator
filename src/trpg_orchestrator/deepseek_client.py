@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -22,7 +22,7 @@ class DeepSeekClient:
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> str:
         if not self.api_key:
-            raise RuntimeError("È±ÉÙ DEEPSEEK_API_KEY£¬ÎÞ·¨µ÷ÓÃ DeepSeek V4¡£")
+            raise RuntimeError("ç¼ºå°‘ DEEPSEEK_API_KEYï¼Œæ— æ³•è°ƒç”¨ DeepSeek V4ã€‚")
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -46,6 +46,9 @@ class DeepSeekClient:
             with urlopen(request, timeout=90) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"DeepSeek API µ÷ÓÃÊ§°Ü: HTTP {exc.code} {detail}") from exc
+            try:
+                detail = exc.read().decode("utf-8")
+            except UnicodeDecodeError:
+                detail = "<non-utf8 error body>"
+            raise RuntimeError(f"DeepSeek API è°ƒç”¨å¤±è´¥: HTTP {exc.code} {detail}") from exc
         return data["choices"][0]["message"]["content"]

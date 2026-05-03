@@ -78,6 +78,20 @@
           </div>
         </section>
 
+        <section class="panel storyProgressPanel" id="storyProgressPanel">
+          <div class="panelTitle">
+            <h2>故事进度</h2>
+            <span id="storyPace">normal</span>
+          </div>
+          <div class="storyProgressRows">
+            <div><span>总进度</span><b id="storyOverallProgress">0%</b></div>
+            <div><span id="storyChapterName">当前章节</span><b id="storyChapterProgress">0%</b></div>
+            <div><span id="storyNodeName">当前节点</span><b id="storyNodeProgress">0%</b></div>
+          </div>
+          <div class="xp storyProgressBar"><span id="storyOverallBar" style="width:0%"></span></div>
+          <p id="storyProgressStatus">未启用结构化故事进度</p>
+        </section>
+
         <section class="panel mapPanel collapsiblePanel">
           <div class="panelTitle">
             <h2>区域地图</h2>
@@ -121,6 +135,13 @@
             <button class="tinyBtn" data-panel-tab="logs" type="button">日志</button>
             <button class="tinyBtn" data-panel-tab="summary" type="button">摘要</button>
             <button class="autoScroll" id="autoScrollBtn" type="button"><span>自动滚动</span><i></i></button>
+          </div>
+          <div class="runProgress hidden" id="runProgress" aria-live="polite">
+            <div class="runProgressHeader">
+              <b id="runProgressLabel">准备发送</b>
+              <span id="runProgressPercent">0%</span>
+            </div>
+            <div class="runProgressTrack"><span id="runProgressBar"></span></div>
           </div>
           <div class="messageFeed" id="storyTab">
             <div id="storyText" class="prose"></div>
@@ -244,6 +265,18 @@
           <button id="useGalleryAssetBtn" type="button">引用到行动输入</button>
         </aside>
       </div>
+    </div>
+  </div>
+  <div class="cgOverlay hidden" id="cgOverlay" aria-hidden="true">
+    <div class="cgDialog" role="dialog" aria-modal="true" aria-labelledby="cgDialogTitle">
+      <div class="cgDialogHeader">
+        <div>
+          <h2 id="cgDialogTitle">CG</h2>
+          <p id="cgDialogCaption"></p>
+        </div>
+        <button id="closeCgOverlay" type="button" aria-label="关闭">×</button>
+      </div>
+      <img id="cgDialogImage" alt="CG 大图">
     </div>
   </div>
   <div class="companionOverlay hidden" id="companionOverlay" aria-hidden="true">

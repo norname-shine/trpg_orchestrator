@@ -7,7 +7,7 @@
 - 玩家正文、ChatGPT 输入、ChatGPT 回复、状态写回、JSON 记忆、前端展示文本不得出现乱码。
 - 运行时数据一律按 UTF-8 写入。
 - 读取旧文件时可以自动识别 UTF-8 / UTF-8-BOM / GBK，但解析前必须检查 mojibake。
-- 不允许用 `errors="replace"` 静默吞掉乱码后继续解析、写回或展示。
+- 不允许用 `errors = "replace"` / `errors = 'replace'` 等替换解码方式静默吞掉乱码后继续解析、写回或展示。
 - 一旦运行时文本仍像乱码，必须报错阻断，让开发者修复源文件或编码边界。
 
 ## 二、读取规则
@@ -22,7 +22,7 @@
   - 后台解析入口
   - 导出文本内容
 - JSON 读取必须使用 `read_json(path)`，由共享 helper 统一走自动识别。
-- 禁止新增 `path.read_text(encoding="utf-8", errors="replace")`。
+- 禁止新增带替换解码的直接 `Path.read_text` 调用。
 - 禁止在解析 ChatGPT 输出、状态写回、正文块、前端状态时使用宽松替换模式。
 
 ## 三、写入规则

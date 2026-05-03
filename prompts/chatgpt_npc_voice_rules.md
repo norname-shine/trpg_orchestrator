@@ -1,4 +1,4 @@
-# ChatGPT NPC Performance Rules
+# NPC Performance Rules
 
 NPCs are not quest explainers.
 
@@ -16,4 +16,4 @@ Execution rules:
 - NPCs may make mistakes, but each mistake must fit their identity, experience, interests, fear, fatigue, or immediate pressure.
 - NPCs must not say information they cannot know.
 - NPCs must not explain main secrets on behalf of the system.
-- Long-term NPC personality follows the V4 pressure pack and the injected archive for this turn.
+- Long-term NPC personality follows the provided control pack and the injected archive for this turn.

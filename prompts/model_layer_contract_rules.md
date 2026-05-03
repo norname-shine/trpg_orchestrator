@@ -10,7 +10,8 @@ This file defines responsibility boundaries among DeepSeek V4, ChatGPT, and Code
 4. The backend receives V4 output and must not push V4 content directly to the player frontend.
 5. The backend forwards V4's director pressure pack, the player action, and allowed visible memory to ChatGPT.
 6. ChatGPT is fixed as the actor layer. It turns the V4 pressure pack into player-readable prose and structured writeback.
-7. The backend closes the loop: parse ChatGPT JSON, update prose, character state, map, items, tasks, tags, gallery, asset cache, and local records.
+7. If this turn triggers image generation, the backend must start a second independent ChatGPT image-only turn after the story text turn finishes.
+8. The backend closes the loop: parse ChatGPT JSON, update prose, character state, map, items, tasks, tags, gallery, asset cache, and local records; image-turn results are recorded separately and then merged into frontend display.
 
 ## Responsibilities
 

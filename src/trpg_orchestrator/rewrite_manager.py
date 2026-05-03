@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -51,7 +51,7 @@ def build_chatgpt_rewrite_input(
             "# TRPG Rewrite Request",
             "Rewrite the previous response according to the correction instructions below.",
             "Do not reveal chain of thought. Output only the standard four sections:",
-            "¡¾ÕıÎÄ¡¿\n¡¾Ñ¡Ôñµã¡¿\n¡¾»ØºÏÕªÒª¡¿\n¡¾×´Ì¬»ØĞ´_BEGIN¡¿...¡¾×´Ì¬»ØĞ´_END¡¿",
+            "ã€æ­£æ–‡ã€‘\nã€é€‰æ‹©ç‚¹ã€‘\nã€å›åˆæ‘˜è¦ã€‘\nã€çŠ¶æ€å›å†™_BEGINã€‘...ã€çŠ¶æ€å›å†™_ENDã€‘",
             "## Correction Instructions",
             instruction or "Polish the prose while preserving all facts and state writeback.",
             "## Must Preserve",

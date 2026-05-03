@@ -4,6 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 set "PYTHONPATH=%~dp0src"
+set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "TRPG_CHATGPT_AUTOMATION=playwright"
 set "TRPG_BROWSER_USER_DATA_DIR=%~dp0.browser-profile"

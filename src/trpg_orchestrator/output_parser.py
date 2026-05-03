@@ -81,7 +81,7 @@ def _parse_json_output(text: str) -> ParsedOutput:
     writeback = data.get("state_writeback") or data.get("writeback") or data.get("memory_patch") or {}
     if not isinstance(writeback, dict):
         raise ValueError("state_writeback must be an object")
-    body = str(data.get("body") or _join_blocks(blocks, {"gm_narration", "npc_dialogue", "system_check", "player_action"})).strip()
+    body = str(data.get("body") or _join_blocks(blocks, {"gm_narration", "npc_dialogue", "system_check", "cg_image"})).strip()
     choices = str(data.get("choices") or _choices_text(blocks)).strip()
     summary = str(data.get("summary") or data.get("turn_summary") or "").strip()
     return ParsedOutput(body=body, choices=choices, summary=summary, writeback=writeback, blocks=blocks)
@@ -103,30 +103,62 @@ def _normalize_blocks(rows: Any) -> list[dict[str, Any]]:
     if not isinstance(rows, list):
         raise ValueError("blocks must be a list")
     normalized: list[dict[str, Any]] = []
+    legal_types = {"gm_narration", "player_action", "npc_dialogue", "system_check", "choice_prompt", "cg_image", "backend_note"}
     for index, row in enumerate(rows):
         if isinstance(row, str):
             row = {"type": "gm_narration", "speaker": "GM 叙述", "body": row}
         if not isinstance(row, dict):
             continue
         block_type = str(row.get("type") or "gm_narration").strip() or "gm_narration"
-        body = str(row.get("body") or row.get("text") or "").strip()
+        if block_type not in legal_types:
+            block_type = "gm_narration"
+        body = str(row.get("body") or row.get("text") or row.get("content") or "").strip()
         choices = row.get("choices") if isinstance(row.get("choices"), list) else []
         if not body and not choices:
             continue
-        normalized.append({
+        actor_id = str(row.get("actor_id") or "").strip()
+        speaker = _normalize_speaker(str(row.get("speaker") or _default_speaker(block_type)), block_type, actor_id)
+        normalized_row = {
             "id": str(row.get("id") or f"block_{index + 1}"),
             "type": block_type,
-            "speaker": str(row.get("speaker") or _default_speaker(block_type)),
+            "speaker": speaker,
             "body": body,
             "time": str(row.get("time") or ""),
             "avatar_key": str(row.get("avatar_key") or ""),
-            "actor_id": str(row.get("actor_id") or ""),
+            "actor_id": actor_id,
             "actor_kind": str(row.get("actor_kind") or ""),
             "check": row.get("check") if isinstance(row.get("check"), dict) else {},
             "choices": choices,
             "tags": row.get("tags") if isinstance(row.get("tags"), list) else [],
-        })
+        }
+        for extra_key in (
+            "asset_key",
+            "cached_url",
+            "image_url",
+            "url",
+            "image_title",
+            "image_detail",
+            "aspect_ratio",
+            "portrait_feedback_status",
+            "portrait_feedback_assets",
+            "mobile_asset_key",
+            "mobile_cached_url",
+        ):
+            if extra_key in row:
+                normalized_row[extra_key] = row.get(extra_key)
+        normalized.append(normalized_row)
     return normalized
+
+
+def _normalize_speaker(speaker: str, block_type: str, actor_id: str = "") -> str:
+    clean = speaker.strip()
+    if block_type == "player_action":
+        match = re.fullmatch(r"(?i)player\s*[?？:：-]\s*(.+)", clean)
+        if match:
+            clean = match.group(1).strip()
+        if clean.lower() == "player" and actor_id:
+            clean = actor_id
+    return clean or _default_speaker(block_type)
 
 
 def _default_speaker(block_type: str) -> str:
@@ -155,7 +187,7 @@ def _choices_text(blocks: list[dict[str, Any]]) -> str:
                     risk = str(choice.get("risk") or "").strip()
                     suffix = f"（风险：{risk}）" if risk else ""
                     if label:
-                        rows.append(f"{cid}. {label}{suffix}" if cid else f"{label}{suffix}")
+                        rows.append(f"{label}{suffix}")
             return "\n".join(row for row in rows if row)
     return ""
 

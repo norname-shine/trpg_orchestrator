@@ -29,7 +29,7 @@
 - 不允许新增模块继续从多个旧接口散读数据，除非是迁移期临时兼容。
 - 新增前台模块必须先声明它消费的字段结构，再写 UI。
 - 多团并行时，ChatGPT 输入输出、解析结果和写回审核必须优先落到 `campaigns/<campaign_id>/outbox/`，全局 `outbox/` 只能作为手动操作镜像。
-- 文本读写必须遵守 `prompts/encoding_rules.md`。运行时正文、ChatGPT 输出、JSON 记忆和前端响应不得使用 `errors="replace"` 静默吞乱码。
+- 文本读写必须遵守 `prompts/encoding_rules.md`。运行时正文、ChatGPT 输出、JSON 记忆和前端响应不得使用替换解码静默吞乱码。
 - 后端负责把不同来源的数据归一化：
   - campaign memory
   - campaign_profile
@@ -62,7 +62,7 @@
 - 玩家头像、伙伴头像、NPC 头像必须区分资产类型：
   - 主玩家：`portrait`
   - 伙伴 / 副玩家：`companion` 或 `companion_portrait`
-  - NPC：`npc_portrait` 或资料夹内 `gallery_npc`
+  - NPC：统一使用 `npc_portrait`，资料夹复用同一头像资产
 - NPC 栏不得重复生成主玩家或伙伴头像。
 - 伙伴类型不能写死为艾露猫；怪猎团可以是 palico，Fate 团可以是 servant，原创团可有 familiar、drone、spirit 等。
 
@@ -157,3 +157,4 @@ Codex 在修改代码前应快速检查：
   - `python -m py_compile trpg_orchestrator/src/trpg_orchestrator/web_server.py`
 - 涉及多团数据时，遍历检查本地数据。
 - 涉及资产时，检查 manifest 中的 `asset_seed`、key、path、metadata 是否一致。
+

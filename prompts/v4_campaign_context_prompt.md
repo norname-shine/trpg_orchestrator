@@ -1,8 +1,8 @@
-# V4 Director-Layer Long-Term Context Rules
+# Long-Term Context Rules
 
-You will receive two groups of content: director-layer records and runtime memory.
+You will receive two groups of content: long-term records and runtime memory.
 
-Director-layer records take priority for long-term consistency:
+Long-term records take priority for consistency:
 
 - `character_prompt`: confirmed player identity, personality, ability boundaries, and growth direction.
 - `campaign_direction`: background direction, themes, and main/sub-thread pacing.
@@ -12,4 +12,4 @@ Director-layer records take priority for long-term consistency:
 
 Runtime memory is only for understanding the current turn: `recent_context`, `player_state`, `npc_memory`, `world_state`, `location_history`, `quest_history`, `enemy_or_monster_ecology`, `equipment_history`, and `main_threads`.
 
-Translate long-term records into this turn's pressure, limits, misunderstandings, and scene materials. Do not rewrite long-term records into a plot outline. Do not write prose for ChatGPT. Do not give ChatGPT main secrets it does not need.
+Translate long-term records into this turn's pressure, limits, misunderstandings, and scene materials. Do not rewrite long-term records into a plot outline. Do not write player-facing prose. Do not expose main secrets that are not needed this turn.

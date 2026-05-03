@@ -1,10 +1,13 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
 import json
 from typing import Any
+
+from .output_contract import is_optional_writeback_authorized
+from .story_progress import apply_progress_writeback
 
 
 WRITEBACK_FILE_MAP = {
@@ -32,7 +35,12 @@ SCALAR_UPDATE_FIELDS = {
 MAX_APPLIED_WRITEBACK_HASHES = 50
 
 
-def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[str, Any], extra_hashes: list[str] | None = None) -> dict[str, Any]:
+def apply_approved_writeback(
+    memory: dict[str, Any],
+    approved_writeback: dict[str, Any],
+    extra_hashes: list[str] | None = None,
+    pressure_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     updates: dict[str, Any] = {}
     long_term = approved_writeback.get("long_term_memory", approved_writeback)
     short_term = approved_writeback.get("short_term_state", {})
@@ -93,9 +101,124 @@ def apply_approved_writeback(memory: dict[str, Any], approved_writeback: dict[st
             scene["immediate_pressure"] = short_term["quest"]
         updates["recent_context.json"] = recent
 
+    protocol_warnings: list[str] = []
+    progress_writeback = approved_writeback.get("progress_writeback")
+    if isinstance(progress_writeback, dict):
+        prose_chars_delta = _writeback_prose_chars(approved_writeback)
+        updated_progress = apply_progress_writeback(
+            memory.get("story_blueprint.json", {}),
+            memory.get("story_progress.json", {}),
+            progress_writeback,
+            prose_chars_delta=prose_chars_delta,
+        )
+        updates["story_progress.json"] = updated_progress
+        protocol_warnings.extend(updated_progress.get("protocol_warnings", []))
+
+    optional_writebacks = approved_writeback.get("optional_writebacks")
+    if isinstance(optional_writebacks, dict) and optional_writebacks:
+        allowed = _authorized_optional_writebacks(optional_writebacks, pressure_pack or {})
+        blocked = sorted(set(optional_writebacks) - allowed)
+        if blocked:
+            protocol_warnings.append("unauthorized optional_writebacks ignored: " + ", ".join(blocked))
+            target = deepcopy(updates.get("story_progress.json") or memory.get("story_progress.json", {}))
+            target.setdefault("protocol_warnings", [])
+            for warning in protocol_warnings:
+                append_plain_unique(target["protocol_warnings"], warning)
+            updates["story_progress.json"] = target
+        if allowed:
+            apply_optional_writebacks(memory, approved_writeback, pressure_pack or {}, updates, allowed)
+
     remember_applied_writeback_hashes(updates, memory, approved_writeback, extra_hashes)
     stamp_updates(updates, memory)
     return updates
+
+
+def _writeback_prose_chars(writeback: dict[str, Any]) -> int:
+    parts = [
+        writeback.get("summary_for_recent_context", ""),
+        writeback.get("next_turn_suggestions", ""),
+    ]
+    short = writeback.get("short_term_state", {})
+    if isinstance(short, dict):
+        parts.extend(str(value) for value in short.values() if isinstance(value, str))
+    return len("".join(str(part) for part in parts if part))
+
+
+def _authorized_optional_writebacks(optional_writebacks: dict[str, Any], pressure_pack: dict[str, Any]) -> set[str]:
+    output_requests = pressure_pack.get("output_requests") if isinstance(pressure_pack, dict) else {}
+    if not isinstance(output_requests, dict):
+        return set()
+    return {key for key in optional_writebacks if is_optional_writeback_authorized(key, output_requests)}
+
+
+def apply_optional_writebacks(
+    memory: dict[str, Any],
+    approved_writeback: dict[str, Any],
+    pressure_pack: dict[str, Any],
+    updates: dict[str, Any],
+    allowed_keys: set[str] | None = None,
+) -> None:
+    optional = approved_writeback.get("optional_writebacks")
+    if not isinstance(optional, dict):
+        return
+    allowed = allowed_keys if allowed_keys is not None else _authorized_optional_writebacks(optional, pressure_pack)
+    if "inventory_updates" in allowed:
+        apply_inventory_writeback(memory, optional.get("inventory_updates"), updates)
+    if "dossier_updates" in allowed:
+        apply_dossier_writeback(memory, optional.get("dossier_updates"), updates)
+    if "character_card_update" in allowed:
+        apply_character_card_writeback(memory, optional.get("character_card_update"), updates)
+    if "map_route" in allowed or "map_canvas" in allowed or "map" in allowed:
+        apply_map_writeback(memory, optional, updates)
+    if "canvas_jobs" in allowed:
+        apply_canvas_jobs_writeback(memory, optional.get("canvas_jobs"), updates)
+
+
+def apply_inventory_writeback(memory: dict[str, Any], payload: Any, updates: dict[str, Any]) -> None:
+    if payload in (None, "", [], {}):
+        return
+    target = deepcopy(updates.get("equipment_history.json") or memory.get("equipment_history.json", {}))
+    target.setdefault("equipment_updates", [])
+    for item in as_list(payload):
+        append_unique(target, "equipment_updates", make_entry("optional_inventory_update", item))
+    updates["equipment_history.json"] = target
+
+
+def apply_dossier_writeback(memory: dict[str, Any], payload: Any, updates: dict[str, Any]) -> None:
+    if payload in (None, "", [], {}):
+        return
+    target = deepcopy(updates.get("clue_history.json") or memory.get("clue_history.json", {}))
+    target.setdefault("notes", [])
+    for item in as_list(payload):
+        append_plain_unique(target["notes"], {"source": "optional_dossier_update", "value": item})
+    updates["clue_history.json"] = target
+
+
+def apply_character_card_writeback(memory: dict[str, Any], payload: Any, updates: dict[str, Any]) -> None:
+    if not isinstance(payload, dict) or not payload:
+        return
+    target = deepcopy(updates.get("player_state.json") or memory.get("player_state.json", {}))
+    target["character_card"] = payload
+    updates["player_state.json"] = target
+
+
+def apply_map_writeback(memory: dict[str, Any], payload: dict[str, Any], updates: dict[str, Any]) -> None:
+    target = deepcopy(updates.get("map_history.json") or memory.get("map_history.json", {}))
+    target.setdefault("route_history", [])
+    route = payload.get("map_route") if isinstance(payload.get("map_route"), dict) else payload.get("map")
+    if route:
+        append_plain_unique(target["route_history"], {"source": "optional_map_writeback", "value": route})
+    updates["map_history.json"] = target
+
+
+def apply_canvas_jobs_writeback(memory: dict[str, Any], payload: Any, updates: dict[str, Any]) -> None:
+    if payload in (None, "", [], {}):
+        return
+    target = deepcopy(updates.get("run_records.json") or memory.get("run_records.json", {}))
+    target.setdefault("canvas_jobs", [])
+    for item in as_list(payload):
+        append_plain_unique(target["canvas_jobs"], item)
+    updates["run_records.json"] = target
 
 
 def remember_applied_writeback_hashes(

@@ -15,6 +15,12 @@ All UI changes must be implemented through reusable multi-campaign structures fi
 
 - Filter buttons must update the visible gallery immediately.
 - The full gallery modal uses the same active filter as the side gallery.
+- Gallery filters must come from the campaign's fixed startup category ID config. Temporary visual assets must not introduce new filters or card categories during play.
+- The frontend should render only cards whose kind maps to the fixed category ID allowlist. Unknown kinds, undefined IDs, backend notes, and temporary visual records must not create standalone gallery cards.
+- `cg` is a universal filter. Formal story CGs, generated scene images, and player-viewable large image assets go to `cg`.
+- Fate-style defaults are `cg`, `master`, `servant`, `npc`, `scene` / `map`, and `item`; `map` displays through the `scene` filter.
+- CG is separate from maps/scenes: CG uses `cg`; maps and locations use `scene`.
+- Status changes for the same character, item, or scene should update the existing card in place instead of creating duplicate cards.
 - NPC and item rows can be cited into the player action input.
 - Scene, map, monster, and ecology rows are view-only by default.
 - Every newly visible item-like asset must be semantically analyzed before display.
@@ -29,8 +35,27 @@ All UI changes must be implemented through reusable multi-campaign structures fi
 - Do not create a new ChatGPT conversation automatically.
 - If a campaign has no ChatGPT binding, the frontend may show it, but send/capture should still rely on backend safety checks.
 
+## Story Feed
+
+- Within the current frontend browser session, the story feed must append newly generated turn blocks instead of fully replacing the previous visible prose on every refresh.
+- Keep exactly the most recent 10 TRPG story turns in the visible accumulated feed. Drop older turns automatically.
+- Polling the same backend blocks must not append duplicates; use a turn content signature or equivalent dedupe mechanism.
+- When the frontend page is reopened, do not reload the accumulated browser-session queue. Show only the latest backend story segment.
+- Story CG blocks must display the title as exactly `CG`; do not append scene names, aspect ratios, device labels, or generation-stage prefixes.
+- The note below a story CG should contain only a short player-facing scene description. Do not show technical remarks such as 16:9, PC, 9:16, composition preview, formal icon, formal deep image, portrait feedback, cache, crop, or safe area.
+- Story CG images and gallery CG cards must be clickable and open a dedicated large-screen CG viewer. The viewer shows only the large image, `CG` title, and a short scene caption.
+
 ## Maps
 
 - The visible left map is an image sourced from cached PNG.
 - Hidden Canvas is allowed only as a generation source.
 - Normal refresh must not visually redraw the map unless campaign, location, or generator version changes.
+
+## Frontend map_canvas Display Constraints
+
+- Regional maps prefer cached PNGs generated from `map_canvas`; old `map_route` is fallback only when drawing data is absent.
+- The player frontend must not display raw ASCII, grid lines, legends, compasses, tactical coordinates, or backend explanation panels.
+- Visible maps keep only the map body, rooms/furniture, point icons, label chips, and necessary route/block expressions.
+- If `pressure_pack` has updated but prose is still not synchronized, the map panel may still read the latest `map_canvas` for structured map refresh; it must not expose director-layer prose to the player.
+- When cached PNG manifest metadata differs from the latest `map_canvas`, the frontend must redraw and overwrite the cache instead of reusing an old image by key alone.
+- Map display defaults to 16:9; text and icons must remain readable in the sidebar size.

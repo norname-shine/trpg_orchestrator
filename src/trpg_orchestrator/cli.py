@@ -1,32 +1,51 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse
+import base64
+import re
 import shutil
 import sys
 from pathlib import Path
 
 from .ai_flavor_checker import check_ai_flavor
+from .capability_resolver import build_capability_plan
 from .chatgpt_web_client import ChatGPTWebClient
-from .config import CAMPAIGNS_DIR, OUTBOX_DIR, REGISTRY_PATH
+from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT, REGISTRY_PATH
 from .deepseek_client import DeepSeekClient
-from .encoding_utils import read_text_auto, write_text_utf8
+from .encoding_utils import read_runtime_text, write_text_utf8
+from .encoding_validator import validate_repository_encoding
 from .json_utils import extract_json_object, read_json, write_json
 from .memory_store import MemoryStore
 from .memory_compactor import build_compaction_report
 from .output_parser import parse_chatgpt_output, public_output
-from .prompt_builder import build_audit_user_prompt, build_chatgpt_input, build_director_user_prompt, read_prompt
+from .output_contract import summarize_payload_keys
+from .payload_fulfillment import build_payload_fulfillment_input, defer_unfulfilled_requests, diff_requested_capabilities, finalize_capability_plan, merge_payload_patch, skipped_payload_patch
+from .prompt_builder import build_audit_user_prompt, build_chatgpt_image_input, build_chatgpt_input, build_director_user_prompt, build_v4_light_action_user_prompt, read_prompt, selected_memory_debug, selected_prompt_modules_debug
 from .rewrite_manager import build_chatgpt_rewrite_input, build_v4_rewrite_user_prompt
-from .schema_validator import validate_audit_result, validate_pressure_pack, validate_writeback
+from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_chatgpt_blocks, validate_payload_patch, validate_pressure_pack, validate_writeback
 from .quality_gate import quality_gate, is_quality_pass
 from .writeback import apply_approved_writeback, migrate_legacy_facts, writeback_hash, has_applied_writeback
 
 
 OUTBOX_FILE_NAMES = {
     "last_player_action.txt",
+    "capability_plan.json",
+    "selected_prompt_modules.json",
+    "selected_director_memory.json",
+    "selected_actor_memory.json",
+    "pressure_pack_core.json",
+    "missing_capabilities.json",
+    "payload_fulfillment_input.md",
+    "payload_patch.json",
     "pressure_pack.json",
+    "pressure_pack_normalized.json",
     "chatgpt_input.md",
     "chatgpt_raw_output.md",
+    "chatgpt_image_input.md",
+    "chatgpt_image_raw_output.md",
+    "chatgpt_image_raw_output.png",
+    "image_job.json",
     "chatgpt_clean_output.md",
     "chatgpt_blocks.json",
     "state_writeback.json",
@@ -44,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     sub.add_parser("validate-memory")
+    sub.add_parser("validate-encoding")
     sub.add_parser("migrate-memory")
     sub.add_parser("rewrite-plan")
     sub.add_parser("memory-report")
@@ -71,6 +91,16 @@ def main(argv: list[str] | None = None) -> int:
     send = sub.add_parser("send")
     send.add_argument("--campaign-id")
 
+    image_send = sub.add_parser("send-image")
+    image_send.add_argument("--campaign-id")
+
+    import_cg = sub.add_parser("import-cg")
+    import_cg.add_argument("--campaign-id")
+    import_cg.add_argument("--image-path", required=True)
+    import_cg.add_argument("--title", default="CG")
+    import_cg.add_argument("--detail", default="本回合剧情 CG。")
+    import_cg.add_argument("--mode", choices=["dual-preview", "single"], default="dual-preview")
+
     capture = sub.add_parser("capture")
     capture.add_argument("--campaign-id")
 
@@ -95,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_status()
         if args.command == "validate-memory":
             return cmd_validate_memory()
+        if args.command == "validate-encoding":
+            return cmd_validate_encoding()
         if args.command == "migrate-memory":
             return cmd_migrate_memory()
         if args.command == "rewrite-plan":
@@ -117,6 +149,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_prepare(args.action, args.campaign_id, args.offline_pressure_pack)
         if args.command == "send":
             return cmd_send(args.campaign_id)
+        if args.command == "send-image":
+            return cmd_send_image(args.campaign_id)
+        if args.command == "import-cg":
+            return cmd_import_cg(args.campaign_id, args.image_path, args.title, args.detail, args.mode)
         if args.command == "capture":
             return cmd_capture(args.campaign_id)
         if args.command == "ingest":
@@ -191,24 +227,136 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
     memory = store.load_campaign_memory(resolved)
     outbox_dir = campaign_outbox_dir(resolved)
     write_text_utf8(outbox_dir / "last_player_action.txt", action)
-    director_user_prompt = build_director_user_prompt(resolved, action, memory)
+    capability_plan = build_capability_plan(resolved, action, memory)
+    write_json(outbox_dir / "capability_plan.json", capability_plan)
+    director_user_prompt = build_director_user_prompt(resolved, action, memory, capability_plan)
     write_text_utf8(outbox_dir / "v4_director_input.md", director_user_prompt)
     if offline_pressure_pack:
-        pressure_pack = _offline_pressure_pack(resolved, action, memory)
+        core_pressure_pack = _offline_pressure_pack(resolved, action, memory)
     else:
         client = DeepSeekClient()
-        pressure_pack = extract_json_object(client.complete_json(
+        core_pressure_pack = extract_json_object(client.complete_json(
             read_prompt("v4_director_prompt.md"),
             director_user_prompt,
         ))
+    core_pressure_pack = normalize_pressure_pack_compat(core_pressure_pack)
+    validate_pressure_pack(core_pressure_pack, resolved, require_payloads=False)
+    write_json(outbox_dir / "pressure_pack_core.json", core_pressure_pack)
+    missing = diff_requested_capabilities(core_pressure_pack.get("output_requests", {}), capability_plan.get("loaded_capabilities", []), core_pressure_pack.get("payloads", {}))
+    write_json(outbox_dir / "missing_capabilities.json", missing)
+    if missing.get("missing_capabilities"):
+        fulfillment_input = build_payload_fulfillment_input(resolved, memory, core_pressure_pack, missing, capability_plan)
+        write_text_utf8(outbox_dir / "payload_fulfillment_input.md", fulfillment_input)
+        if offline_pressure_pack:
+            payload_patch = skipped_payload_patch("offline pressure pack skips model payload fulfillment")
+        else:
+            payload_patch = extract_json_object(DeepSeekClient().complete_json(read_prompt("v4_payload_fulfillment_prompt.md"), fulfillment_input))
+        if not payload_patch.get("skipped"):
+            validate_payload_patch(payload_patch)
+            pressure_pack = merge_payload_patch(core_pressure_pack, payload_patch)
+        else:
+            pressure_pack = defer_unfulfilled_requests(core_pressure_pack, str(payload_patch.get("reason") or "payload fulfillment skipped"))
+    else:
+        payload_patch = skipped_payload_patch("no missing capabilities")
+        write_text_utf8(outbox_dir / "payload_fulfillment_input.md", "")
+        pressure_pack = core_pressure_pack
+    write_json(outbox_dir / "payload_patch.json", payload_patch)
+    pressure_pack = normalize_pressure_pack_compat(pressure_pack)
     validate_pressure_pack(pressure_pack, resolved)
+    capability_plan = finalize_capability_plan(capability_plan, pressure_pack)
     write_json(outbox_dir / "pressure_pack.json", pressure_pack)
+    write_json(outbox_dir / "pressure_pack_normalized.json", pressure_pack)
+    debug_memory = selected_memory_debug(resolved, action, memory, pressure_pack, capability_plan)
+    write_json(outbox_dir / "selected_director_memory.json", debug_memory["director"])
+    write_json(outbox_dir / "selected_actor_memory.json", debug_memory["actor_visible"])
+    write_json(outbox_dir / "selected_prompt_modules.json", selected_prompt_modules_debug(capability_plan, pressure_pack))
+    write_json(outbox_dir / "capability_plan.json", capability_plan)
     write_text_utf8(
         outbox_dir / "chatgpt_input.md",
-        build_chatgpt_input(resolved, action, memory, pressure_pack),
+        build_chatgpt_input(resolved, action, memory, pressure_pack, capability_plan),
     )
-    mirror_to_global_outbox(outbox_dir, ["last_player_action.txt", "v4_director_input.md", "pressure_pack.json", "chatgpt_input.md"])
+    mirror_to_global_outbox(outbox_dir, ["last_player_action.txt", "capability_plan.json", "selected_prompt_modules.json", "selected_director_memory.json", "selected_actor_memory.json", "v4_director_input.md", "pressure_pack_core.json", "missing_capabilities.json", "payload_fulfillment_input.md", "payload_patch.json", "pressure_pack.json", "pressure_pack_normalized.json", "chatgpt_input.md"])
     print(f"wrote {outbox_dir / 'pressure_pack.json'} and {outbox_dir / 'chatgpt_input.md'}")
+    return 0
+
+
+LIGHT_DIRECTOR_ACTIONS = {"观察周围", "与npc对话", "检查物品"}
+
+
+def is_light_director_action(action: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(action or "")).lower()
+    return normalized in LIGHT_DIRECTOR_ACTIONS
+
+
+def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: bool = True) -> int:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id)
+    memory = store.load_campaign_memory(resolved)
+    outbox_dir = campaign_outbox_dir(resolved)
+    write_text_utf8(outbox_dir / "last_player_action.txt", action)
+    capability_plan = build_capability_plan(resolved, action, memory)
+    write_json(outbox_dir / "capability_plan.json", capability_plan)
+    user_prompt = build_v4_light_action_user_prompt(resolved, action, memory)
+    write_text_utf8(outbox_dir / "v4_director_input.md", user_prompt)
+    pressure_pack = _light_action_pressure_pack(resolved, action)
+    write_json(outbox_dir / "pressure_pack.json", pressure_pack)
+    raw_output = DeepSeekClient().complete_json(
+        read_prompt("v4_light_action_rules.md"),
+        user_prompt,
+    )
+    write_text_utf8(outbox_dir / "chatgpt_raw_output.md", raw_output)
+    parsed = parse_chatgpt_output(raw_output)
+    validate_chatgpt_blocks(parsed.blocks)
+    writeback = normalize_light_writeback(parsed.writeback)
+    validate_writeback(writeback)
+    write_text_utf8(outbox_dir / "chatgpt_clean_output.md", public_output(parsed))
+    write_json(outbox_dir / "chatgpt_blocks.json", {
+        "blocks": parsed.blocks,
+        "body": parsed.body,
+        "choices": parsed.choices,
+        "summary": parsed.summary,
+    })
+    write_json(outbox_dir / "state_writeback.json", writeback)
+    if skip_v4_audit:
+        audit_result = {"decision": "accept", "reason": "V4 light action direct path", "approved_writeback": writeback, "memory_files_to_update": [], "warnings": ["ChatGPT actor layer skipped for fixed light action"]}
+    else:
+        audit_result = extract_json_object(DeepSeekClient().complete_json(
+            read_prompt("v4_audit_prompt.md"),
+            build_audit_user_prompt(resolved, memory, pressure_pack, writeback, capability_plan),
+        ))
+    validate_audit_result(audit_result)
+    if audit_result.get("decision") in {"accept", "revise"}:
+        validate_writeback(audit_result.get("approved_writeback") or writeback)
+    write_json(outbox_dir / "v4_audit_result.json", audit_result)
+    approved = audit_result.get("approved_writeback") or parsed.writeback
+    raw_digest = writeback_hash(writeback)
+    approved_digest = writeback_hash(approved)
+    for digest in (raw_digest, approved_digest):
+        if has_applied_writeback(memory, digest):
+            raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
+    validate_writeback(approved)
+    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack)
+    run_records = append_run_record(
+        memory.get("run_records.json", {}),
+        resolved,
+        action,
+        parsed,
+        outbox_dir,
+        pressure_pack,
+        audit_result,
+        updates,
+    )
+    updates["run_records.json"] = run_records
+    touched = list(updates.keys())
+    if touched:
+        store.backup_files(resolved, touched)
+        store.write_memory_updates(resolved, updates)
+    log_path = store.write_log(resolved, _log_payload(action, pressure_pack, raw_output, {"severity": "pass", "path": "v4_light_action"}, audit_result, updates, outbox_dir, capability_plan=capability_plan))
+    mirror_to_global_outbox(outbox_dir)
+    print(f"V4 light action path: {action}")
+    print(f"updated files: {', '.join(touched) if touched else '(none)'}")
+    print(f"log: {log_path}")
+    print("\n" + public_output(parsed))
     return 0
 
 
@@ -237,6 +385,259 @@ def cmd_capture(campaign_id: str | None) -> int:
     return 0
 
 
+def cmd_send_image(campaign_id: str | None) -> int:
+    resolved = MemoryStore().resolve_campaign_id(campaign_id)
+    outbox_dir = campaign_outbox_dir(resolved)
+    pressure_pack = normalize_pressure_pack_compat(read_json(outbox_dir / "pressure_pack.json")) if (outbox_dir / "pressure_pack.json").exists() else {}
+    action = action_text(outbox_dir)
+    assets = image_pass_assets(pressure_pack)
+    if not image_pass_requested(action, pressure_pack):
+        write_json(outbox_dir / "image_job.json", {"status": "skipped", "reason": "no image trigger", "visual_asset_count": len(assets)})
+        print("image pass skipped: no image trigger")
+        return 0
+    write_text_utf8(outbox_dir / "chatgpt_image_input.md", build_chatgpt_image_input(resolved, action, pressure_pack, assets))
+    write_json(outbox_dir / "image_job.json", {
+        "status": "prepared",
+        "campaign_id": resolved,
+        "trigger": "player_action" if explicit_image_action(action) else "v4_visual_assets",
+        "visual_asset_count": len(assets),
+        "input_path": str(outbox_dir / "chatgpt_image_input.md"),
+        "output_path": str(outbox_dir / "chatgpt_image_raw_output.md"),
+        "image_artifact_path": str(outbox_dir / "chatgpt_image_raw_output.png"),
+        "note": "Image generation is intentionally split from the story JSON pass.",
+    })
+    web_client(resolved).send_file_and_capture(outbox_dir / "chatgpt_image_input.md", outbox_dir / "chatgpt_image_raw_output.md", mode="image")
+    saved_asset = save_image_artifact_asset(resolved, outbox_dir, assets)
+    write_json(outbox_dir / "image_job.json", {
+        "status": "captured",
+        "campaign_id": resolved,
+        "trigger": "player_action" if explicit_image_action(action) else "v4_visual_assets",
+        "visual_asset_count": len(assets),
+        "input_path": str(outbox_dir / "chatgpt_image_input.md"),
+        "output_path": str(outbox_dir / "chatgpt_image_raw_output.md"),
+        "image_artifact_path": str(outbox_dir / "chatgpt_image_raw_output.png"),
+        "image_artifact_exists": (outbox_dir / "chatgpt_image_raw_output.png").exists(),
+        "asset": saved_asset,
+        "note": "Image generation completed as a separate ChatGPT pass; backend/frontend may attach the image artifact to gallery display.",
+    })
+    mirror_to_global_outbox(outbox_dir, ["chatgpt_image_input.md", "chatgpt_image_raw_output.md", "chatgpt_image_raw_output.png", "image_job.json"])
+    print(f"sent image pass and captured {outbox_dir / 'chatgpt_image_raw_output.md'}")
+    return 0
+
+
+def save_image_artifact_asset(campaign_id: str, outbox_dir: Path, assets: list[dict]) -> dict:
+    artifact = outbox_dir / "chatgpt_image_raw_output.png"
+    if not artifact.exists():
+        return {}
+    first = assets[0] if assets else {}
+    key = f"generated_image:{safe_cli_segment(str(first.get('id') or first.get('title') or 'requested_image'))}"
+    metadata = {
+        "title": str(first.get("title") or "生图结果"),
+        "detail": str(first.get("detail") or first.get("positive_prompt") or ""),
+        "meta": "生图结果",
+        "source": "chatgpt_image_pass",
+        "object_id": key,
+        "image_prompt": first.get("image_prompt") or {
+            "positive_prompt": first.get("positive_prompt", ""),
+            "negative_prompt": first.get("negative_prompt", ""),
+            "aspect_ratio": first.get("aspect_ratio", ""),
+            "style_preset": first.get("style_preset", ""),
+            "quality": first.get("quality", {}),
+        },
+    }
+    from .web_server import save_asset
+    saved = save_asset({
+        "campaign_id": campaign_id,
+        "key": key,
+        "kind": "gallery_image",
+        "subdir": "generated",
+        "filename": key,
+        "data_url": "data:image/png;base64," + base64.b64encode(artifact.read_bytes()).decode("ascii"),
+        "seed": key,
+        "style": "chatgpt_image",
+        "generator_version": 1,
+        "metadata": metadata,
+    })
+    append_story_cg_block(campaign_id, outbox_dir, saved, metadata)
+    return saved
+
+
+def cmd_import_cg(campaign_id: str | None, image_path: str, title: str, detail: str, mode: str = "dual-preview") -> int:
+    resolved = MemoryStore().resolve_campaign_id(campaign_id)
+    source = Path(image_path).expanduser().resolve()
+    if not source.exists():
+        raise RuntimeError(f"image not found: {source}")
+    outbox_dir = campaign_outbox_dir(resolved)
+    saved = import_cg_image_assets(resolved, source, title, detail, mode)
+    append_story_cg_block(resolved, outbox_dir, saved["pc"], saved["metadata"])
+    write_json(outbox_dir / "image_job.json", {
+        "status": "imported",
+        "campaign_id": resolved,
+        "source_path": str(source),
+        "assets": saved,
+        "note": "Imported formal CG, cached PC 16:9 and mobile 9:16 variants, and attached PC image to latest story blocks.",
+    })
+    mirror_to_global_outbox(outbox_dir, ["chatgpt_blocks.json", "image_job.json"])
+    print(f"imported CG into {resolved}: {saved['pc'].get('url', '')}")
+    return 0
+
+
+def import_cg_image_assets(campaign_id: str, source: Path, title: str, detail: str, mode: str = "dual-preview") -> dict:
+    from io import BytesIO
+    from PIL import Image
+    from .web_server import save_asset
+
+    image = Image.open(source).convert("RGBA")
+    use_dual = mode == "dual-preview"
+    pc_image, mobile_image = split_dual_preview_image(image) if use_dual else (fit_ratio(image, 16, 9), fit_ratio(image, 9, 16))
+    pc_image = enhance_display_image(pc_image, brightness=1.33, contrast=1.12, color=1.06)
+    mobile_image = enhance_display_image(mobile_image, brightness=1.33, contrast=1.12, color=1.06)
+    base_id = safe_cli_segment(source.stem or title or "cg")
+    pc_key = f"generated_cg:{base_id}:pc_16x9"
+    mobile_key = f"generated_cg:{base_id}:mobile_9x16"
+    metadata = {
+        "title": title,
+        "detail": detail,
+        "meta": "正式生图 CG",
+        "source": "manual_import_cg",
+        "object_id": base_id,
+        "layout_variants": {"pc": "16:9", "mobile": "9:16"},
+        "default_variant": "pc",
+        "source_path": str(source),
+        "display_enhancement": {"brightness": 1.33, "contrast": 1.12, "color": 1.06, "reason": "正文展示避免暗部糊黑"},
+    }
+    pc_saved = save_asset({
+        "campaign_id": campaign_id,
+        "key": pc_key,
+        "kind": "gallery_image",
+        "subdir": "generated",
+        "filename": f"{base_id}_pc_16x9",
+        "data_url": png_data_url(pc_image),
+        "seed": pc_key,
+        "style": "formal_cg_pc_16x9",
+        "generator_version": 1,
+        "metadata": {**metadata, "aspect_ratio": "16:9", "variant": "pc"},
+    })
+    mobile_saved = save_asset({
+        "campaign_id": campaign_id,
+        "key": mobile_key,
+        "kind": "gallery_image_mobile",
+        "subdir": "generated",
+        "filename": f"{base_id}_mobile_9x16",
+        "data_url": png_data_url(mobile_image),
+        "seed": mobile_key,
+        "style": "formal_cg_mobile_9x16",
+        "generator_version": 1,
+        "metadata": {**metadata, "aspect_ratio": "9:16", "variant": "mobile", "paired_asset_key": pc_key},
+    })
+    return {"metadata": metadata, "pc": pc_saved, "mobile": mobile_saved}
+
+
+def split_dual_preview_image(image):
+    """Split the standard dark UI 16:9 / 9:16 preview board into display crops."""
+    w, h = image.size
+    pc_box = (
+        int(w * 0.018),
+        int(h * 0.145),
+        int(w * 0.666),
+        int(h * 0.748),
+    )
+    mobile_box = (
+        int(w * 0.704),
+        int(h * 0.050),
+        int(w * 0.966),
+        int(h * 0.748),
+    )
+    return fit_ratio(image.crop(pc_box), 16, 9), fit_ratio(image.crop(mobile_box), 9, 16)
+
+
+def fit_ratio(image, ratio_w: int, ratio_h: int):
+    width, height = image.size
+    target = ratio_w / ratio_h
+    current = width / max(height, 1)
+    if current > target:
+        new_width = int(height * target)
+        left = max(0, (width - new_width) // 2)
+        return image.crop((left, 0, left + new_width, height))
+    new_height = int(width / target)
+    top = max(0, (height - new_height) // 2)
+    return image.crop((0, top, width, top + new_height))
+
+
+def enhance_display_image(image, brightness: float = 1.0, contrast: float = 1.0, color: float = 1.0):
+    from PIL import ImageEnhance
+    result = image.convert("RGB")
+    result = ImageEnhance.Brightness(result).enhance(brightness)
+    result = ImageEnhance.Contrast(result).enhance(contrast)
+    result = ImageEnhance.Color(result).enhance(color)
+    return result
+
+
+def png_data_url(image) -> str:
+    from io import BytesIO
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def append_story_cg_block(campaign_id: str, outbox_dir: Path, asset: dict, metadata: dict) -> None:
+    if not asset or not asset.get("exists"):
+        return
+    blocks_path = outbox_dir / "chatgpt_blocks.json"
+    payload = read_json(blocks_path) if blocks_path.exists() else {
+        "campaign_id": campaign_id,
+        "turn_title": metadata.get("title") or "CG",
+        "blocks": [],
+        "summary": "",
+        "state_writeback": {},
+    }
+    blocks = payload.get("blocks")
+    if not isinstance(blocks, list):
+        blocks = []
+        payload["blocks"] = blocks
+    key = asset.get("key", "")
+    blocks[:] = [block for block in blocks if block.get("asset_key") != key]
+    scene_detail = public_cg_scene_detail(metadata)
+    cg_block = {
+        "id": f"cg_{safe_cli_segment(str(key))}",
+        "type": "cg_image",
+        "speaker": "CG",
+        "body": scene_detail,
+        "time": "",
+        "avatar_key": "cg",
+        "actor_id": "cg",
+        "actor_kind": "gm",
+        "check": {},
+        "choices": [],
+        "tags": ["cg", "image"],
+        "asset_key": key,
+        "cached_url": asset.get("url", ""),
+        "image_title": "CG",
+        "image_detail": scene_detail,
+        "aspect_ratio": "16:9",
+    }
+    choice_index = next((index for index, block in enumerate(blocks) if block.get("type") == "choice_prompt"), len(blocks))
+    blocks.insert(choice_index, cg_block)
+    payload["campaign_id"] = payload.get("campaign_id") or campaign_id
+    payload["summary"] = payload.get("summary") or metadata.get("detail") or ""
+    write_json(blocks_path, payload)
+
+
+def public_cg_scene_detail(metadata: dict) -> str:
+    text = str(metadata.get("public_detail") or metadata.get("scene_detail") or metadata.get("detail") or "").strip()
+    technical = re.compile(r"16\s*:\s*9|9\s*:\s*16|PC|手机|构图|预览|正式图标|正式深度图片|头像反哺|反哺|画幅|aspect|ratio|mobile|variant|crop|safe area|缓存|技术|参数", re.I)
+    if not text or technical.search(text):
+        text = "雨夜小卖部门口，Lee 抱紧金属盒，黑水倒影逼近。"
+    text = re.split(r"[。；;]\s*(?:16\s*:\s*9|9\s*:\s*16|PC|手机|构图|预览|头像反哺|反哺|缓存|技术|参数)", text, maxsplit=1, flags=re.I)[0]
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:72] or "本回合剧情 CG。"
+
+
+def safe_cli_segment(value: str) -> str:
+    text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", value or "asset").strip("_")
+    return text[:80] or "asset"
+
+
 def cmd_rewrite_send() -> int:
     web_client(None).send_file_and_capture(OUTBOX_DIR / "chatgpt_rewrite_input.md", OUTBOX_DIR / "chatgpt_raw_output_rewrite.md")
     print("sent rewrite input and captured chatgpt_raw_output_rewrite.md")
@@ -250,7 +651,7 @@ def cmd_run_rewrite(max_attempts: int = 2) -> int:
     resolved = store.resolve_campaign_id(None)
     memory = store.load_campaign_memory(resolved)
     raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
-    original_raw = read_text_auto(raw_path) if raw_path.exists() else ""
+    original_raw = read_runtime_text(raw_path) if raw_path.exists() else ""
     working_raw = original_raw
     for attempt in range(1, max_attempts + 1):
         print(f"rewrite attempt {attempt}/{max_attempts}")
@@ -258,7 +659,7 @@ def cmd_run_rewrite(max_attempts: int = 2) -> int:
             write_text_utf8(raw_path, working_raw)
         cmd_rewrite_plan()
         web_client(None).send_file_and_capture(OUTBOX_DIR / "chatgpt_rewrite_input.md", OUTBOX_DIR / "chatgpt_raw_output_rewrite.md")
-        rewritten = read_text_auto(OUTBOX_DIR / "chatgpt_raw_output_rewrite.md")
+        rewritten = read_runtime_text(OUTBOX_DIR / "chatgpt_raw_output_rewrite.md")
         gate = quality_gate(rewritten, memory.get("forbidden_changes.json", {}), OUTBOX_DIR, prefix=f"rewrite_{attempt}_")
         severity = gate["flavor_report"].get("severity")
         print(f"rewrite attempt severity: {severity}")
@@ -275,7 +676,7 @@ def cmd_promote_rewrite() -> int:
     source = OUTBOX_DIR / "chatgpt_raw_output_rewrite.md"
     if not source.exists():
         raise FileNotFoundError("missing outbox/chatgpt_raw_output_rewrite.md")
-    parsed = parse_chatgpt_output(read_text_auto(source))
+    parsed = parse_chatgpt_output(read_runtime_text(source))
     validate_writeback(parsed.writeback)
     shutil.copy2(source, OUTBOX_DIR / "chatgpt_raw_output.md")
     print("promoted rewrite output to chatgpt_raw_output.md")
@@ -291,7 +692,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     raw_path = outbox_dir / "chatgpt_raw_output.md"
     if not raw_path.exists():
         raise FileNotFoundError(f"missing {outbox_dir / 'chatgpt_raw_output.md'}")
-    raw_output = read_text_auto(raw_path)
+    raw_output = read_runtime_text(raw_path)
     gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
     parsed = gate["parsed"]
     flavor_report = gate["flavor_report"]
@@ -313,30 +714,34 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     if flavor_report["severity"] == "heavy":
         raise RuntimeError("AI flavor check is heavy; run: python -m trpg_orchestrator.cli run-rewrite")
 
-    pressure_pack = read_json(outbox_dir / "pressure_pack.json") if (outbox_dir / "pressure_pack.json").exists() else {}
+    pressure_pack = normalize_pressure_pack_compat(read_json(outbox_dir / "pressure_pack.json")) if (outbox_dir / "pressure_pack.json").exists() else {}
+    capability_plan = read_capability_plan(outbox_dir, resolved, action_text(outbox_dir), memory)
     if skip_v4_audit:
         audit_result = {"decision": "accept", "reason": "skip-v4-audit enabled", "approved_writeback": parsed.writeback, "memory_files_to_update": [], "warnings": ["audit skipped"]}
     else:
         audit_result = extract_json_object(DeepSeekClient().complete_json(
             read_prompt("v4_audit_prompt.md"),
-            build_audit_user_prompt(resolved, memory, pressure_pack, parsed.writeback),
+            build_audit_user_prompt(resolved, memory, pressure_pack, parsed.writeback, capability_plan),
         ))
     validate_audit_result(audit_result)
     write_json(outbox_dir / "v4_audit_result.json", audit_result)
     decision = audit_result.get("decision")
     if decision == "reject":
-        store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, {}, outbox_dir))
+        store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, {}, outbox_dir, capability_plan=capability_plan))
         raise RuntimeError(f"V4 rejected writeback: {audit_result.get('reason', '')}")
     if decision not in {"accept", "revise"}:
         raise RuntimeError(f"invalid V4 audit decision: {decision}")
 
     approved = audit_result.get("approved_writeback") or parsed.writeback
+    validate_writeback(approved)
     raw_digest = writeback_hash(parsed.writeback)
     approved_digest = writeback_hash(approved)
     for digest in (raw_digest, approved_digest):
         if has_applied_writeback(memory, digest):
             raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
-    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest])
+    story_progress_before = memory.get("story_progress.json", {})
+    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack)
+    story_progress_after = updates.get("story_progress.json", story_progress_before)
     run_records = append_run_record(
         memory.get("run_records.json", {}),
         resolved,
@@ -352,7 +757,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     if touched:
         store.backup_files(resolved, touched)
         store.write_memory_updates(resolved, updates)
-    log_path = store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, updates, outbox_dir))
+    log_path = store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, updates, outbox_dir, story_progress_before, story_progress_after, capability_plan))
     mirror_to_global_outbox(outbox_dir)
     print(f"updated files: {', '.join(touched) if touched else '(none)'}")
     print(f"log: {log_path}")
@@ -381,6 +786,12 @@ def append_run_record(run_records: dict, campaign_id: str, player_action: str, p
         "block_count": len(getattr(parsed, "blocks", []) or []),
         "actors": actors,
         "pressure_pack_turn_type": pressure_pack.get("turn_type", ""),
+        "capabilities": read_json(outbox_dir / "capability_plan.json").get("loaded_capabilities", []) if (outbox_dir / "capability_plan.json").exists() else [],
+        "output_request_modes": {key: value.get("mode", "") for key, value in (pressure_pack.get("output_requests", {}) if isinstance(pressure_pack.get("output_requests"), dict) else {}).items() if isinstance(value, dict)},
+        "payload_fulfillment_used": bool(read_json(outbox_dir / "missing_capabilities.json").get("missing_capabilities", [])) if (outbox_dir / "missing_capabilities.json").exists() else False,
+        "frontend_modules_changed": [],
+        "story_progress_label": pressure_pack.get("progress_control", {}).get("progress_note", "") if isinstance(pressure_pack.get("progress_control"), dict) else "",
+        "protocol_warning_count": len(pressure_pack.get("protocol_warnings", [])) if isinstance(pressure_pack.get("protocol_warnings"), list) else 0,
         "audit_decision": audit_result.get("decision", ""),
         "updated_files": sorted(final_updates.keys()),
         "source_paths": {
@@ -414,12 +825,13 @@ def cmd_audit_writeback(campaign_id: str | None) -> int:
     writeback_path = outbox_dir / "state_writeback.json"
     if not writeback_path.exists():
         raise FileNotFoundError(f"missing {outbox_dir / 'state_writeback.json'}")
-    pressure_pack = read_json(outbox_dir / "pressure_pack.json") if (outbox_dir / "pressure_pack.json").exists() else {}
+    pressure_pack = normalize_pressure_pack_compat(read_json(outbox_dir / "pressure_pack.json")) if (outbox_dir / "pressure_pack.json").exists() else {}
     writeback = read_json(writeback_path)
     validate_writeback(writeback)
+    capability_plan = read_capability_plan(outbox_dir, resolved, action_text(outbox_dir), memory)
     audit_result = extract_json_object(DeepSeekClient().complete_json(
         read_prompt("v4_audit_prompt.md"),
-        build_audit_user_prompt(resolved, memory, pressure_pack, writeback),
+        build_audit_user_prompt(resolved, memory, pressure_pack, writeback, capability_plan),
     ))
     validate_audit_result(audit_result)
     write_json(outbox_dir / "v4_audit_result.json", audit_result)
@@ -436,7 +848,7 @@ def cmd_rewrite_plan() -> int:
     raw_path = OUTBOX_DIR / "chatgpt_raw_output.md"
     if not raw_path.exists():
         raise FileNotFoundError("missing outbox/chatgpt_raw_output.md")
-    raw_output = read_text_auto(raw_path)
+    raw_output = read_runtime_text(raw_path)
     flavor_report = check_ai_flavor(raw_output, memory.get("forbidden_changes.json"))
     write_json(OUTBOX_DIR / "ai_flavor_report.json", flavor_report)
     correction = maybe_v4_rewrite_correction(raw_output, flavor_report, memory)
@@ -475,16 +887,27 @@ def cmd_migrate_memory() -> int:
 
 
 def cmd_run_turn(action: str, campaign_id: str | None, offline_pressure_pack: bool, skip_v4_audit: bool, auto_rewrite: bool, rewrite_attempts: int) -> int:
+    if is_light_director_action(action):
+        return cmd_v4_light_action(action, campaign_id, skip_v4_audit=True)
+    if auto_rewrite:
+        print("auto rewrite disabled in lazy payload pipeline to preserve model call limits")
+        auto_rewrite = False
     cmd_prepare(action, campaign_id, offline_pressure_pack)
     cmd_send(campaign_id)
     try:
-        return cmd_ingest(campaign_id, skip_v4_audit)
+        result = cmd_ingest(campaign_id, skip_v4_audit)
     except RuntimeError as exc:
         if auto_rewrite and "AI flavor check is heavy" in str(exc):
             print("auto rewrite triggered")
             cmd_run_rewrite(rewrite_attempts)
-            return cmd_ingest(campaign_id, skip_v4_audit)
-        raise
+            result = cmd_ingest(campaign_id, skip_v4_audit)
+        else:
+            raise
+    resolved = MemoryStore().resolve_campaign_id(campaign_id)
+    outbox_dir = campaign_outbox_dir(resolved)
+    pressure_pack = read_json(outbox_dir / "pressure_pack.json") if (outbox_dir / "pressure_pack.json").exists() else {}
+    write_json(outbox_dir / "image_job.json", {"status": "skipped", "reason": "lazy pipeline defers image generation to canvas_jobs or explicit asset APIs", "visual_asset_count": len(image_pass_assets(pressure_pack))})
+    return result
 
 
 
@@ -545,23 +968,99 @@ def cmd_validate_memory() -> int:
     return 0
 
 
+def cmd_validate_encoding() -> int:
+    result = validate_repository_encoding(PROJECT_ROOT)
+    issues = result["issues"]
+    print(f"checked files: {result['checked_files']}")
+    print(f"issues: {len(issues)}")
+    for issue in issues:
+        print(f"- {issue['path']} [{issue['type']}] {issue['detail']}")
+    return 0 if result["ok"] else 1
+
+
+IMAGE_ACTION_RE = re.compile(r"执行生图|生图|生成图片|画图|出图|重绘|redraw|image\s*generation", re.I)
+
+
+def explicit_image_action(action: str) -> bool:
+    return bool(IMAGE_ACTION_RE.search(str(action or "")))
+
+
+def image_pass_assets(pressure_pack: dict) -> list[dict]:
+    payloads = pressure_pack.get("payloads") if isinstance(pressure_pack, dict) else {}
+    assets = payloads.get("visual_assets") if isinstance(payloads, dict) and payloads.get("visual_assets") else pressure_pack.get("visual_assets") if isinstance(pressure_pack, dict) else []
+    rows = []
+    for asset in assets if isinstance(assets, list) else []:
+        if not isinstance(asset, dict):
+            continue
+        if asset.get("positive_prompt") or asset.get("image_prompt") or asset.get("trigger_image_generation") is True:
+            rows.append(asset)
+    return rows
+
+
+def image_pass_requested(action: str, pressure_pack: dict) -> bool:
+    return explicit_image_action(action) or bool(image_pass_assets(pressure_pack))
+
+
 def action_text(outbox_dir: Path | None = None) -> str:
     path = (outbox_dir or OUTBOX_DIR) / "last_player_action.txt"
-    return read_text_auto(path) if path.exists() else ""
+    return read_runtime_text(path) if path.exists() else ""
 
 
-def _log_payload(player_action: str, pressure_pack: dict, raw_output: str, flavor_report: dict, audit_result: dict, final_updates: dict, outbox_dir: Path | None = None) -> dict:
+def read_capability_plan(outbox_dir: Path, campaign_id: str, player_action: str, memory: dict) -> dict:
+    path = outbox_dir / "capability_plan.json"
+    if path.exists():
+        data = read_json(path)
+        if isinstance(data, dict):
+            return data
+    return build_capability_plan(campaign_id, player_action, memory)
+
+
+def _log_payload(
+    player_action: str,
+    pressure_pack: dict,
+    raw_output: str,
+    flavor_report: dict,
+    audit_result: dict,
+    final_updates: dict,
+    outbox_dir: Path | None = None,
+    story_progress_before: dict | None = None,
+    story_progress_after: dict | None = None,
+    capability_plan: dict | None = None,
+) -> dict:
     source_outbox = outbox_dir or OUTBOX_DIR
     chatgpt_input_path = source_outbox / "chatgpt_input.md"
+    payload_summary = summarize_payload_keys(pressure_pack)
+    missing_path = source_outbox / "missing_capabilities.json"
+    patch_path = source_outbox / "payload_patch.json"
+    missing_capabilities = read_json(missing_path) if missing_path.exists() else {}
+    payload_patch = read_json(patch_path) if patch_path.exists() else {}
+    optional_writebacks = {}
+    approved = audit_result.get("approved_writeback") if isinstance(audit_result, dict) else {}
+    if isinstance(approved, dict):
+        optional_writebacks = approved.get("optional_writebacks") if isinstance(approved.get("optional_writebacks"), dict) else {}
     return {
         "user_input": player_action,
+        "capability_plan": capability_plan or {},
+        "loaded_capabilities": capability_plan.get("loaded_capabilities", []) if isinstance(capability_plan, dict) else [],
+        "selected_prompt_modules": capability_plan.get("prompt_modules", {}) if isinstance(capability_plan, dict) else {},
+        "selected_memory_file_keys": capability_plan.get("memory_refs", {}) if isinstance(capability_plan, dict) else {},
         "v4_pressure_pack": pressure_pack,
+        "output_requests": pressure_pack.get("output_requests", {}),
+        "payload_keys": payload_summary,
+        "missing_capabilities": missing_capabilities,
+        "payload_fulfillment_used": bool(missing_capabilities.get("missing_capabilities")) and not payload_patch.get("skipped", False),
+        "payload_fulfillment_warnings": payload_patch.get("warnings", []) if isinstance(payload_patch, dict) else [],
+        "optional_writebacks_keys": sorted(optional_writebacks.keys()),
+        "capability_escalation_request": approved.get("capability_escalation_request", {}) if isinstance(approved, dict) else {},
         "outbox_dir": str(source_outbox),
-        "chatgpt_input": read_text_auto(chatgpt_input_path) if chatgpt_input_path.exists() else "",
+        "chatgpt_input": read_runtime_text(chatgpt_input_path) if chatgpt_input_path.exists() else "",
         "chatgpt_raw_output": raw_output,
         "ai_flavor_report": flavor_report,
         "v4_audit_result": audit_result,
         "final_write": final_updates,
+        "story_progress_before": story_progress_before or {},
+        "story_progress_after": story_progress_after or final_updates.get("story_progress.json", {}),
+        "protocol_warnings": (story_progress_after or final_updates.get("story_progress.json", {})).get("protocol_warnings", []) if isinstance(story_progress_after or final_updates.get("story_progress.json", {}), dict) else [],
     }
 
 
@@ -583,9 +1082,103 @@ def _offline_pressure_pack(campaign_id: str, action: str, memory: dict) -> dict:
         "choice_requirement": {"need_choice": False, "choice_level": "none", "why": "offline development placeholder", "choice_style": "no_choice"},
         "ending_target": "",
         "state_update_hints": [],
+        "progress_control": _default_progress_control(),
+        "output_requests": _default_output_requests("offline fallback", story_progress_reason="offline fallback"),
+        "payloads": {},
         "visual_assets": [],
         "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
+        "map_canvas": {"canvas": {}, "legend": {}, "ascii": [], "points": [], "routes": [], "hazards": []},
+        "story_topology": {"nodes": [], "edges": [], "fixed_fields": {}},
         "human_readable_note": "offline development placeholder pressure pack; use DeepSeek V4 for formal play.",
+    }
+
+
+def _light_action_pressure_pack(campaign_id: str, action: str) -> dict:
+    return {
+        "campaign_id": campaign_id,
+        "turn_type": "light_action",
+        "creation_mode": {
+            "label": "v4-direct",
+            "director_only": True,
+            "actor_layer_skipped": True,
+            "reason": "fixed lightweight operation",
+        },
+        "current_situation": {
+            "player_action": action,
+            "mode": "fixed_light_action",
+            "immediate_context": "Return concise operational information without ChatGPT actor-layer expansion.",
+        },
+        "pressure_pack": {
+            "core_accident_or_change": "",
+            "human_pressure": "",
+            "environment_pressure": "",
+            "enemy_or_mystery_pressure": "",
+            "resource_or_time_pressure": "",
+            "conflicting_interests": [],
+        },
+        "npc_direction": [],
+        "scene_materials": [],
+        "must_reveal_naturally": [],
+        "must_not_explain_directly": [],
+        "forbidden_this_turn": [],
+        "player_pressure_point": "",
+        "choice_requirement": {
+            "need_choice": False,
+            "choice_level": "none",
+            "why": "light action should usually answer directly",
+            "choice_style": "no_choice",
+            "options": [],
+        },
+        "ending_target": "Answer the fixed light action briefly and update state only when a real change is confirmed.",
+        "state_update_hints": [],
+        "progress_control": _default_progress_control(),
+        "output_requests": _default_output_requests("light action direct path", story_progress_reason="light action direct path"),
+        "payloads": {},
+        "visual_assets": [],
+        "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
+        "map_canvas": {"canvas": {}, "legend": {}, "ascii": [], "points": [], "routes": [], "hazards": []},
+        "story_topology": {"nodes": [], "edges": [], "fixed_fields": {}},
+        "human_readable_note": "V4 light action direct path; ChatGPT actor layer skipped.",
+    }
+
+
+def normalize_light_writeback(writeback: dict) -> dict:
+    data = dict(writeback or {})
+    data.setdefault("short_term_state", {})
+    data.setdefault("long_term_memory", {})
+    data.setdefault("new_open_threads", [])
+    data.setdefault("closed_threads", [])
+    data.setdefault("next_turn_suggestions", "")
+    data.setdefault("summary_for_recent_context", "")
+    return data
+
+
+def _default_progress_control() -> dict:
+    return {
+        "current_chapter_id": "",
+        "current_phase_id": "",
+        "current_node_id": "",
+        "current_node_name": "",
+        "node_goal": "",
+        "beat_targets_this_turn": [],
+        "pace_command": "normal",
+        "legal_next_nodes": [],
+        "must_not_repeat": [],
+        "progress_note": "",
+    }
+
+
+def _default_output_requests(reason: str, story_progress_reason: str | None = None) -> dict:
+    return {
+        "story_progress": {"mode": "update", "trigger": "system_required", "reason": story_progress_reason or reason},
+        "map": {"mode": "keep_previous", "trigger": "none", "reason": reason},
+        "visual_assets": {"mode": "none", "trigger": "none", "reason": ""},
+        "gallery": {"mode": "none", "trigger": "none", "reason": ""},
+        "inventory": {"mode": "none", "trigger": "none", "reason": ""},
+        "character_card": {"mode": "none", "trigger": "none", "reason": ""},
+        "dossier": {"mode": "none", "trigger": "none", "reason": ""},
+        "dice_or_check": {"mode": "none", "trigger": "none", "reason": ""},
+        "canvas_jobs": {"mode": "none", "trigger": "none", "reason": ""},
     }
 
 

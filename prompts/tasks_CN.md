@@ -71,10 +71,12 @@
 - V4 压力包已新增：
   - `visual_assets`
   - `map_route`
-- schema 已校验这两个字段。
+- `map_canvas`
+- `story_topology`
+- schema 已校验这些字段。
 - 离线开发压力包已补空结构。
-- 前端地图已读取 `map_route.nodes / markers / title`。
-- 资料夹已读取 `pressure_pack.visual_assets` 并转成可视资产卡片。
+- 前端地图优先读取 `map_canvas.ascii / points / routes / hazards`，旧 `map_route.nodes / markers / title` 作为兼容 fallback。
+- 资料夹已读取 `pressure_pack.visual_assets` 并转成可视资产卡片；生图项可携带完整正向/负面提示词、画幅、画风和画质参数。
 
 ## 二、待建任务
 

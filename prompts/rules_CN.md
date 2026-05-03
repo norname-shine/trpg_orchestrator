@@ -205,6 +205,15 @@ Codex 必须检查：
 - 必须在发型、头饰、胡须 / 嘴型、衣服颜色、强调色、背景色等方面做差异。
 - 未确认详细外观时，头像只是界面 token，不作为长期设定。
 
+### 正式生图头像覆盖规则
+
+- 初始 Canvas 头像只是占位和兜底。
+- 正式生图成品如果包含已有玩家、NPC、伙伴、从者、怪物或关键角色，前端/运行时优先从成品图中识别并截取对应角色头像。
+- 多角色同框大图要分别截取和匹配角色，不只保存整张大图。
+- 成功匹配的截取头像覆盖旧 Canvas 头像；无法可靠识别时保留原头像。
+- 覆盖时同步固化角色视觉基准：脸型、五官、发型、服饰、主色、画风气质、识别物和禁止漂移点。
+- 后续生成该角色头像、立绘、半身像或全身像时，必须复用视觉基准，保持同一长相和风味。
+
 ### 物品 / 线索图标规则
 
 - 从记忆、当前资源、装备历史、确认写回事实生成。
@@ -214,6 +223,13 @@ Codex 必须检查：
 
 ## 七、资料夹规则
 
+- 资料夹分类在开局创建跑团时一次性固定，运行中不得因为临时视觉资产随机新增分类或筛选按钮。
+- 每个分类绑定固定唯一 ID；前台 JSON、后台输出、缓存资产都必须按这套 ID 对齐。
+- 只有匹配固定 ID 白名单的内容才允许生成资料夹卡片；未定义 ID、后台系统说明、普通临时视觉资产不得单独建卡。
+- `cg` 是全团通用固定筛选项；正式剧情 CG、生图成品、玩家可查看大图都进入 `cg`。
+- Fate 团默认 ID：`cg`、`master`、`servant`、`npc`、`scene` / `map`、`item`；其他团只替换开局分类配置，底层规则不变。
+- CG 与地图/场景分离：CG 走 `cg`，地图和地点走 `scene`。
+- 角色、物品、场景状态变化时复用原有卡片并原地更新，不重复生成同类冗余卡。
 - 资料夹卡片显示：
   - 标题
   - 简短细节
@@ -224,7 +240,16 @@ Codex 必须检查：
 - 筛选不应触发重建资产。
 - 资料夹不向普通用户提供删除缓存或重建缓存入口。
 
-## 八、visual_assets / map_route 协议
+## 八、正文栏留存规则
+
+- 正文栏在当前前端会话内采用列表式追加展示，新回合正文追加在旧正文后方，不做全量替换。
+- 固定保留最近 10 轮跑团正文；超出 10 轮时自动舍弃最旧回合。
+- 轮询刷新同一份正文 blocks 不得重复追加，必须按回合内容去重。
+- 重新打开前端时只展示后端最新一段正文，不自动恢复上一浏览器会话累计队列。
+- 正文 CG 标题固定只显示 `CG`。
+- 正文 CG 注释栏只放简短剧情场景描述，不展示 16:9、PC、9:16、构图预览、正式图标、正式深度图片、头像反哺、缓存、裁切、安全区等技术参数。
+
+## 九、visual_assets / map_route 协议
 
 ### visual_assets 示例
 
@@ -237,7 +262,17 @@ Codex 必须检查：
   "source_memory": "",
   "certainty": "confirmed | clue | uncertain | placeholder",
   "display_zone": "gallery | map | portrait | log",
-  "cache_policy": "stable | scene_only | rebuild_on_version"
+  "cache_policy": "stable | scene_only | rebuild_on_version",
+  "character_targets": [
+    {
+      "actor_id": "",
+      "avatar_key": "",
+      "role": "player | npc | companion | servant | monster | key_character",
+      "portrait_asset_kind": "portrait | npc_portrait | companion_portrait | monster_portrait",
+      "crop_policy": "auto_face | auto_bust | keep_existing_if_uncertain",
+      "update_visual_baseline": true
+    }
+  ]
 }
 ```
 
@@ -287,3 +322,4 @@ Codex 必须检查：
 - 不修改账号配置。
 - 找不到目标对话就停止。
 - 无法确认回复完整就停止。
+

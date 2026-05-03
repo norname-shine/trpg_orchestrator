@@ -181,7 +181,7 @@ This repository runs on Windows. Some historical Python files may be GBK, but fr
 - Player prose, ChatGPT input, ChatGPT replies, state writeback, JSON memory, and frontend text must never contain mojibake.
 - Runtime data is always written as UTF-8.
 - Legacy files may be read with automatic UTF-8 / UTF-8-BOM / GBK detection, but text must be checked for mojibake before parsing.
-- Do not use `errors="replace"` to silently swallow corruption and continue parsing, writing, or displaying text.
+- Do not use replacement decoding to silently swallow corruption and continue parsing, writing, or displaying text.
 - If runtime text still looks like mojibake, raise an error and stop so the source file or encoding boundary can be fixed.
 
 ## Prompt Language Policy
@@ -197,7 +197,7 @@ This repository runs on Windows. Some historical Python files may be GBK, but fr
 - Ordinary text reads should use `read_text_auto(path)`.
 - Runtime-critical text reads must use `read_runtime_text(path)`.
 - JSON reads must use `read_json(path)`.
-- Do not add `path.read_text(encoding="utf-8", errors="replace")`.
+- Do not add direct Path.read_text calls with replacement decoding.
 - Newly generated prompts, JSON, Markdown, HTML, CSS, JS, and outbox text must be UTF-8.
 - Ordinary text writes should use `write_text_utf8(path, text)`.
 - JSON writes should use `write_json(path, data)` with `ensure_ascii=False`.

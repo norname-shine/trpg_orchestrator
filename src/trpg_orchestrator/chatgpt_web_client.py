@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -49,14 +49,14 @@ class ChatGPTWebClient:
             "TRPG_BROWSER_USER_DATA_DIR."
         )
 
-    def send_file_and_capture(self, input_path: Path, output_path: Path) -> None:
+    def send_file_and_capture(self, input_path: Path, output_path: Path, mode: str = "text") -> None:
         self.validate_binding()
         if not input_path.exists():
             raise FileNotFoundError(f"missing ChatGPT input file: {input_path}")
-        mode = os.getenv("TRPG_CHATGPT_AUTOMATION", "manual").lower()
-        if mode != "playwright":
+        automation_mode = os.getenv("TRPG_CHATGPT_AUTOMATION", "manual").lower()
+        if automation_mode != "playwright":
             raise RuntimeError("send_file_and_capture requires TRPG_CHATGPT_AUTOMATION=playwright.")
-        self._send_with_playwright(input_path, output_path)
+        self._send_with_playwright(input_path, output_path, mode=mode)
 
     def capture_latest(self, output_path: Path) -> None:
         self.validate_binding()
@@ -65,7 +65,7 @@ class ChatGPTWebClient:
             raise RuntimeError("capture requires TRPG_CHATGPT_AUTOMATION=playwright.")
         self._send_with_playwright(Path("__capture_only__"), output_path, capture_only=True)
 
-    def _send_with_playwright(self, chatgpt_input_path: Path, output_path: Path, capture_only: bool = False) -> None:
+    def _send_with_playwright(self, chatgpt_input_path: Path, output_path: Path, capture_only: bool = False, mode: str = "text") -> None:
         user_data_dir = os.getenv("TRPG_BROWSER_USER_DATA_DIR")
         if not user_data_dir:
             raise RuntimeError("TRPG_BROWSER_USER_DATA_DIR is required when TRPG_CHATGPT_AUTOMATION=playwright.")
@@ -88,6 +88,8 @@ class ChatGPTWebClient:
             self.project_name,
             "--conversation",
             self.conversation_name,
+            "--mode",
+            mode,
         ]
         if capture_only:
             command.extend(["--capture-only", "true"])
@@ -98,18 +100,21 @@ class ChatGPTWebClient:
             cwd=str(SCRIPTS_DIR.parent),
             text=True,
             encoding="utf-8",
-            errors="replace",
             capture_output=True,
         )
+
         if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout).strip()
-            raise RuntimeError(f"ChatGPT Playwright automation stopped: {detail}")
+            detail = (completed.stderr or completed.stdout or "").strip()
+            if detail:
+                raise RuntimeError(f"ChatGPT Playwright automation stopped: {detail}")
+            raise RuntimeError(f"ChatGPT Playwright automation stopped with exit code {completed.returncode}")
         if not output_path.exists():
             raise RuntimeError("ChatGPT automation finished but did not create chatgpt_raw_output.md.")
         captured = read_runtime_text(output_path)
-        missing = missing_markers(captured)
-        if missing:
-            raise RuntimeError(f"Captured ChatGPT reply missing markers: {', '.join(missing)}")
+        if mode != "image":
+            missing = missing_markers(captured)
+            if missing:
+                raise RuntimeError(f"Captured ChatGPT reply missing markers: {', '.join(missing)}")
 
 
 def browser_safety_stop_reason(page_text: str) -> str | None:
@@ -127,12 +132,12 @@ def browser_safety_stop_reason(page_text: str) -> str | None:
         "privacy settings",
         "security settings",
         "security",
-        "ÕËºÅÉèÖÃ",
-        "°²È«ÑéÖ¤",
-        "ÑéÖ¤Âë",
-        "Ö§¸¶",
-        "¶©ÔÄ",
-        "ÒşË½ÉèÖÃ",
+        "è´¦å·è®¾ç½®",
+        "å®‰å…¨éªŒè¯",
+        "éªŒè¯ç ",
+        "æ”¯ä»˜",
+        "è®¢é˜…",
+        "éšç§è®¾ç½®",
     ]
     for term in blocked_terms:
         if term.lower() in lowered:

@@ -32,6 +32,8 @@ MEMORY_FILE_NAMES = [
     "equipment_history.json",
     "entity_index.json",
     "main_threads.json",
+    "story_blueprint.json",
+    "story_progress.json",
     "run_records.json",
     "recent_context.json",
     "forbidden_changes.json",

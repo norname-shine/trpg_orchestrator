@@ -15,21 +15,33 @@
     memory: false,
   },
   galleryFilter: "all",
+  galleryFilterIds: ["all", "cg", "monster", "npc", "scene", "item"],
   renderedMapKey: "",
   canvasRules: "",
   galleryAssets: [],
   cachedAssets: [],
+  storyTurnsByCampaign: {},
+  storyTurnSignatures: {},
   selectedGalleryKey: "",
+  transientGalleryAsset: null,
+  currentMapAsset: null,
   writebackReview: {},
   currentPressurePack: {},
   ruleFiles: [],
   selectedRule: "",
   frontendState: {},
   assetSeed: "",
+  runProgress: {
+    active: false,
+    percent: 0,
+    target: 0,
+    timer: null,
+    hideTimer: null,
+  },
 };
 
 const $ = (id) => document.getElementById(id);
-const ASSET_GENERATOR_VERSION = 14;
+const ASSET_GENERATOR_VERSION = 16;
 
 function init() {
   drawBackground();
@@ -62,9 +74,20 @@ function bindControls() {
     if (event.target.id === "companionOverlay") closeCompanionOverlay();
   });
   $("viewAllBtn").addEventListener("click", openGalleryOverlay);
+  document.querySelector(".mapCanvas")?.addEventListener("click", () => openCurrentMapOverlay());
+  document.querySelector(".mapCanvas")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openCurrentMapOverlay();
+    }
+  });
   $("closeGalleryOverlay").addEventListener("click", closeGalleryOverlay);
   $("galleryOverlay").addEventListener("click", (event) => {
     if (event.target.id === "galleryOverlay") closeGalleryOverlay();
+  });
+  $("closeCgOverlay")?.addEventListener("click", closeCgOverlay);
+  $("cgOverlay")?.addEventListener("click", (event) => {
+    if (event.target.id === "cgOverlay") closeCgOverlay();
   });
   $("useGalleryAssetBtn").addEventListener("click", useSelectedGalleryAsset);
   $("rulesBtn").addEventListener("click", openRulesBrowser);
@@ -102,6 +125,7 @@ function bindControls() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeStoryPicker();
     if (event.key === "Escape") closeGalleryOverlay();
+    if (event.key === "Escape") closeCgOverlay();
     if (event.key === "Escape") closeRulesOverlay();
     if (event.key === "Escape") closeCompanionOverlay();
   });
@@ -176,7 +200,7 @@ async function runTurn() {
     showPanel("logs");
     return setLog("玩家行动不能为空。");
   }
-  await startJob("/api/run-turn", { action, campaign_id: state.activeCampaign });
+  await startJob("/api/run-turn", { action, campaign_id: state.activeCampaign }, { storyProgress: true, clearInputOnSuccess: true });
 }
 
 async function prepareOnly() {
@@ -197,12 +221,23 @@ function exportCampaign() {
   window.open(`/api/export-campaign${params}`, "_blank");
 }
 
-async function startJob(path, payload) {
+async function startJob(path, payload, options = {}) {
   try {
     setBusy(true);
-    showPanel("logs");
-    setLog("命令已提交，后台开始执行。");
+    if (options.storyProgress) {
+      showPanel("story");
+      beginRunProgress();
+      scrollStoryToBottom(true);
+      setLog("命令已提交，后台开始执行。");
+    } else {
+      showPanel("logs");
+      setLog("命令已提交，后台开始执行。");
+    }
     await api(path, { method: "POST", body: JSON.stringify(payload) });
+    if (options.clearInputOnSuccess) {
+      const input = $("actionInput");
+      if (input) input.value = "";
+    }
     await refresh();
   } catch (err) {
     setBusy(false, true);
@@ -219,6 +254,7 @@ async function refresh() {
     state.currentPressurePack = data.output?.pressure_pack || {};
     state.cachedAssets = Array.isArray(data.assets) ? data.assets : [];
     renderStatus(data);
+    updateRunProgressFromPipeline(data.pipeline || {}, data.job || {}, data.output || {});
     renderFrontendState(state.frontendState, data.campaign_state || {});
     renderOutput(data.output || {});
   } catch (err) {
@@ -243,14 +279,8 @@ function renderStatus(data) {
     if (hasChapter) setText("chapterName", chapterName);
   }
   setText("mapLabel", scene.location || "当前路线");
-  const characterName = extractPlayerName(data.campaign_state?.player || {}, data.campaign_state?.character_prompt || {}) || "player";
-  drawPixelAvatar(characterName || state.activeCampaign || "TRPG", {
-    cache: true,
-    objectId: slugify(characterName || "player"),
-    seedText: scopedSeed(characterName || "player"),
-    variant: "player_full_body",
-  });
-  renderCachedMap(scene, state.frontendState?.map_panel || {});
+  renderCachedAvatar(data.campaign_state || {});
+  renderModule("map_panel", state.frontendState?.modules?.map_panel || state.frontendState?.map_panel || {}, state.frontendState || {}, data.campaign_state || {});
 
   const job = data.job || {};
   const failed = job.returncode !== null && job.returncode !== 0;
@@ -290,17 +320,59 @@ async function loadCachedAssets() {
 }
 
 function renderCachedMap(scene, mapPanel = {}) {
+  const modulePayload = mapPanel.payload || mapPanel.latest_map || {};
+  const mode = mapPanel.mode || (mapPanel.keep_previous ? "keep_previous" : "none");
+  const updateRequested = mapPanel.update_requested === true;
   const seed = scene.location || state.activeCampaign || "map";
-  const route = state.currentPressurePack?.map_route || mapPanel.latest_map?.map_route || {};
-  const routeKey = route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
+  const route = modulePayload.map_route || {};
+  const mapCanvas = modulePayload.map_canvas || {};
+  const routeKey = mapCanvas.title || route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
+  setText("mapLabel", route.title || modulePayload.title || scene.location || "当前路线");
+  if (!updateRequested || mode === "keep_previous" || mode === "none") {
+    state.currentMapAsset = {
+      kind: "scene",
+      key: modulePayload.asset_key || "",
+      title: modulePayload.title || scene.location || "当前区域地图",
+      meta: "当前地图",
+      detail: routeKey || scene.immediate_pressure || "当前展示的区域地图。",
+      seed: scopedSeed(seed),
+      scene: { ...scene, map_route: route, map_canvas: mapCanvas },
+      cachedUrl: modulePayload.url || "",
+      status: "cached",
+    };
+    if (modulePayload.url) setAssetImage($("mapImage"), modulePayload.url);
+    return;
+  }
+  if (!Array.isArray(route.nodes) || !route.nodes.length) {
+    console.warn("skip map redraw: empty route payload", mapPanel);
+    return;
+  }
   const objectId = slugify(`${scene.location || "current_map"}:${routeKey || "base"}`);
   const mapKey = `${state.activeCampaign}:${objectId}:v${ASSET_GENERATOR_VERSION}`;
+  const mapScene = { ...scene, map_route: route, map_canvas: mapCanvas };
+  state.currentMapAsset = {
+    kind: "scene",
+    key: `current_map:${mapKey}`,
+    title: route.title || scene.location || "当前区域地图",
+    meta: "当前地图",
+    detail: routeKey || scene.immediate_pressure || "当前展示的区域地图。",
+    seed: scopedSeed(seed),
+    scene: mapScene,
+    cachedUrl: modulePayload.url || "",
+    status: "current",
+  };
   if (state.renderedMapKey === mapKey) return;
   state.renderedMapKey = mapKey;
+  const mapWrap = document.querySelector(".mapCanvas");
+  if (mapWrap) {
+    mapWrap.tabIndex = 0;
+    mapWrap.setAttribute("role", "button");
+    mapWrap.setAttribute("aria-label", "打开完整区域地图");
+  }
   drawPixelMap(seed, {
     cache: true,
     objectId,
-    scene: { ...scene, map_route: route },
+    scene: mapScene,
     metadata: {
       title: route.title || scene.location || "当前区域地图",
       detail: routeKey || scene.immediate_pressure || "",
@@ -308,10 +380,18 @@ function renderCachedMap(scene, mapPanel = {}) {
       source: "map_route",
       object_id: objectId,
       map_route: route,
-      visual_assets: state.currentPressurePack?.visual_assets || [],
+      map_canvas: mapCanvas,
+      visual_assets: modulePayload.visual_assets || [],
+      status: "current",
     },
     force: true,
   });
+}
+
+function renderCachedAvatar(campaignState = {}) {
+  const characterName = extractPlayerName(campaignState.player || {}, campaignState.character_prompt || {}) || "player";
+  const playerFeedback = formalPortraitFeedbackAsset(characterName, characterName, "player");
+  if (playerFeedback?.url && $("avatarImage")) setAssetImage($("avatarImage"), playerFeedback.url);
 }
 
 function renderCampaignState(campaignState) {
@@ -376,14 +456,148 @@ function hidePlayerHiddenAdminPanels() {
 
 function renderFrontendState(frontendState, campaignState) {
   const fs = frontendState || {};
+  const modules = fs.modules || {};
   state.lastCampaignState = campaignState;
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
+  ["story_progress", "map_panel", "gallery", "inventory", "dossier", "character_card", "canvas_jobs"].forEach((name) => {
+    renderModule(name, modules[name], fs, campaignState);
+  });
   renderSidePanel(campaignState, fs);
   renderMemoryPanel(campaignState);
-  renderGalleryFilters(fs.gallery?.filters || []);
-  renderGallery(campaignState, fs.gallery || {});
+  if (!modules.gallery || modules.gallery.mode !== "no_update") {
+    renderGalleryFilters(fs.gallery?.filters || []);
+    renderGallery(campaignState, fs.gallery || {}, modules.gallery);
+  }
   renderQuickActions(fs.quick_actions || []);
+}
+
+function renderModule(name, moduleState = {}, frontendState = {}, campaignState = {}) {
+  if (!moduleState) return;
+  if (moduleState.mode === "hidden" || moduleState.mode === "admin_only") return;
+  if (moduleState.mode === "no_update") return;
+  if (moduleState.mode === "keep_previous") return keepPreviousModule(name, moduleState);
+  if (name === "story_progress") return renderStoryProgressModule(moduleState);
+  if (name === "map_panel") return updateMapModule(moduleState, campaignState);
+  if (name === "gallery") return updateGalleryModule(moduleState, campaignState);
+  if (name === "inventory") return updateInventoryModule(moduleState);
+  if (name === "dossier") return updateDossierModule(moduleState);
+  if (name === "character_card") return updateCharacterCardModule(moduleState, campaignState);
+  if (name === "canvas_jobs") return processCanvasJobs(moduleState, frontendState, campaignState);
+}
+
+function keepPreviousModule(name, moduleState = {}) {
+  if (name !== "map_panel") return;
+  const ref = moduleState.payload_ref || moduleState.payload?.url || "";
+  if (ref && !ref.startsWith("asset://") && $("mapImage")) setAssetImage($("mapImage"), ref);
+}
+
+function updateMapModule(moduleState = {}, campaignState = {}) {
+  if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
+  renderCachedMap(campaignState?.recent?.current_scene || {}, moduleState);
+}
+
+function updateGalleryModule(moduleState = {}, campaignState = {}) {
+  if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
+  renderGallery(campaignState, { module_payload: moduleState.payload || {} }, moduleState);
+}
+
+function updateInventoryModule(moduleState = {}) {
+  if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
+  state.latestInventoryPayload = moduleState.payload || [];
+}
+
+function updateDossierModule(moduleState = {}) {
+  if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
+  state.latestDossierPayload = moduleState.payload || [];
+}
+
+function updateCharacterCardModule(moduleState = {}, campaignState = {}) {
+  if (moduleState.mode !== "update" || moduleState.update_requested !== true || !moduleState.payload) return;
+  renderCharacterCard(protocolCharacterCard(moduleState.payload, campaignState));
+}
+
+function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState = {}) {
+  if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
+  const jobs = Array.isArray(moduleState.payload) ? moduleState.payload : [];
+  if (!jobs.length) return;
+  jobs.forEach((job) => {
+    if (!isValidCanvasJob(job)) {
+      console.warn("skip invalid canvas job", job);
+      return;
+    }
+    if (job.kind === "map") {
+      const mapModule = frontendState.modules?.map_panel || {};
+      const payload = mapModule.payload || {};
+      const route = payload.map_route || {};
+      if (!Array.isArray(route.nodes) || !route.nodes.length) {
+        console.warn("skip map canvas job without route nodes", job);
+        return;
+      }
+      renderCachedMap(campaignState?.recent?.current_scene || {}, { mode: "update", update_requested: true, payload });
+      return;
+    }
+    if (job.kind === "portrait") {
+      const card = frontendState.modules?.character_card?.payload || frontendState.character_card || {};
+      const seed = card.name || job.asset_key || state.activeCampaign || "portrait";
+      drawPixelAvatar(seed, {
+        cache: true,
+        objectId: slugify(job.asset_key),
+        seedText: scopedSeed(`${state.activeCampaign}:${job.asset_key}`),
+        variant: "npc",
+      });
+      return;
+    }
+    console.warn("canvas job kind deferred", job.kind);
+  });
+}
+
+function isValidCanvasJob(job) {
+  if (!job || typeof job !== "object") return false;
+  const required = ["job_id", "kind", "renderer", "trigger", "input_ref", "asset_key", "cache_policy"];
+  if (required.some((key) => !String(job[key] || "").trim())) return false;
+  const text = required.map((key) => String(job[key] || "").toLowerCase()).join(" ");
+  if (text.includes("placeholder") || text.includes("todo") || text.includes("tbd")) return false;
+  if (!state.activeCampaign || !state.assetSeed) return false;
+  return true;
+}
+
+function renderStoryProgressModule(moduleState = {}) {
+  const payload = moduleState.payload || state.frontendState?.story_progress || {};
+  const panel = $("storyProgressPanel");
+  if (!panel) return;
+  if (payload.enabled === false) {
+    panel.classList.remove("hidden");
+    setText("storyPace", "idle");
+    setText("storyOverallProgress", "0%");
+    setText("storyChapterName", "当前章节");
+    setText("storyChapterProgress", "0%");
+    setText("storyNodeName", "当前节点");
+    setText("storyNodeProgress", "0%");
+    setText("storyProgressStatus", payload.status_text || "未启用结构化故事进度");
+    const bar = $("storyOverallBar");
+    if (bar) bar.style.width = "0%";
+    return;
+  }
+  const overall = clampPercent(payload.overall_progress);
+  const chapter = payload.current_chapter || {};
+  const node = payload.current_node || {};
+  panel.classList.remove("hidden");
+  setText("storyPace", payload.pace_command || "normal");
+  setText("storyOverallProgress", `${overall}%`);
+  setText("storyChapterName", chapter.name || "当前章节");
+  setText("storyChapterProgress", `${clampPercent(payload.chapter_progress ?? chapter.progress)}%`);
+  setText("storyNodeName", node.name || "当前节点");
+  setText("storyNodeProgress", `${clampPercent(payload.node_progress ?? node.progress)}%`);
+  setText("storyProgressStatus", payload.status_text || payload.progress_label || "故事进度正常。");
+  const bar = $("storyOverallBar");
+  if (bar) bar.style.width = `${overall}%`;
+}
+
+function clampPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, Math.round(number)));
 }
 
 function protocolCharacterCard(card = {}, campaignState = {}) {
@@ -422,12 +636,13 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
 
 function protocolCompanionCard(companion = {}, campaignState = {}) {
   if (companion && companion.name) {
+    const raw = companion.meta || companion;
     return {
       name: companion.name,
       meta: companion.identity || companion.archetype || "伙伴",
-      seed: companion.portrait?.asset_key || companion.name,
+      seed: raw.visual_seed || companion.visual_seed || companion.portrait?.asset_key || companion.name,
       archetype: companion.archetype || "companion",
-      raw: companion.meta || companion,
+      raw,
     };
   }
   const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
@@ -469,7 +684,7 @@ function applyQuickAction(action) {
   if (!input || !action) return;
   input.value = action;
   input.focus();
-  if (action === "继续") runTurn();
+  if (action === "继续" || action === "复盘") runTurn();
 }
 
 function characterFallback(campaignState, name, scene = {}) {
@@ -702,6 +917,11 @@ function renderCharacterCard(card) {
   renderVitals(card.vitals);
   renderConditionBadges(card.conditions);
   renderAttributes(card.attributes, card.name);
+  const avatar = $("avatarImage");
+  const feedback = formalPortraitFeedbackAsset(card.name, card.name, "player");
+  if (avatar && feedback?.url) {
+    setAssetImage(avatar, feedback.url);
+  }
 }
 
 function renderCompanionCard(companion) {
@@ -715,6 +935,7 @@ function renderCompanionCard(companion) {
     objectId: slugify(companion.name || "companion"),
     seedText: scopedSeed(companion.seed || companion.name || "companion"),
     archetype: companion.archetype,
+    kind: "companion_portrait",
   });
 }
 
@@ -1001,6 +1222,7 @@ function dedupeRows(rows) {
 
 async function renderOutput(output) {
   if (output.campaign_id && state.activeCampaign && output.campaign_id !== state.activeCampaign) {
+    clearStoryTurnHistory(state.activeCampaign);
     renderStoryBlocks([], "当前跑团暂无正文记录。");
     setText("summaryText", `已拦截其他跑团的正文记录：${output.campaign_id}`);
     setText("directorText", JSON.stringify({
@@ -1045,7 +1267,8 @@ async function renderOutput(output) {
   // Preprocess blocks: split NPC dialogue out of gm_narration blocks
   blocks = splitNpcDialogueBlocks(blocks);
 
-  renderStoryBlocks(blocks, body || "暂无正文。");
+  const storyBlocks = appendStoryTurnHistory(blocks, body || "暂无正文。", output);
+  renderStoryBlocks(storyBlocks, body || "暂无正文。");
   renderSummary(summary || "暂无回合摘要。");
   const director = {
     pressure_pack: output.pressure_pack || {},
@@ -1070,6 +1293,49 @@ async function loadWritebackReview(options = {}) {
       $("writebackFiles").innerHTML = "";
     }
   }
+}
+
+function appendStoryTurnHistory(blocks, fallbackText, output = {}) {
+  const campaignId = state.activeCampaign || output.campaign_id || "default";
+  const rows = visibleStoryBlocks(blocks);
+  const turnBlocks = rows.length ? rows : legacyTextBlocks(fallbackText);
+  if (!turnBlocks.length) return [];
+  const signature = storyTurnSignature(turnBlocks, output);
+  const turns = state.storyTurnsByCampaign[campaignId] || [];
+  const signatures = state.storyTurnSignatures[campaignId] || [];
+  if (!signatures.includes(signature)) {
+    turns.push({ signature, blocks: turnBlocks });
+    signatures.push(signature);
+    while (turns.length > 10) turns.shift();
+    while (signatures.length > 10) signatures.shift();
+    state.storyTurnsByCampaign[campaignId] = turns;
+    state.storyTurnSignatures[campaignId] = signatures;
+  }
+  return (state.storyTurnsByCampaign[campaignId] || []).flatMap((turn) => turn.blocks);
+}
+
+function clearStoryTurnHistory(campaignId = state.activeCampaign || "default") {
+  delete state.storyTurnsByCampaign[campaignId];
+  delete state.storyTurnSignatures[campaignId];
+}
+
+function storyTurnSignature(blocks, output = {}) {
+  const simplified = blocks.map((block) => ({
+    type: block.type || "",
+    speaker: block.speaker || "",
+    body: block.body || "",
+    asset_key: block.asset_key || "",
+    cached_url: block.cached_url || "",
+    choices: Array.isArray(block.choices) ? block.choices.map((choice) => choice.label || choice.text || "") : [],
+  }));
+  return stableJson({
+    campaign_id: output.campaign_id || state.activeCampaign || "",
+    blocks: simplified,
+  });
+}
+
+function visibleStoryBlocks(blocks) {
+  return (Array.isArray(blocks) ? blocks : []).filter((block) => !["summary", "backend_note"].includes(block.type));
 }
 
 function renderWritebackReview(data) {
@@ -1134,11 +1400,18 @@ async function applyWriteback() {
 function renderStoryBlocks(blocks, fallbackText) {
   const container = $("storyText");
   container.innerHTML = "";
-  const visibleBlocks = blocks.filter((block) => block.type !== "summary");
+  const visibleBlocks = visibleStoryBlocks(blocks);
   const rows = visibleBlocks.length ? visibleBlocks : legacyTextBlocks(fallbackText);
   if (!rows.length) container.textContent = "暂无正文。";
-  rows.forEach((block) => container.appendChild(renderMessageBlock(block)));
+  rows.forEach((block) => {
+    try {
+      container.appendChild(renderMessageBlock(block));
+    } catch (err) {
+      console.warn("story block render failed", block, err);
+    }
+  });
   scrollActiveFeed();
+  if (state.runProgress.active && blocks.length) scrollStoryToBottom(true);
 }
 
 function protocolQuestRows(frontendState = {}, campaignState = {}) {
@@ -1166,6 +1439,7 @@ function protocolInventoryRows(frontendState = {}, campaignState = {}) {
 }
 
 function renderMessageBlock(block) {
+  if (block.type === "cg_image") return renderCgImageBlock(block);
   if (block.type === "choice_prompt") return renderChoiceBlock(block);
   const role = blockRole(block);
   const card = document.createElement("article");
@@ -1186,11 +1460,13 @@ function renderMessageBlock(block) {
   const body = document.createElement("div");
   body.className = "msgBody";
   const title = document.createElement("strong");
-  title.textContent = block.speaker || defaultSpeaker(block.type);
+  title.textContent = displaySpeaker(block) || defaultSpeaker(block.type);
   const content = document.createElement("div");
   content.className = "msgText";
   content.textContent = block.body || "";
   body.append(title, content);
+  const storyImage = renderStoryImage(block);
+  if (storyImage) body.appendChild(storyImage);
   const check = block.type === "system_check" ? checkMeta(block) : null;
   if (check) body.appendChild(check);
 
@@ -1198,6 +1474,110 @@ function renderMessageBlock(block) {
   time.textContent = block.time || "现在";
   card.append(avatar, body, time);
   return card;
+}
+
+function renderCgImageBlock(block) {
+  const card = document.createElement("article");
+  card.className = "msg cg";
+  card.dataset.blockType = "cg_image";
+  const spacer = document.createElement("div");
+  spacer.className = "msgAvatar cgAvatar";
+  spacer.textContent = "CG";
+  const body = document.createElement("div");
+  body.className = "msgBody";
+  const title = document.createElement("strong");
+  title.textContent = "CG";
+  body.appendChild(title);
+  const storyImage = renderStoryImage(block);
+  if (storyImage) body.appendChild(storyImage);
+  const time = document.createElement("time");
+  time.textContent = block.time || "现在";
+  card.append(spacer, body, time);
+  return card;
+}
+
+function renderStoryImage(block) {
+  const url = block.cached_url || block.image_url || block.url || "";
+  if (!url) return null;
+  const figure = document.createElement("figure");
+  figure.className = "storyImage";
+  const image = document.createElement("img");
+  image.src = cacheBustAssetUrl(url);
+  image.alt = "CG";
+  image.loading = "lazy";
+  if (block.type === "cg_image") {
+    image.tabIndex = 0;
+    image.setAttribute("role", "button");
+    image.setAttribute("aria-label", "查看 CG 大图");
+    image.addEventListener("click", () => openCgOverlay(url, publicCgDetail(block)));
+    image.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openCgOverlay(url, publicCgDetail(block));
+      }
+    });
+  }
+  figure.appendChild(image);
+  const captionText = block.type === "cg_image" ? publicCgDetail(block) : (block.image_detail || block.image_title || "");
+  if (captionText) {
+    const caption = document.createElement("figcaption");
+    caption.textContent = captionText;
+    figure.appendChild(caption);
+  }
+  return figure;
+}
+
+function openCgOverlay(url, caption = "") {
+  if (!url) return;
+  const overlay = $("cgOverlay");
+  const image = $("cgDialogImage");
+  if (!overlay || !image) return;
+  setText("cgDialogTitle", "CG");
+  setText("cgDialogCaption", conciseCgSceneText(caption));
+  image.src = cacheBustAssetUrl(url);
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+}
+
+function closeCgOverlay() {
+  const overlay = $("cgOverlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.setAttribute("aria-hidden", "true");
+  const image = $("cgDialogImage");
+  if (image) image.removeAttribute("src");
+}
+
+function publicCgDetail(block) {
+  const candidates = [
+    block.public_detail,
+    block.scene_detail,
+    block.image_caption,
+    block.image_detail,
+    block.body,
+  ];
+  const technical = /(16\s*:\s*9|9\s*:\s*16|PC|手机|构图|预览|正式图标|正式深度图片|头像反哺|反哺|画幅|aspect|ratio|mobile|variant|crop|safe area|缓存|技术|参数)/i;
+  const loaded = /(CG\s*)?已载入|载入正文|本回合\s*CG|剧情\s*CG/i;
+  for (const value of candidates) {
+    const text = conciseCgSceneText(value);
+    if (!text || technical.test(text) || loaded.test(text)) continue;
+    return text;
+  }
+  return "雨夜小卖部门口，Lee 抱紧金属盒，黑水倒影逼近。";
+}
+
+function conciseCgSceneText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/[。；;，,]\s*(16\s*:\s*9|9\s*:\s*16|PC|手机|构图|预览|头像反哺|反哺|缓存|技术|参数).*$/i, "")
+    .trim()
+    .slice(0, 72);
+}
+
+function cacheBustAssetUrl(url) {
+  if (!url || url.startsWith("data:") || url.startsWith("blob:")) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}v=${ASSET_GENERATOR_VERSION}`;
 }
 
 function renderChoicePanel(blocks, fallbackText) {
@@ -1266,9 +1646,9 @@ function renderChoiceBlock(block) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "choiceOption";
-      const id = choice.id || String.fromCharCode(65 + index);
+      const displayId = String.fromCharCode(65 + index);
       const label = choice.label || choice.text || `选择 ${index + 1}`;
-      button.innerHTML = `<b>${escapeHtml(id)}. ${escapeHtml(label)}</b>${choice.risk ? `<small>${escapeHtml(choice.risk)}</small>` : ""}`;
+      button.innerHTML = `<b>${escapeHtml(displayId)}. ${escapeHtml(label)}</b>${choice.risk ? `<small>${escapeHtml(choice.risk)}</small>` : ""}`;
       button.addEventListener("click", () => {
         const input = $("actionInput");
         if (input) {
@@ -1290,6 +1670,7 @@ function blockRole(block) {
     if (isCompanionActorName(key)) return "companion";
     return "npc";
   }
+  if (block.type === "cg_image") return "system";
   if (block.type === "system_check") return "system";
   return "gm";
 }
@@ -1297,6 +1678,7 @@ function blockRole(block) {
 function defaultSpeaker(type) {
   if (type === "player_action") return "玩家";
   if (type === "npc_dialogue") return "NPC";
+  if (type === "cg_image") return "剧情 CG";
   if (type === "system_check") return "系统检定";
   return "GM 叙述";
 }
@@ -1735,11 +2117,18 @@ function setGalleryFilter(filter) {
   if (!$("galleryOverlay")?.classList.contains("hidden")) renderGalleryDialog();
 }
 
-function renderGallery(campaignState, galleryState = {}) {
+function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   const grid = $("galleryGrid");
   if (!grid) return;
-  const protocolAssets = Array.isArray(galleryState.assets) ? galleryState.assets.map(protocolGalleryAsset) : [];
-  const assets = protocolAssets.length ? mergeGalleryAssets(protocolAssets, cachedGalleryAssets()) : mergeGalleryAssets(buildVisualAssets(campaignState), cachedGalleryAssets());
+  const modulePayload = moduleState?.payload || galleryState.module_payload || {};
+  const moduleAssets = [
+    ...(Array.isArray(modulePayload.visual_assets) ? modulePayload.visual_assets : []),
+    ...(Array.isArray(modulePayload.gallery_updates) ? modulePayload.gallery_updates : []),
+  ].map(protocolGalleryAsset).filter(Boolean);
+  const protocolAssets = moduleAssets.length ? moduleAssets : Array.isArray(galleryState.assets) ? galleryState.assets.map(protocolGalleryAsset).filter(Boolean) : [];
+  const fallbackAssets = buildVisualAssets(campaignState).map((asset) => normalizeGalleryAssetForFixedFilters(asset)).filter(Boolean);
+  const cachedAssets = cachedGalleryAssets().map((asset) => normalizeGalleryAssetForFixedFilters(asset)).filter(Boolean);
+  const assets = markGalleryArchiveState(protocolAssets.length ? mergeGalleryAssets(protocolAssets, cachedAssets) : mergeGalleryAssets(fallbackAssets, cachedAssets));
   state.galleryAssets = assets;
   grid.innerHTML = "";
   assets.forEach((asset) => {
@@ -1759,15 +2148,15 @@ function renderGallery(campaignState, galleryState = {}) {
     const detail = document.createElement("p");
     detail.textContent = galleryDetail(asset);
     const meta = document.createElement("small");
-    meta.textContent = asset.meta || galleryKindLabel(asset.kind);
+    meta.textContent = assetStatusLabel(asset);
     text.append(title, detail, meta);
     card.append(image, text);
     grid.appendChild(card);
-    card.addEventListener("click", () => openGalleryOverlay(asset.key));
+    card.addEventListener("click", () => openAssetFromGallery(asset));
     card.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openGalleryOverlay(asset.key);
+        openAssetFromGallery(asset);
       }
     });
     drawGalleryAsset(image, asset);
@@ -1778,6 +2167,7 @@ function renderGallery(campaignState, galleryState = {}) {
 function renderGalleryFilters(filters) {
   const holder = $("galleryFilters");
   if (!holder || !Array.isArray(filters) || !filters.length) return;
+  state.galleryFilterIds = filters.map((filter) => filter.key).filter(Boolean);
   const current = filters.some((filter) => filter.key === state.galleryFilter) ? state.galleryFilter : "all";
   state.galleryFilter = current;
   holder.innerHTML = "";
@@ -1793,7 +2183,8 @@ function renderGalleryFilters(filters) {
 }
 
 function protocolGalleryAsset(asset) {
-  const kind = asset.kind || "item";
+  const kind = fixedGalleryKind(asset.kind);
+  if (!kind) return null;
   const detail = asset.detail || "";
   return {
     kind,
@@ -1804,11 +2195,41 @@ function protocolGalleryAsset(asset) {
     detail,
     cachedUrl: asset.cached_url || asset.url || "",
     sourceObjectId: asset.source_object_id || "",
+    status: asset.status || "",
+    archived: Boolean(asset.archived),
+    createdAt: asset.created_at || "",
     visualPrompt: asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(asset.title || asset.key || "", detail, kind),
+    imagePrompt: asset.image_prompt || asset.imagePrompt || {},
   };
 }
 
-function openGalleryOverlay(assetKey = "") {
+function openAssetFromGallery(asset) {
+  if (asset?.kind === "cg") {
+    openCgOverlay(asset.cachedUrl, asset.detail || galleryDetail(asset));
+    return;
+  }
+  openGalleryOverlay(asset.key);
+}
+
+function markGalleryArchiveState(assets) {
+  let currentSceneMarked = false;
+  return assets.map((asset) => {
+    if (asset.kind !== "scene" || !asset.cachedUrl) return asset;
+    if (!currentSceneMarked) {
+      currentSceneMarked = true;
+      return { ...asset, status: "current", archived: false };
+    }
+    return { ...asset, status: asset.status || "archived", archived: true };
+  });
+}
+
+function openCurrentMapOverlay() {
+  if (!state.currentMapAsset) return;
+  openGalleryOverlay(state.currentMapAsset.key, state.currentMapAsset);
+}
+
+function openGalleryOverlay(assetKey = "", transientAsset = null) {
+  state.transientGalleryAsset = transientAsset;
   const requested = state.galleryAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.galleryFilter)) {
     state.galleryFilter = requested.kind === "monster" || requested.kind === "ecology" ? "monster" : requested.kind;
@@ -1827,15 +2248,21 @@ function closeGalleryOverlay() {
   if (!overlay) return;
   overlay.classList.add("hidden");
   overlay.setAttribute("aria-hidden", "true");
+  state.transientGalleryAsset = null;
 }
 
 function filteredGalleryAssets() {
-  return state.galleryAssets.filter((asset) => galleryAssetMatchesFilter(asset, state.galleryFilter));
+  const rows = state.galleryAssets.filter((asset) => galleryAssetMatchesFilter(asset, state.galleryFilter));
+  if (state.transientGalleryAsset) {
+    return [state.transientGalleryAsset, ...rows.filter((asset) => asset.key !== state.transientGalleryAsset.key)];
+  }
+  return rows;
 }
 
 function galleryAssetMatchesFilter(asset, filter) {
   const value = filter || "all";
   if (value === "all") return true;
+  if (value === "cg") return asset.kind === "cg";
   if (value === "monster") return asset.kind === "monster" || asset.kind === "ecology";
   if (value === "scene") return asset.kind === "scene" || asset.kind === "location";
   if (value === "item") return ["item", "weapon", "supply", "material", "ritual_tool"].includes(asset.kind);
@@ -1864,7 +2291,7 @@ function renderGalleryDialog() {
     const row = document.createElement("button");
     row.type = "button";
     row.className = `galleryDialogItem${asset.key === state.selectedGalleryKey ? " active" : ""}`;
-    row.innerHTML = `<b>${escapeHtml(asset.title)}</b><small>${escapeHtml(galleryDetail(asset))}</small><span>${escapeHtml(asset.meta || galleryKindLabel(asset.kind))}</span>`;
+    row.innerHTML = `<b>${escapeHtml(asset.title)}</b><small>${escapeHtml(galleryDetail(asset))}</small><span>${escapeHtml(assetStatusLabel(asset))}</span>`;
     row.addEventListener("click", () => {
       state.selectedGalleryKey = asset.key;
       renderGalleryDialog();
@@ -1880,6 +2307,8 @@ function renderGalleryInspector(asset) {
   const detail = $("galleryInspectorDetail");
   const meta = $("galleryInspectorMeta");
   const useButton = $("useGalleryAssetBtn");
+  const inspector = $("galleryInspector");
+  if (inspector) inspector.dataset.kind = asset?.kind || "";
   if (!asset) {
     if (image) image.removeAttribute("src");
     setText("galleryInspectorTitle", "暂无资料");
@@ -1891,7 +2320,7 @@ function renderGalleryInspector(asset) {
   if (image) drawGalleryAsset(image, asset);
   if (title) title.textContent = asset.title;
   if (detail) detail.textContent = galleryDetail(asset);
-  if (meta) meta.textContent = asset.meta || galleryKindLabel(asset.kind);
+  if (meta) meta.textContent = assetStatusLabel(asset);
   if (useButton) {
     useButton.disabled = !canUseGalleryAsset(asset);
     useButton.textContent = canUseGalleryAsset(asset) ? "引用到行动输入" : "仅供查看";
@@ -1911,6 +2340,18 @@ function useSelectedGalleryAsset() {
 
 function canUseGalleryAsset(asset) {
   return asset && (asset.kind === "npc" || asset.kind === "item");
+}
+
+function assetStatusLabel(asset) {
+  const status = String(asset?.status || "").toLowerCase();
+  const base = asset?.meta || galleryKindLabel(asset?.kind);
+  if (asset?.archived) return `${base} / 已归档`;
+  if (status.includes("dead") || status.includes("死亡") || status.includes("阵亡")) return `${base} / 已死亡`;
+  if (status.includes("lost") || status.includes("失联")) return `${base} / 失联`;
+  if (status.includes("consumed") || status.includes("消耗")) return `${base} / 已消耗`;
+  if (status.includes("current")) return `${base} / 当前`;
+  if (asset?.kind === "scene" && asset?.createdAt) return `${base} / 历史`;
+  return base;
 }
 
 async function loadMemoryReport() {
@@ -2036,7 +2477,9 @@ async function openRuleFile(name) {
 }
 
 function galleryDetail(asset) {
-  if (asset.detail) return conciseTitle(asset.detail, 58);
+  const status = assetStatusLabel(asset);
+  const suffix = status ? `（${status}）` : "";
+  if (asset.detail) return conciseTitle(`${asset.detail}${suffix}`, 96);
   if (asset.kind === "npc") return "当前场景中的可互动角色，头像以稳定名称本地生成。";
   if (asset.kind === "scene") return "当前区域路线图，已缓存为本地 PNG。";
   if (asset.kind === "monster") return "生态或痕迹记录，未确认部分不会写成事实。";
@@ -2095,23 +2538,35 @@ function buildVisualAssets(campaignState) {
 function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCampaignState || {})) {
   const assets = Array.isArray(state.currentPressurePack?.visual_assets) ? state.currentPressurePack.visual_assets : [];
   return assets.map((asset, index) => {
-    const kind = normalizePressureKind(asset.kind);
+    const rawKind = String(asset.kind || "").toLowerCase();
+    const displayZone = String(asset.display_zone || "").toLowerCase();
+    let kind = normalizePressureKind(asset.kind);
+    if (kind === "scene" && rawKind === "scene" && displayZone !== "map") {
+      kind = "item";
+    }
     const title = asset.title || asset.id || `${galleryKindLabel(kind)} ${index + 1}`;
     const detail = asset.detail || asset.source_memory || "";
+    const visualPrompt = kind === "item" && rawKind === "scene"
+      ? inferSceneVisualPrompt(title, detail)
+      : asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(title, detail, kind);
     return {
       kind,
       key: `v4:${kind}:${asset.id || title}:${index}`,
       title: conciseTitle(title, 22),
-      meta: asset.certainty === "confirmed" ? galleryKindLabel(kind) : `${galleryKindLabel(kind)} / ${asset.certainty || "clue"}`,
+      meta: kind === "item" && rawKind === "scene"
+        ? "视觉记录"
+        : asset.certainty === "confirmed" ? galleryKindLabel(kind) : `${galleryKindLabel(kind)} / ${asset.certainty || "clue"}`,
       seed: `${asset.id || title}:${detail}`,
       detail,
       certainty: asset.certainty || "clue",
       displayZone: asset.display_zone || "gallery",
       cachePolicy: asset.cache_policy || "stable",
       sourceMemory: asset.source_memory || "",
-      visualPrompt: asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(title, detail, kind),
+      visualPrompt,
+      imagePrompt: asset.image_prompt || asset.imagePrompt || buildImagePrompt(title, detail, kind),
     };
-  }).filter((asset) => !(asset.kind === "npc" && isProtectedActorName(asset.title, protectedActors)));
+  }).filter((asset) => asset.kind !== "scene" || asset.displayZone === "map")
+    .filter((asset) => !(asset.kind === "npc" && isProtectedActorName(asset.title, protectedActors)));
 }
 
 function normalizePressureKind(kind) {
@@ -2125,10 +2580,12 @@ function normalizePressureKind(kind) {
 function cachedGalleryAssets() {
   return (state.cachedAssets || []).filter((entry) => {
     const kind = String(entry.kind || "");
-    if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_"))) return false;
-    const normalizedKind = normalizeGalleryKind(kind);
-    if (normalizedKind !== "npc") return true;
     const metadata = entry.metadata || {};
+    const reusableNpcPortrait = kind === "npc_portrait";
+    if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_") || reusableNpcPortrait)) return false;
+    const normalizedKind = normalizeGalleryKind(kind);
+    if (normalizedKind === "scene" && !(kind === "map" || entry.metadata?.source === "map_route")) return false;
+    if (normalizedKind !== "npc") return true;
     const title = metadata.title || readableAssetTitle(entry.key, normalizedKind);
     return !isProtectedActorName(title) && !isProtectedActorName(metadata.object_id);
   }).map((entry) => {
@@ -2145,6 +2602,7 @@ function cachedGalleryAssets() {
       cachedUrl: entry.url,
       sourceObjectId: metadata.object_id || "",
       generatorVersion: entry.generator_version,
+      imagePrompt: metadata.image_prompt || {},
     };
   });
 }
@@ -2163,6 +2621,15 @@ function currentCompanion() {
     campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色",
     state.lastCampaignState?.recent?.current_scene || {},
   ).companion;
+}
+
+function displaySpeaker(block) {
+  const raw = String(block?.speaker || "").trim();
+  if (block?.type === "player_action") {
+    const normalized = raw.replace(/^player\s*[?？:：-]\s*/i, "").trim();
+    return normalized || block.actor_id || "玩家";
+  }
+  return raw;
 }
 
 function visibleCompanion() {
@@ -2192,6 +2659,7 @@ function openCompanionOverlay() {
       targetImage: image,
       seedText: scopedSeed(companion.seed || companion.name || "companion"),
       archetype: companion.archetype,
+      kind: "companion_portrait",
     });
   }
   const overlay = $("companionOverlay");
@@ -2233,7 +2701,7 @@ function closeCompanionOverlay() {
 }
 
 function isCompanionActorName(value) {
-  const companion = currentCompanion();
+  const companion = visibleCompanion();
   return Boolean(companion?.name && normalizeActorName(value) === normalizeActorName(companion.name));
 }
 
@@ -2252,22 +2720,60 @@ function mergeGalleryAssets(primary, cached) {
   const rows = [...primary];
   const existing = new Set(primary.map((asset) => slugify(asset.key || asset.title)));
   cached.forEach((asset) => {
-    const key = slugify(asset.sourceObjectId || asset.key || asset.title);
+    const key = slugify(asset.kind === "scene" ? (asset.key || asset.title) : (asset.sourceObjectId || asset.key || asset.title));
     if (!existing.has(key)) {
       rows.push(asset);
       existing.add(key);
     }
   });
-  return rows.slice(0, 24);
+  return rows.slice(0, 120);
 }
 
 function normalizeGalleryKind(kind) {
   const value = String(kind || "").toLowerCase();
+  if (["cg", "generated_cg", "gallery_image", "formal_cg", "剧情图", "生图"].some((token) => value.includes(token))) return "cg";
+  if (value.includes("servant") || value.includes("从者")) return "servant";
+  if (value.includes("master") || value.includes("御主")) return "master";
+  if (value.includes("document") || value.includes("文献")) return "document";
+  if (value.includes("clue") || value.includes("线索")) return "clue";
+  if (value.includes("anomaly") || value.includes("异常")) return "anomaly";
+  if (value.includes("quest") || value.includes("任务")) return "quest";
+  if (value.includes("character") || value.includes("角色")) return "character";
   if (value.includes("map")) return "scene";
   if (value.includes("npc") || value.includes("portrait")) return "npc";
   if (value.includes("monster") || value.includes("ecology")) return "monster";
-  if (value.includes("item")) return "item";
-  return "item";
+  if (["item", "weapon", "supply", "material", "ritual_tool", "equipment", "物品", "装备", "补给", "材料", "仪式"].some((token) => value.includes(token))) return "item";
+  return "";
+}
+
+function fixedGalleryKind(kind) {
+  const raw = String(kind || "").toLowerCase();
+  if (raw.includes("gallery_npc")) return "";
+  if (["generated_cg", "gallery_image", "formal_cg", "cg_image"].some((token) => raw.includes(token))) {
+    return (state.galleryFilterIds || []).includes("cg") ? "cg" : "";
+  }
+  const allowed = new Set((state.galleryFilterIds || []).filter((key) => key && key !== "all"));
+  if (!allowed.size) return normalizeGalleryKind(kind);
+  let value = normalizeGalleryKind(kind);
+  const aliases = {
+    location: "scene",
+    map: "scene",
+    ecology: "monster",
+    weapon: "item",
+    supply: "item",
+    material: "item",
+    ritual_tool: "item",
+  };
+  value = aliases[value] || value;
+  if (allowed.has(value)) return value;
+  if (value === "character" && allowed.has("npc")) return "npc";
+  return "";
+}
+
+function normalizeGalleryAssetForFixedFilters(asset) {
+  const kind = fixedGalleryKind(asset?.kind);
+  if (!kind) return null;
+  return { ...asset, kind };
 }
 
 function readableAssetTitle(key, kind) {
@@ -2311,17 +2817,24 @@ function conciseTitle(text, maxLen) {
 }
 
 function galleryKindLabel(kind) {
-  return { npc: "NPC", scene: "场景", item: "物品", monster: "生态" }[kind] || "资料";
+  return { cg: "CG", master: "御主", servant: "从者", npc: "NPC", scene: "场景", item: "物品", monster: "生态", clue: "线索", document: "文献", anomaly: "异常", character: "角色", quest: "任务" }[kind] || "资料";
 }
 
 function drawGalleryAsset(targetImage, asset) {
+  if (asset.kind === "npc") {
+    const feedback = formalPortraitFeedbackAsset(asset.title, asset.title, "npc");
+    if (feedback?.url) {
+      setAssetImage(targetImage, feedback.url);
+      return;
+    }
+  }
   if (asset.cachedUrl) {
     setAssetImage(targetImage, asset.cachedUrl);
     return;
   }
   const canvas = createAssetCanvas(128, 128);
-  const kind = asset.kind === "scene" ? "gallery_map" : `gallery_${asset.kind}`;
-  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master" ? "portraits" : "items";
+  const kind = asset.kind === "scene" ? "gallery_map" : asset.kind === "npc" ? "npc_portrait" : `gallery_${asset.kind}`;
+  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master" ? "portraits" : asset.kind === "cg" ? "generated" : "items";
   const draw = () => {
     if (asset.kind === "scene") drawPixelMap(asset.seed, { cache: false, canvas, scene: asset.scene, compact: true });
     else if (asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master") drawPixelPortraitToCanvas(canvas, asset.seed, "npc");
@@ -2348,6 +2861,7 @@ function drawGalleryAsset(targetImage, asset) {
         source_memory: asset.sourceMemory || undefined,
         kind: asset.kind,
         visual_prompt: asset.visualPrompt || undefined,
+        image_prompt: asset.imagePrompt || buildImagePrompt(asset.title, galleryDetail(asset), asset.kind),
       },
       draw,
     });
@@ -2367,6 +2881,99 @@ function setBusy(running, error = false) {
     button.disabled = running;
   });
   $("actionInput").disabled = running;
+}
+
+function beginRunProgress() {
+  clearTimeout(state.runProgress.hideTimer);
+  state.runProgress.active = true;
+  state.runProgress.percent = 0;
+  state.runProgress.target = 12;
+  const panel = $("runProgress");
+  if (panel) panel.classList.remove("hidden", "complete");
+  setRunProgress(8, "发送行动中");
+  startRunProgressTween();
+}
+
+function startRunProgressTween() {
+  if (state.runProgress.timer) return;
+  state.runProgress.timer = setInterval(() => {
+    if (!state.runProgress.active) return;
+    const diff = state.runProgress.target - state.runProgress.percent;
+    if (Math.abs(diff) < 0.35) {
+      state.runProgress.percent = state.runProgress.target;
+    } else {
+      state.runProgress.percent += diff * 0.14;
+    }
+    paintRunProgress(state.runProgress.percent);
+  }, 80);
+}
+
+function setRunProgress(target, label) {
+  state.runProgress.target = Math.max(state.runProgress.target, Math.min(100, Number(target) || 0));
+  setText("runProgressLabel", label || "处理中");
+  startRunProgressTween();
+}
+
+function updateRunProgressFromPipeline(pipeline, job, output) {
+  if (!state.runProgress.active && !job.running) return;
+  const stage = pipeline.stage || output.stage || "";
+  const labels = {
+    director_ready: "V4 层完成",
+    actor_parsed: "GPT 层完成",
+    audited: "审核层完成",
+    synced: "已同步到页面",
+    pending_parse: "等待解析层",
+  };
+  if (pipeline.percent) {
+    setRunProgress(pipeline.percent, labels[stage] || pipeline.label || "处理中");
+  } else if (stage === "pending_parse") {
+    setRunProgress(30, labels.pending_parse);
+  } else if (job.running) {
+    setRunProgress(Math.max(state.runProgress.target, 18), "后台执行中");
+  }
+  const succeeded = job.returncode === 0 || job.returncode === undefined || job.returncode === null;
+  const failed = job.returncode !== undefined && job.returncode !== null && job.returncode !== 0;
+  if (!job.running && failed) {
+    failRunProgress();
+    return;
+  }
+  if (!job.running && succeeded && (pipeline.percent >= 100 || output.stage === "parsed")) {
+    completeRunProgress();
+  }
+}
+
+function completeRunProgress() {
+  if (!state.runProgress.active) return;
+  setRunProgress(100, "已同步到页面");
+  const panel = $("runProgress");
+  if (panel) panel.classList.add("complete");
+  scrollStoryToBottom(true);
+  clearTimeout(state.runProgress.hideTimer);
+  state.runProgress.hideTimer = setTimeout(() => {
+    state.runProgress.active = false;
+    const progress = $("runProgress");
+    if (progress) progress.classList.add("hidden");
+  }, 1500);
+}
+
+function failRunProgress() {
+  if (!state.runProgress.active) return;
+  setText("runProgressLabel", "执行失败");
+  const panel = $("runProgress");
+  if (panel) panel.classList.add("complete");
+  clearTimeout(state.runProgress.hideTimer);
+  state.runProgress.hideTimer = setTimeout(() => {
+    state.runProgress.active = false;
+    const progress = $("runProgress");
+    if (progress) progress.classList.add("hidden");
+  }, 2200);
+}
+
+function paintRunProgress(percent) {
+  const value = Math.round(Math.max(0, Math.min(100, percent)));
+  const bar = $("runProgressBar");
+  if (bar) bar.style.width = `${value}%`;
+  setText("runProgressPercent", `${value}%`);
 }
 
 function setLog(text) {
@@ -2390,6 +2997,14 @@ function scrollActiveFeed() {
   if (feed) feed.scrollTop = feed.scrollHeight;
 }
 
+function scrollStoryToBottom(force = false) {
+  const feed = $("storyTab");
+  if (!feed) return;
+  if (force || state.activePanel === "story" || state.autoScroll) {
+    feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
+  }
+}
+
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
@@ -2405,14 +3020,32 @@ function hashSeed(text) {
 
 function drawBlockAvatar(targetImage, block, role) {
   const actorKey = block.avatar_key || block.actor_id || block.speaker || role;
+  const feedback = formalPortraitFeedbackAsset(actorKey, block.speaker, role);
+  if (feedback?.url) {
+    setAssetImage(targetImage, feedback.url);
+    return;
+  }
   const actorSeed = scopedSeed(actorKey);
-  const canvas = createAssetCanvas(96, 96);
+  const canvas = createAssetCanvas(role === "companion" ? 160 : 96, role === "companion" ? 160 : 96);
 
   let kind, draw;
   if (role === "companion") {
+    const companion = visibleCompanion();
+    const companionSeed = scopedSeed(companion?.seed || companion?.name || actorKey);
     kind = "companion_portrait";
-    const companion = currentCompanion();
-    draw = () => drawCompanionToCanvas(canvas, actorSeed, companion?.archetype);
+    draw = () => drawCompanionToCanvas(canvas, companionSeed, companion?.archetype);
+    if (state.activeCampaign) {
+      cacheCanvasAsset({
+        canvas,
+        targetImage,
+        kind,
+        subdir: "portraits",
+        objectId: slugify(companion?.name || actorKey),
+        seedText: companionSeed,
+        draw,
+      });
+      return;
+    }
   } else if (role === "npc") {
     kind = "npc_portrait";
     draw = () => drawPixelPortraitToCanvas(canvas, actorSeed, "npc");
@@ -2436,6 +3069,32 @@ function drawBlockAvatar(targetImage, block, role) {
   }
   draw();
   setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function formalPortraitFeedbackAsset(actorKey = "", speaker = "", role = "") {
+  const names = new Set([actorKey, speaker].map(normalizeActorName).filter(Boolean));
+  if (!names.size) return null;
+  const roleKinds = role === "player"
+    ? new Set(["portrait", "player_portrait"])
+    : role === "companion"
+      ? new Set(["companion", "companion_portrait"])
+      : new Set(["npc_portrait"]);
+  const candidates = (state.cachedAssets || []).filter((asset) => {
+    if (!asset?.exists || !asset.url || !roleKinds.has(String(asset.kind || ""))) return false;
+    const metadata = asset.metadata || {};
+    const title = normalizeActorName(metadata.title || asset.key || "");
+    const objectId = normalizeActorName(metadata.object_id || "");
+    return names.has(title) || names.has(objectId);
+  });
+  return candidates.find((asset) => assetVersionTag(asset) === "VCG")
+    || candidates.find((asset) => (asset.metadata || {}).source === "manual_cg_portrait_feedback")
+    || null;
+}
+
+function assetVersionTag(asset) {
+  const metadata = asset?.metadata || {};
+  const raw = String(metadata.version_tag || metadata.version || asset?.version_tag || asset?.key || "").toUpperCase();
+  return raw.includes("VCG") ? "VCG" : "";
 }
 
 function drawPixelPortraitToCanvas(canvas, seedText, role) {
@@ -2643,14 +3302,14 @@ function drawPlayerFullBodyToCanvas(canvas, seedText) {
 }
 
 function drawCompanionAvatar(seedText, options = {}) {
-  const canvas = options.canvas || createAssetCanvas(96, 96);
+  const canvas = options.canvas || createAssetCanvas(160, 160);
   const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
   const effectiveSeed = options.seedText || seedText;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
-      kind: "companion",
+      kind: options.kind || "companion_portrait",
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
       seedText: effectiveSeed,
@@ -2665,28 +3324,135 @@ function drawCompanionAvatar(seedText, options = {}) {
 function drawCompanionToCanvas(canvas, seedText, archetype = "") {
   const type = normalizeActorName(archetype || inferCompanionArchetype(seedText));
   if (type.includes("palico") || type.includes("艾露") || type.includes("艾鲁") || normalizeActorName(seedText).includes("浩文")) {
-    drawPixelPalico(seedText, { cache: false, canvas, targetImage: null });
+    drawHighSpecPalicoToCanvas(canvas, seedText);
     return;
   }
-  drawPixelPortraitToCanvas(canvas, seedText, "companion");
-  if (type.includes("servant")) drawServantAccent(canvas, seedText);
+  if (type.includes("servant")) {
+    drawHighSpecServantToCanvas(canvas, seedText);
+    return;
+  }
+  drawHighSpecCompanionToCanvas(canvas, seedText, type);
 }
 
-function drawServantAccent(canvas, seedText) {
+function drawHighSpecServantToCanvas(canvas, seedText) {
   const ctx = canvas.getContext("2d");
-  const seed = hashSeed(`servant:${seedText}`);
-  const size = canvas.width;
-  const cell = size / 24;
+  const seed = hashSeed(`servant-high:${seedText}`);
+  const cell = canvas.width / 40;
   const px = (x, y, w, h, color) => {
     ctx.fillStyle = color;
     ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
   };
-  const accent = ["#c8b45f", "#9cb4d8", "#d6d0ea", "#b96363"][(seed >>> 5) % 4];
-  px(4, 3, 16, 1, accent);
-  px(5, 4, 2, 2, "#f5ecd0");
-  px(17, 4, 2, 2, "#f5ecd0");
-  px(10, 15, 4, 1, accent);
-  px(7, 21, 10, 1, accent);
+  const mirror = (x, y, w, h, color) => {
+    px(x, y, w, h, color);
+    px(40 - x - w, y, w, h, color);
+  };
+  const skin = ["#d1a173", "#c08a63", "#deb383", "#a97860"][seed % 4];
+  const hair = ["#1d1e26", "#20242d", "#2b241c", "#423342"][(seed >>> 4) % 4];
+  const coat = ["#1d2431", "#2f2538", "#1f3032", "#342637"][(seed >>> 8) % 4];
+  const accent = ["#c8b45f", "#9cb4d8", "#d6d0ea", "#b96363"][(seed >>> 12) % 4];
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  px(0, 0, 40, 40, "#d4c8b5");
+  for (let i = 0; i < 7; i += 1) {
+    px(4 + i * 5, 6 + ((seed >>> i) & 3), 2, 18 - (i % 3), "rgba(64,69,88,.38)");
+  }
+  px(15, 4, 10, 3, hair);
+  px(13, 6, 14, 4, hair);
+  mirror(12, 8, 3, 8, hair);
+  px(14, 10, 12, 10, skin);
+  mirror(13, 13, 2, 5, shadeColor(skin, -18));
+  px(16, 12, 8, 3, "#e1b98b");
+  mirror(16, 14, 2, 1, "#10151a");
+  px(19, 16, 2, 1, "#805338");
+  px(17, 19, 6, 1, "#4e2c24");
+  px(13, 21, 14, 3, "#2a1d20");
+  px(11, 24, 18, 9, coat);
+  mirror(7, 23, 5, 10, shadeColor(coat, 10));
+  px(15, 24, 10, 1, accent);
+  px(17, 26, 6, 5, shadeColor(coat, -14));
+  px(12, 33, 6, 4, "#202027");
+  px(22, 33, 6, 4, "#202027");
+  px(11, 37, 8, 1, "#131418");
+  px(21, 37, 8, 1, "#131418");
+  mirror(5, 10, 2, 16, "rgba(25,30,40,.64)");
+  mirror(4, 9, 1, 5, accent);
+  px(27, 19, 2, 12, "#151923");
+  px(26, 18, 4, 1, accent);
+  px(30, 14, 2, 10, "rgba(245,236,208,.65)");
+  px(14, 3, 12, 1, accent);
+}
+
+function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "") {
+  drawPlayerFullBodyToCanvas(canvas, seedText);
+  const ctx = canvas.getContext("2d");
+  const cell = canvas.width / 32;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const type = normalizeActorName(archetype);
+  if (type.includes("drone")) {
+    px(6, 8, 20, 10, "#5b6f7d");
+    px(8, 10, 16, 6, "#8fb0bf");
+    px(13, 12, 6, 2, "#d8edf2");
+  } else if (type.includes("familiar")) {
+    px(4, 5, 5, 5, "#8b6d45");
+    px(23, 5, 5, 5, "#8b6d45");
+    px(6, 22, 20, 2, "#c8b45f");
+  }
+}
+
+function drawHighSpecPalicoToCanvas(canvas, seedText) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`palico-high:${seedText}`);
+  const cell = canvas.width / 40;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const mirror = (x, y, w, h, color) => {
+    px(x, y, w, h, color);
+    px(40 - x - w, y, w, h, color);
+  };
+  const fur = ["#8a6b48", "#6f573f", "#9a7650"][(seed >>> 2) % 3];
+  const light = ["#d7b784", "#e4c38e", "#cfa878"][(seed >>> 6) % 3];
+  const armor = ["#354f53", "#5f432b", "#38465f", "#596342"][(seed >>> 9) % 4];
+  const accent = ["#d6a23e", "#c8b07c", "#9fb7c7"][(seed >>> 12) % 3];
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  px(0, 0, 40, 40, "#eadfca");
+  px(6, 5, 8, 11, fur);
+  px(26, 5, 8, 11, fur);
+  px(8, 7, 4, 7, "#f2d7a8");
+  px(28, 7, 4, 7, "#f2d7a8");
+  px(10, 8, 20, 15, fur);
+  px(11, 9, 18, 13, shadeColor(fur, 12));
+  px(13, 13, 14, 8, light);
+  px(15, 11, 10, 3, "#f0cf99");
+  mirror(14, 15, 3, 3, "#141716");
+  px(19, 17, 2, 2, "#6c4931");
+  px(16, 20, 3, 1, "#6c4931");
+  px(21, 20, 3, 1, "#6c4931");
+  px(17, 22, 6, 1, "#4e2c24");
+  px(8, 18, 6, 1, "#6c4931");
+  px(26, 18, 6, 1, "#6c4931");
+  px(8, 20, 6, 1, "#6c4931");
+  px(26, 20, 6, 1, "#6c4931");
+  px(13, 6, 14, 3, "#5c4b37");
+  px(14, 5, 12, 1, accent);
+  px(26, 8, 6, 5, accent);
+  px(27, 9, 4, 2, "#f2dfad");
+  px(11, 24, 18, 4, "#9f3030");
+  px(12, 28, 16, 7, armor);
+  mirror(6, 28, 6, 6, "#6d5a43");
+  px(9, 35, 7, 2, "#3a3329");
+  px(24, 35, 7, 2, "#3a3329");
+  px(30, 22, 4, 10, "#8a6b48");
+  px(32, 20, 2, 4, light);
+  if ((seed >>> 16) & 1) {
+    px(5, 26, 4, 7, "#7f5b36");
+    px(4, 25, 2, 9, "#c8b07c");
+  }
 }
 
 function drawPixelPalico(seedText, options = {}) {
@@ -2771,10 +3537,413 @@ function drawPixelMap(seedText, options = {}) {
   const seed = hashSeed(effectiveSeed);
   const scene = options.scene || {};
   ctx.imageSmoothingEnabled = true;
+  if (hasSemanticMapCanvas(scene.map_canvas)) {
+    drawSemanticSceneMap(ctx, w, h, seed, scene);
+    return;
+  }
   drawMapPaper(ctx, w, h, seed);
   drawMapTerrain(ctx, w, h, seed);
+  drawMapCanvasAscii(ctx, w, h, scene.map_canvas || {});
   drawMapRoute(ctx, w, h, seed, scene);
   drawMapNodes(ctx, w, h, seed, scene, Boolean(options.compact || h < 180));
+}
+
+function hasSemanticMapCanvas(mapCanvas = {}) {
+  return Array.isArray(mapCanvas.ascii) && mapCanvas.ascii.length || Array.isArray(mapCanvas.points) && mapCanvas.points.length;
+}
+
+function drawSemanticSceneMap(ctx, w, h, seed, scene = {}) {
+  const mapCanvas = scene.map_canvas || {};
+  const palette = mapWorldPalette(scene);
+  const layout = buildSemanticSceneLayout(mapCanvas, w, h);
+  drawSceneMapBackground(ctx, w, h, palette, seed);
+  drawSceneRoom(ctx, layout.mainRoom, palette.mainFloor, palette.wall, palette.wallEdge, "main");
+  drawSceneRoom(ctx, layout.secondaryRoom, palette.secondaryFloor, palette.wall, palette.wallEdge, "secondary");
+  drawSceneRoom(ctx, layout.stairRoom, palette.utilityFloor, palette.wall, palette.wallEdge, "utility");
+  drawSceneRoom(ctx, layout.threatRoom, palette.threatFloor, palette.wall, palette.danger, "danger");
+  drawConnectorPassage(ctx, layout.mainRoom, layout.secondaryRoom, palette);
+  drawFurnitureLayer(ctx, layout, palette);
+  drawSpecialAreas(ctx, layout, mapCanvas, palette, seed);
+  drawSemanticRoutes(ctx, layout, mapCanvas, palette);
+  drawSemanticMapMarkers(ctx, layout, mapCanvas, palette);
+}
+
+function mapWorldPalette(scene = {}) {
+  const text = stableJson(scene).toLowerCase();
+  if (/coc|克苏鲁|miskatonic|调查/.test(text)) {
+    return { bgA: "#e7e2d4", bgB: "#cfc8b8", wall: "#564b44", wallEdge: "#302b28", mainFloor: "#eee4d2", secondaryFloor: "#dde0dc", utilityFloor: "#e4ddce", threatFloor: "#ead6cf", label: "#fffaf0", text: "#3d3128", water: "#15363d", waterHi: "#4f9ca8", danger: "#b3483f", unknown: "#785aa8", interact: "#6f925d", personA: "#b84f47", personB: "#5f8f67", resource: "#b78a34", route: "#8f7a58" };
+  }
+  if (/dnd|龙|城堡|border|keep|地下城/.test(text)) {
+    return { bgA: "#e8dcc4", bgB: "#cbb78e", wall: "#5e5545", wallEdge: "#342d24", mainFloor: "#ead9ba", secondaryFloor: "#d8d4bd", utilityFloor: "#ded2ad", threatFloor: "#ead0bd", label: "#fff7e8", text: "#3c3021", water: "#1f3d45", waterHi: "#68a3ad", danger: "#aa4936", unknown: "#6e5aa2", interact: "#6e8d56", personA: "#af4a3a", personB: "#5f8b56", resource: "#ba8e37", route: "#927148" };
+  }
+  return { bgA: "#ebe5d8", bgB: "#cfd4d3", wall: "#55483e", wallEdge: "#2f2924", mainFloor: "#efe1c8", secondaryFloor: "#dce1df", utilityFloor: "#e4dac5", threatFloor: "#ead2ca", label: "#fffaf1", text: "#3b3029", water: "#132f38", waterHi: "#4c99a8", danger: "#b3453e", unknown: "#7653a2", interact: "#6f925d", personA: "#bd4d47", personB: "#609269", resource: "#b98734", route: "#8c7757" };
+}
+
+function buildSemanticSceneLayout(mapCanvas = {}, w, h) {
+  const margin = Math.max(30, w * .04);
+  const mainRoom = rect(w * .06, h * .08, w * .38, h * .55);
+  const secondaryRoom = rect(w * .54, h * .08, w * .38, h * .46);
+  const waterArea = rect(w * .07, h * .68, w * .33, h * .2);
+  const stairRoom = rect(w * .44, h * .66, w * .18, h * .22);
+  const threatRoom = rect(w * .66, h * .63, w * .27, h * .25);
+  const pointMap = new Map();
+  (Array.isArray(mapCanvas.points) ? mapCanvas.points : []).forEach((point, index) => {
+    const label = String(point.label || point.id || `点位 ${index + 1}`);
+    pointMap.set(String(point.id || label), { ...point, label, area: semanticAreaFor(label, point) });
+  });
+  return { margin, mainRoom, secondaryRoom, waterArea, stairRoom, threatRoom, pointMap };
+}
+
+function rect(x, y, w, h) {
+  return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+}
+
+function semanticAreaFor(label, point = {}) {
+  const text = `${label} ${point.id || ""} ${point.kind || ""}`;
+  if (/后门|菜市场|卷帘|旧门|shutter|backdoor/i.test(text)) return "secondary";
+  if (/楼梯|stair/i.test(text)) return "stairs";
+  if (/楼上|威胁|threat|撞裂/i.test(text)) return "threat";
+  if (/黑水|水|污染|water/i.test(text)) return "water";
+  return "main";
+}
+
+function drawSceneMapBackground(ctx, w, h, palette, seed) {
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, palette.bgA);
+  g.addColorStop(1, palette.bgB);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  ctx.globalAlpha = .14;
+  for (let i = 0; i < 260; i += 1) {
+    const x = (i * 97 + seed) % w;
+    const y = (i * 53 + (seed >>> 3)) % h;
+    ctx.fillStyle = i % 2 ? "#7f715f" : "#fff8e9";
+    ctx.fillRect(x, y, 2, 2);
+  }
+  ctx.restore();
+}
+
+function drawSceneRoom(ctx, room, floor, wall, edge, variant = "main") {
+  ctx.save();
+  ctx.fillStyle = "rgba(64,49,37,.14)";
+  roundRectPath(ctx, room.x + 8, room.y + 10, room.w, room.h, 18);
+  ctx.fill();
+  ctx.fillStyle = wall;
+  roundRectPath(ctx, room.x, room.y, room.w, room.h, 18);
+  ctx.fill();
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  const inset = Math.max(18, Math.min(room.w, room.h) * .08);
+  ctx.fillStyle = floor;
+  roundRectPath(ctx, room.x + inset, room.y + inset, room.w - inset * 2, room.h - inset * 2, 12);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(70,54,38,.16)";
+  ctx.lineWidth = 1.5;
+  const tile = variant === "secondary" ? 42 : 52;
+  for (let x = room.x + inset + tile; x < room.x + room.w - inset; x += tile) {
+    ctx.beginPath(); ctx.moveTo(x, room.y + inset); ctx.lineTo(x, room.y + room.h - inset); ctx.stroke();
+  }
+  for (let y = room.y + inset + tile; y < room.y + room.h - inset; y += tile) {
+    ctx.beginPath(); ctx.moveTo(room.x + inset, y); ctx.lineTo(room.x + room.w - inset, y); ctx.stroke();
+  }
+  if (variant === "danger") {
+    ctx.fillStyle = "rgba(179,69,62,.08)";
+    roundRectPath(ctx, room.x + inset, room.y + inset, room.w - inset * 2, room.h - inset * 2, 12);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawConnectorPassage(ctx, main, secondary, palette) {
+  const y = main.y + main.h * .58;
+  ctx.save();
+  ctx.strokeStyle = "rgba(84,72,58,.24)";
+  ctx.lineWidth = 26;
+  ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(main.x + main.w - 8, y); ctx.lineTo(secondary.x + 8, y); ctx.stroke();
+  ctx.strokeStyle = palette.route;
+  ctx.lineWidth = 10;
+  ctx.setLineDash([18, 14]);
+  ctx.beginPath(); ctx.moveTo(main.x + main.w + 8, y); ctx.lineTo(secondary.x - 8, y); ctx.stroke();
+  ctx.restore();
+}
+
+function drawFurnitureLayer(ctx, layout, palette) {
+  const room = layout.mainRoom;
+  drawCounter(ctx, room.x + room.w * .13, room.y + room.h * .18, room.w * .32, room.h * .12, palette);
+  drawShelves(ctx, room.x + room.w * .58, room.y + room.h * .18, room.w * .22, room.h * .3, palette);
+  drawRelicTable(ctx, room.x + room.w * .2, room.y + room.h * .42, room.w * .18, room.h * .15, palette);
+  drawThreshold(ctx, room.x + room.w * .44, room.y + room.h * .82, room.w * .22, room.h * .04, palette);
+  drawOldDoor(ctx, layout.secondaryRoom.x + layout.secondaryRoom.w * .26, layout.secondaryRoom.y + layout.secondaryRoom.h * .16, layout.secondaryRoom.w * .34, layout.secondaryRoom.h * .09, palette);
+  drawRollingDoorGlow(ctx, layout.secondaryRoom.x + layout.secondaryRoom.w * .5, layout.secondaryRoom.y + layout.secondaryRoom.h * .68, layout.secondaryRoom.w * .32, layout.secondaryRoom.h * .12, palette);
+  drawStairs(ctx, layout.stairRoom, palette);
+}
+
+function drawCounter(ctx, x, y, w, h, palette) {
+  ctx.save();
+  ctx.fillStyle = "#8f7453";
+  roundRectPath(ctx, x, y, w, h, 8); ctx.fill();
+  ctx.fillStyle = "#c5a574";
+  roundRectPath(ctx, x + 8, y + 7, w - 16, h - 14, 5); ctx.fill();
+  ctx.strokeStyle = "rgba(65,44,25,.38)"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
+function drawShelves(ctx, x, y, w, h, palette) {
+  ctx.save();
+  for (let i = 0; i < 3; i += 1) {
+    const yy = y + i * h / 3;
+    ctx.fillStyle = "#7a6448";
+    roundRectPath(ctx, x, yy, w, h / 4, 6); ctx.fill();
+    ctx.fillStyle = i % 2 ? "#d4b56e" : "#9f7657";
+    for (let j = 0; j < 4; j += 1) ctx.fillRect(x + 10 + j * (w - 24) / 4, yy + 7, 9, h / 4 - 14);
+  }
+  ctx.restore();
+}
+
+function drawRelicTable(ctx, x, y, w, h, palette) {
+  ctx.save();
+  ctx.fillStyle = "#6f5940";
+  roundRectPath(ctx, x, y, w, h, 8); ctx.fill();
+  ctx.fillStyle = "#554235";
+  roundRectPath(ctx, x + w * .24, y + h * .22, w * .52, h * .5, 6); ctx.fill();
+  ctx.strokeStyle = palette.resource; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
+function drawThreshold(ctx, x, y, w, h, palette) {
+  ctx.save();
+  ctx.fillStyle = "#654b36";
+  roundRectPath(ctx, x, y, w, Math.max(10, h), 5); ctx.fill();
+  ctx.fillStyle = "#d4bd78";
+  for (let i = 0; i < 4; i += 1) {
+    ctx.beginPath(); ctx.arc(x + 18 + i * 22, y + h / 2, 5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawOldDoor(ctx, x, y, w, h, palette) {
+  ctx.save();
+  ctx.fillStyle = "#6f6257";
+  roundRectPath(ctx, x, y, w, h, 6); ctx.fill();
+  ctx.strokeStyle = "#423930"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
+function drawRollingDoorGlow(ctx, x, y, w, h, palette) {
+  ctx.save();
+  const glow = ctx.createRadialGradient(x + w / 2, y + h / 2, 2, x + w / 2, y + h / 2, w);
+  glow.addColorStop(0, "rgba(255,68,52,.82)");
+  glow.addColorStop(1, "rgba(255,68,52,0)");
+  ctx.fillStyle = glow; ctx.fillRect(x - w, y - h * 3, w * 3, h * 7);
+  ctx.fillStyle = "#5d5248";
+  roundRectPath(ctx, x, y, w, h, 5); ctx.fill();
+  ctx.strokeStyle = "#c74235"; ctx.lineWidth = 4; ctx.stroke();
+  ctx.restore();
+}
+
+function drawStairs(ctx, room, palette) {
+  ctx.save();
+  const inset = room.w * .18;
+  ctx.strokeStyle = "#6f5d46";
+  ctx.lineWidth = 5;
+  for (let i = 0; i < 6; i += 1) {
+    const y = room.y + room.h * .25 + i * room.h * .085;
+    ctx.beginPath(); ctx.moveTo(room.x + inset, y); ctx.lineTo(room.x + room.w - inset, y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawSpecialAreas(ctx, layout, mapCanvas, palette, seed) {
+  drawWaterBlob(ctx, layout.waterArea, palette, seed, "large");
+  drawWaterBlob(ctx, rect(layout.mainRoom.x + layout.mainRoom.w * .58, layout.mainRoom.y + layout.mainRoom.h * .56, layout.mainRoom.w * .18, layout.mainRoom.h * .14), palette, seed >>> 4, "small");
+  drawThreatPulse(ctx, layout.threatRoom, palette, seed);
+}
+
+function drawWaterBlob(ctx, area, palette, seed, scale = "large") {
+  ctx.save();
+  const g = ctx.createRadialGradient(area.cx, area.cy, 8, area.cx, area.cy, Math.max(area.w, area.h));
+  g.addColorStop(0, shadeColor(palette.waterHi, 10));
+  g.addColorStop(.5, palette.water);
+  g.addColorStop(1, "#0d2028");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  const steps = 18;
+  for (let i = 0; i <= steps; i += 1) {
+    const a = i / steps * Math.PI * 2;
+    const wobble = 1 + Math.sin(a * 3 + seed) * .08 + Math.cos(a * 5 + seed) * .06;
+    const x = area.cx + Math.cos(a) * area.w * .5 * wobble;
+    const y = area.cy + Math.sin(a) * area.h * .5 * wobble;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "rgba(116,188,198,.48)"; ctx.lineWidth = scale === "large" ? 4 : 2; ctx.stroke();
+  ctx.strokeStyle = "rgba(222,249,248,.32)"; ctx.lineWidth = 2;
+  for (let i = 0; i < (scale === "large" ? 5 : 2); i += 1) {
+    ctx.beginPath(); ctx.ellipse(area.cx - area.w * .18 + i * area.w * .09, area.cy + Math.sin(i + seed) * area.h * .08, area.w * .13, area.h * .08, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawThreatPulse(ctx, room, palette, seed) {
+  ctx.save();
+  const g = ctx.createRadialGradient(room.cx, room.cy, 4, room.cx, room.cy, room.w * .55);
+  g.addColorStop(0, "rgba(255,111,64,.35)");
+  g.addColorStop(1, "rgba(179,69,62,0)");
+  ctx.fillStyle = g; ctx.fillRect(room.x, room.y, room.w, room.h);
+  ctx.restore();
+}
+
+function drawSemanticRoutes(ctx, layout, mapCanvas, palette) {
+  const position = semanticPointPositionFactory(layout);
+  ctx.save();
+  ctx.lineCap = "round";
+  (Array.isArray(mapCanvas.routes) ? mapCanvas.routes : []).forEach((route) => {
+    const from = position(route.from);
+    const to = position(route.to);
+    if (!from || !to) return;
+    const blocked = String(route.kind || "").toLowerCase().includes("blocked");
+    ctx.strokeStyle = blocked ? "rgba(179,69,62,.58)" : "rgba(143,122,88,.36)";
+    ctx.lineWidth = blocked ? 8 : 6;
+    ctx.setLineDash(blocked ? [14, 10] : []);
+    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawSemanticMapMarkers(ctx, layout, mapCanvas, palette) {
+  const position = semanticPointPositionFactory(layout);
+  const entries = [
+    ...(Array.isArray(mapCanvas.points) ? mapCanvas.points : []).map((item) => ({ ...item, source: "point" })),
+    ...(Array.isArray(mapCanvas.hazards) ? mapCanvas.hazards : []).map((item) => ({ ...item, source: "hazard" })),
+  ];
+  const used = [];
+  entries.forEach((entry, index) => {
+    const label = String(entry.label || entry.id || `点位 ${index + 1}`);
+    const kind = semanticMarkerKind(label, entry);
+    const pos = resolveSemanticMarkerPosition(label, entry, layout, position, index);
+    const shifted = avoidLabelCollision(pos, used);
+    used.push(shifted.labelBox);
+    drawSemanticIconLabel(ctx, shifted.x, shifted.y, label, kind, palette, shifted.side);
+  });
+}
+
+function semanticPointPositionFactory(layout) {
+  return (idOrLabel) => {
+    const raw = layout.pointMap.get(String(idOrLabel));
+    if (!raw) return null;
+    return resolveSemanticMarkerPosition(raw.label, raw, layout, null, 0);
+  };
+}
+
+function resolveSemanticMarkerPosition(label, entry, layout, lookup, index) {
+  const text = `${label} ${entry.id || ""}`;
+  if (/柜台/.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .29, y: layout.mainRoom.y + layout.mainRoom.h * .24, side: "right" };
+  if (/货架/.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .68, y: layout.mainRoom.y + layout.mainRoom.h * .28, side: "left" };
+  if (/井匣|盒|relic|box/i.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .29, y: layout.mainRoom.y + layout.mainRoom.h * .49, side: "right" };
+  if (/铜钱|coin/.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .43, y: layout.mainRoom.y + layout.mainRoom.h * .61, side: "right" };
+  if (/陈航/.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .67, y: layout.mainRoom.y + layout.mainRoom.h * .68, side: "left" };
+  if (/许守井/.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .28, y: layout.mainRoom.y + layout.mainRoom.h * .74, side: "right" };
+  if (/门槛|threshold/.test(text)) return { x: layout.mainRoom.x + layout.mainRoom.w * .54, y: layout.mainRoom.y + layout.mainRoom.h * .84, side: "right" };
+  if (/卷帘|红光|shutter/i.test(text)) return { x: layout.secondaryRoom.x + layout.secondaryRoom.w * .65, y: layout.secondaryRoom.y + layout.secondaryRoom.h * .72, side: "left" };
+  if (/后门|旧门|backdoor/i.test(text)) return { x: layout.secondaryRoom.x + layout.secondaryRoom.w * .43, y: layout.secondaryRoom.y + layout.secondaryRoom.h * .22, side: "right" };
+  if (/未知|clue|unknown|\?/.test(text)) return { x: layout.secondaryRoom.x + layout.secondaryRoom.w * .82, y: layout.secondaryRoom.y + layout.secondaryRoom.h * .5, side: "left" };
+  if (/黑水|water/i.test(text)) return { x: layout.waterArea.cx, y: layout.waterArea.cy, side: "right" };
+  if (/楼梯|stair/i.test(text)) return { x: layout.stairRoom.cx, y: layout.stairRoom.cy, side: "right" };
+  if (/楼上|威胁|threat/i.test(text)) return { x: layout.threatRoom.cx, y: layout.threatRoom.cy, side: "left" };
+  const area = semanticAreaFor(label, entry);
+  const room = area === "secondary" ? layout.secondaryRoom : area === "stairs" ? layout.stairRoom : area === "threat" ? layout.threatRoom : area === "water" ? layout.waterArea : layout.mainRoom;
+  return { x: room.x + room.w * (.25 + (index % 3) * .22), y: room.y + room.h * (.28 + (Math.floor(index / 3) % 3) * .2), side: index % 2 ? "left" : "right" };
+}
+
+function semanticMarkerKind(label, entry = {}) {
+  const text = `${label} ${entry.kind || ""} ${entry.symbol || ""}`;
+  if (/陈航|person|人物|npc|许守井/i.test(text)) return /陈航/.test(text) ? "personDanger" : "person";
+  if (/黑水|water|污染|~/.test(text)) return "water";
+  if (/铜钱|coin/.test(text)) return "coin";
+  if (/危险|威胁|hazard|danger|!|卷帘|红光|楼上/i.test(text)) return "danger";
+  if (/未知|clue|unknown|\?/.test(text)) return "unknown";
+  if (/资源|交互|resource|\+|井匣|柜台|threshold|门槛/i.test(text)) return "interact";
+  return "object";
+}
+
+function avoidLabelCollision(pos, used) {
+  const labelW = 150;
+  const labelH = 38;
+  let y = pos.y;
+  for (let guard = 0; guard < 8; guard += 1) {
+    const box = { x: pos.side === "left" ? pos.x - labelW - 48 : pos.x + 48, y: y - labelH / 2, w: labelW, h: labelH };
+    if (!used.some((other) => rectsOverlap(box, other))) return { ...pos, y, labelBox: box };
+    y += labelH + 8;
+  }
+  return { ...pos, y, labelBox: { x: pos.x + 48, y: y - labelH / 2, w: labelW, h: labelH } };
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function drawSemanticIconLabel(ctx, x, y, label, kind, palette, side = "right") {
+  const style = semanticIconStyle(kind, palette);
+  drawSemanticIcon(ctx, x, y, kind, style);
+  const text = conciseTitle(label, 8);
+  ctx.save();
+  ctx.font = "800 22px Microsoft YaHei";
+  const padX = 18;
+  const labelW = Math.max(88, ctx.measureText(text).width + padX * 2);
+  const labelH = 38;
+  const lx = side === "left" ? x - labelW - 48 : x + 48;
+  const ly = y - labelH / 2;
+  ctx.fillStyle = style.labelBg;
+  ctx.strokeStyle = style.labelStroke;
+  ctx.lineWidth = 2;
+  roundRectPath(ctx, lx, ly, labelW, labelH, 12); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = style.labelText;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, lx + padX, ly + labelH / 2 + 1);
+  ctx.restore();
+}
+
+function semanticIconStyle(kind, palette) {
+  const styles = {
+    interact: { fill: "#fff8e7", stroke: palette.interact, text: palette.interact, labelBg: "#fffaf0", labelStroke: "rgba(105,132,80,.34)", labelText: "#48643b" },
+    danger: { fill: "#fff0ee", stroke: palette.danger, text: palette.danger, labelBg: "#fff1ee", labelStroke: "rgba(179,69,62,.36)", labelText: "#a43e37" },
+    unknown: { fill: "#f6f0ff", stroke: palette.unknown, text: palette.unknown, labelBg: "#faf4ff", labelStroke: "rgba(118,83,162,.34)", labelText: "#66428f" },
+    water: { fill: "#edf9fb", stroke: palette.waterHi, text: palette.water, labelBg: "#f1fbfc", labelStroke: "rgba(76,153,168,.36)", labelText: "#1f5b67" },
+    coin: { fill: "#fff7df", stroke: palette.resource, text: palette.resource, labelBg: "#fff8e8", labelStroke: "rgba(183,135,52,.35)", labelText: "#7a5a22" },
+    person: { fill: "#f8fff7", stroke: palette.personB, text: palette.personB, labelBg: "#fffdf7", labelStroke: "rgba(96,146,105,.35)", labelText: "#3f7048" },
+    personDanger: { fill: "#fff3f1", stroke: palette.personA, text: palette.personA, labelBg: "#fff4f2", labelStroke: "rgba(189,77,71,.35)", labelText: "#9b3834" },
+    object: { fill: "#fffaf0", stroke: palette.route, text: palette.text, labelBg: "#fffaf0", labelStroke: "rgba(92,75,54,.28)", labelText: palette.text },
+  };
+  return styles[kind] || styles.object;
+}
+
+function drawSemanticIcon(ctx, x, y, kind, style) {
+  ctx.save();
+  ctx.fillStyle = style.fill;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = 4;
+  if (kind === "danger" || kind === "personDanger") {
+    ctx.beginPath(); ctx.moveTo(x, y - 22); ctx.lineTo(x + 22, y); ctx.lineTo(x, y + 22); ctx.lineTo(x - 22, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  ctx.fillStyle = style.text;
+  ctx.font = "900 24px Microsoft YaHei";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let glyph = "•";
+  if (kind === "interact") glyph = "✦";
+  else if (kind === "danger" || kind === "personDanger") glyph = "!";
+  else if (kind === "unknown") glyph = "?";
+  else if (kind === "water") glyph = "≋";
+  else if (kind === "coin") glyph = "¥";
+  else if (kind === "person") glyph = "人";
+  ctx.fillText(glyph, x, y + 1);
+  ctx.restore();
 }
 
 function drawMapPaper(ctx, w, h, seed) {
@@ -2815,6 +3984,46 @@ function drawMapTerrain(ctx, w, h, seed) {
     ctx.moveTo(x - 22, y + 20);
     ctx.lineTo(x, y - 18);
     ctx.lineTo(x + 24, y + 20);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawMapCanvasAscii(ctx, w, h, mapCanvas = {}) {
+  const rows = Array.isArray(mapCanvas.ascii) ? mapCanvas.ascii : [];
+  if (!rows.length) return;
+  const gridRows = rows.length;
+  const gridCols = Math.max(...rows.map((row) => String(row).length), 1);
+  const cellW = w / gridCols;
+  const cellH = h / gridRows;
+  const colors = {
+    "#": "rgba(72,51,34,.2)",
+    "~": "rgba(45,95,122,.22)",
+    "!": "rgba(167,71,50,.16)",
+    "?": "rgba(75,125,168,.13)",
+    "+": "rgba(83,111,69,.12)",
+  };
+  ctx.save();
+  rows.forEach((row, y) => {
+    String(row).split("").forEach((ch, x) => {
+      const color = colors[ch];
+      if (!color) return;
+      ctx.fillStyle = color;
+      ctx.fillRect(x * cellW, y * cellH, Math.ceil(cellW), Math.ceil(cellH));
+    });
+  });
+  ctx.strokeStyle = "rgba(91,68,42,.08)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= gridCols; x += 1) {
+    ctx.beginPath();
+    ctx.moveTo(x * cellW, 0);
+    ctx.lineTo(x * cellW, h);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= gridRows; y += 1) {
+    ctx.beginPath();
+    ctx.moveTo(0, y * cellH);
+    ctx.lineTo(w, y * cellH);
     ctx.stroke();
   }
   ctx.restore();
@@ -2889,6 +4098,37 @@ function drawMapNodes(ctx, w, h, seed, scene, compact) {
 }
 
 function structuredMapLayout(scene, w, h) {
+  const canvasMap = scene.map_canvas || {};
+  const canvasInfo = canvasMap.canvas || {};
+  const cols = Math.max(1, Number(canvasInfo.grid_cols) || 32);
+  const rows = Math.max(1, Number(canvasInfo.grid_rows) || 18);
+  const toPx = (value, max, size) => (Math.max(0, Math.min(max - 1, Number(value) || 0)) + 0.5) / max * size;
+  if (Array.isArray(canvasMap.points) && canvasMap.points.length) {
+    const nodes = canvasMap.points.slice(0, 12).map((point, index) => {
+      const id = String(point.id || point.label || `point_${index + 1}`);
+      return {
+        id,
+        label: conciseTitle(point.label || id, 12),
+        x: toPx(point.x, cols, w),
+        y: toPx(point.y, rows, h),
+        tone: nodeTone(point),
+        kind: "node",
+        certainty: point.certainty || "confirmed",
+      };
+    });
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+    nodes.forEach((node) => nodeMap.set(node.label, node));
+    const edges = Array.isArray(canvasMap.routes) ? canvasMap.routes.slice(0, 16) : [];
+    const markers = (Array.isArray(canvasMap.hazards) ? canvasMap.hazards.slice(0, 10) : []).map((marker, index) => ({
+      label: conciseTitle(marker.label || marker.kind || `标记 ${index + 1}`, 12),
+      kind: marker.kind || "hazard",
+      certainty: marker.certainty || "uncertain",
+      x: toPx(marker.x, cols, w),
+      y: toPx(marker.y, rows, h),
+      tone: markerTone(marker),
+    }));
+    return { nodes, nodeMap, edges, markers };
+  }
   const route = scene.map_route || {};
   const sourceNodes = Array.isArray(route.nodes) ? route.nodes.slice(0, 7) : [];
   const positions = [[.13, .66], [.29, .54], [.45, .42], [.62, .34], [.78, .43], [.68, .64], [.42, .72]];
@@ -3075,10 +4315,15 @@ function drawCanvasItem(canvas, asset) {
   const type = String(prompt.type || "").toLowerCase();
   const silhouette = String(prompt.silhouette || "").toLowerCase();
   const text = `${asset.title}${asset.detail || ""}${asset.meta || ""}${asset.kind || ""}${type}${silhouette}`;
+  if (type === "red_gate_signal" || silhouette.includes("door_crack_light")) return drawRedGateSignalIcon(ctx, canvas.width, canvas.height, seed);
+  if (type === "broken_door_impact" || silhouette.includes("cracked_door")) return drawBrokenDoorImpactIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "switch_axe" || silhouette.includes("transforming_axe")) return drawSwitchAxeIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "sealed_relic_box" || silhouette.includes("sealed_square_box")) return drawRelicBoxIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "phone" || silhouette.includes("smartphone")) return drawPhoneIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "mud_armor_fragment" || silhouette.includes("armor_fragment")) return drawMudArmorFragmentIcon(ctx, canvas.width, canvas.height, seed);
+  if (/楼上|撞击|裂|cracked/.test(text)) return drawBrokenDoorImpactIcon(ctx, canvas.width, canvas.height, seed);
+  if (/卷帘|红光|gate/.test(text)) return drawRedGateSignalIcon(ctx, canvas.width, canvas.height, seed);
+  if (/门缝|door/.test(text)) return drawRedGateSignalIcon(ctx, canvas.width, canvas.height, seed);
   if (/手机|电话|信号|拨号|屏幕|phone|smartphone/.test(text)) return drawPhoneIcon(ctx, canvas.width, canvas.height, seed);
   if (/ritual|仪式|占卜|骨|匣|盒|钥匙/.test(text)) return drawRitualIcon(ctx, canvas.width, canvas.height, seed);
   if (/泥|痕/.test(text)) return drawMudIcon(ctx, canvas.width, canvas.height, seed);
@@ -3116,6 +4361,122 @@ function inferItemVisualPrompt(title = "", detail = "", kind = "") {
     type = "weapon"; category = "weapon"; role = "equipment"; material = "metal_or_bone"; silhouette = "weapon";
   }
   return { type, category, role, material, silhouette, source_text: conciseTitle(text, 120) };
+}
+
+function buildImagePrompt(title = "", detail = "", kind = "item") {
+  const aspectRatio = kind === "scene" || kind === "map" ? "16:9" : "1:1";
+  const stylePreset = "cinematic anime urban horror, Fate-inspired, controlled lighting";
+  return {
+    positive_prompt: conciseTitle(`${title}, ${detail}, ${stylePreset}, clear subject, coherent composition, readable details`, 420),
+    negative_prompt: "low quality, blurry, text artifacts, watermark, logo, extra limbs, malformed hands, incoherent layout",
+    aspect_ratio: aspectRatio,
+    style_preset: stylePreset,
+    quality: {
+      steps: 30,
+      cfg_scale: 6.5,
+      sampler: "DPM++ 2M Karras",
+      size: aspectRatio === "16:9" ? "1280x720" : "1024x1024",
+    },
+  };
+}
+
+function inferSceneVisualPrompt(title = "", detail = "") {
+  const text = `${title} ${detail}`;
+  let type = "scene_visual";
+  let material = "environment";
+  let silhouette = "scene_marker";
+  if (/卷帘|红光|gate|red/i.test(text)) {
+    type = "red_gate_signal";
+    material = "metal_door_and_red_light";
+    silhouette = "door_crack_light";
+  } else if (/楼上|撞击|木门|裂/.test(text)) {
+    type = "broken_door_impact";
+    material = "wood_and_shadow";
+    silhouette = "cracked_door";
+  } else if (/门|door/i.test(text)) {
+    type = "red_gate_signal";
+    material = "metal_door_and_red_light";
+    silhouette = "door_crack_light";
+  } else if (/黑水|倒影|影/.test(text)) {
+    type = "black_water_shadow";
+    material = "dark_water_reflection";
+    silhouette = "shadow_figures";
+  }
+  return { type, category: "scene_visual", role: "visual_record", material, silhouette, source_text: conciseTitle(text, 120) };
+}
+
+function drawRedGateSignalIcon(ctx, w, h, seed) {
+  drawIconBase(ctx, w, h, "#c8a66c", "#6c472e");
+  const x = w * 0.25;
+  const y = h * 0.18;
+  const doorW = w * 0.5;
+  const doorH = h * 0.64;
+  ctx.save();
+  ctx.fillStyle = "#4c3829";
+  ctx.fillRect(x, y, doorW, doorH);
+  ctx.fillStyle = "#6e5840";
+  ctx.fillRect(x + 8, y + 8, doorW - 16, doorH - 16);
+  ctx.fillStyle = "#1f1713";
+  ctx.fillRect(x + doorW * 0.48, y + 6, 5, doorH - 12);
+  ctx.strokeStyle = "#bb8b36";
+  ctx.lineWidth = 4;
+  for (let i = 0; i < 4; i += 1) {
+    const yy = y + 14 + i * (doorH - 28) / 3;
+    ctx.beginPath();
+    ctx.moveTo(x + 8, yy);
+    ctx.lineTo(x + doorW - 8, yy);
+    ctx.stroke();
+  }
+  const pulse = 10 + (seed % 9);
+  const grad = ctx.createRadialGradient(w * 0.5, h * 0.55, 2, w * 0.5, h * 0.55, w * 0.34);
+  grad.addColorStop(0, "rgba(255,62,47,.92)");
+  grad.addColorStop(0.45, "rgba(202,31,38,.48)");
+  grad.addColorStop(1, "rgba(255,62,47,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "#f6d989";
+  ctx.fillRect(w * 0.48, y + doorH - pulse, 6, pulse);
+  ctx.restore();
+}
+
+function drawBrokenDoorImpactIcon(ctx, w, h, seed) {
+  drawIconBase(ctx, w, h, "#b89b72", "#654629");
+  ctx.save();
+  const x = w * 0.22;
+  const y = h * 0.16;
+  const doorW = w * 0.56;
+  const doorH = h * 0.68;
+  ctx.fillStyle = "#6a4a31";
+  ctx.fillRect(x, y, doorW, doorH);
+  ctx.fillStyle = "#9b7449";
+  ctx.fillRect(x + 9, y + 9, doorW - 18, doorH - 18);
+  ctx.strokeStyle = "#3a2519";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.53, y + 10);
+  ctx.lineTo(w * 0.46, h * 0.38);
+  ctx.lineTo(w * 0.58, h * 0.5);
+  ctx.lineTo(w * 0.49, y + doorH - 8);
+  ctx.stroke();
+  ctx.fillStyle = "#231714";
+  ctx.beginPath();
+  ctx.moveTo(w * 0.49, h * 0.36);
+  ctx.lineTo(w * 0.64, h * 0.43);
+  ctx.lineTo(w * 0.55, h * 0.52);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#d9b86b";
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i += 1) {
+    const dy = (seed % 7) + i * 10;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.2, h * 0.26 + dy);
+    ctx.lineTo(w * 0.08, h * 0.2 + dy);
+    ctx.moveTo(w * 0.8, h * 0.34 + dy);
+    ctx.lineTo(w * 0.92, h * 0.27 + dy);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawCanvasMonster(canvas, asset) {
@@ -3402,6 +4763,7 @@ function createAssetCanvas(width, height) {
 
 function setAssetImage(targetImage, url) {
   if (!targetImage || !url) return;
+  targetImage.classList.toggle("formalAsset", /cg_feedback|manual_cg|formal_cg|_VCG|:VCG/i.test(url));
   if (url.startsWith("/campaign-assets/")) {
     targetImage.src = `${url}${url.includes("?") ? "&" : "?"}v=${ASSET_GENERATOR_VERSION}`;
     return;
@@ -3415,6 +4777,12 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
   const safeId = slugify(objectId || seedText || kind);
   const key = `${kind}:${campaignId}:${campaignSeed}:${safeId}:v${ASSET_GENERATOR_VERSION}`;
   const safeSeed = slugify(campaignSeed).slice(0, 24) || "seed";
+  const locked = lockedAvatarAsset(kind, safeId, metadata);
+  if (locked?.url) {
+    state.assetCache[key] = { url: locked.url };
+    setAssetImage(targetImage, locked.url);
+    return;
+  }
   const memory = state.assetCache[key];
   if (memory === "pending") {
     draw();
@@ -3431,7 +4799,7 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
   try {
     const lookup = await api(`/api/asset?campaign_id=${encodeURIComponent(campaignId)}&key=${encodeURIComponent(key)}`);
     if (lookup.exists && lookup.url) {
-      if (!metadata || lookup.entry?.metadata) {
+      if (assetMetadataReusable(metadata, lookup.entry?.metadata)) {
         state.assetCache[key] = { url: lookup.url };
         setAssetImage(targetImage, lookup.url);
         if (targetImage && canvas.id !== "mapCanvas") return;
@@ -3468,6 +4836,48 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
     setAssetImage(targetImage, dataUrl);
     updateMapImageIfNeeded(canvas, dataUrl);
   }
+}
+
+function lockedAvatarAsset(kind, safeId, metadata = {}) {
+  if (!["portrait", "npc_portrait", "companion", "companion_portrait", "monster_portrait"].includes(String(kind))) return null;
+  const requestedNames = new Set([
+    safeId,
+    metadata.title,
+    metadata.object_id,
+    metadata.actor_id,
+  ].map(normalizeActorName).filter(Boolean));
+  return (state.cachedAssets || []).find((asset) => {
+    if (!asset?.exists || !asset.url || String(asset.kind || "") !== String(kind)) return false;
+    if (assetVersionTag(asset) !== "VCG") return false;
+    const assetMeta = asset.metadata || {};
+    const assetNames = [
+      assetMeta.title,
+      assetMeta.object_id,
+      assetMeta.actor_id,
+      asset.key,
+    ].map(normalizeActorName).filter(Boolean);
+    return assetNames.some((name) => requestedNames.has(name));
+  }) || null;
+}
+
+function assetMetadataReusable(requested, existing) {
+  if (!requested) return true;
+  if (!existing) return false;
+  if (requested.map_canvas?.points?.length || requested.map_canvas?.ascii?.length) {
+    return stableJson(requested.map_canvas) === stableJson(existing.map_canvas || {});
+  }
+  if (requested.map_route?.nodes?.length || requested.map_route?.edges?.length || requested.map_route?.markers?.length) {
+    return stableJson(requested.map_route) === stableJson(existing.map_route || {});
+  }
+  return true;
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function drawImageToCanvas(canvas, url, fallback) {

@@ -1,4 +1,4 @@
-# -*- coding: gbk -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import shutil
@@ -136,6 +136,36 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "closed_threads": [],
             "uncertain_or_unconfirmed": [],
         },
+        "story_blueprint.json": {
+            "campaign_id": campaign_id,
+            "schema": "trpg_orchestrator.story_blueprint.v1",
+            "story_length": "medium",
+            "target_total_chars": 80000,
+            "chapters": [],
+            "notes": [],
+        },
+        "story_progress.json": {
+            "campaign_id": campaign_id,
+            "schema": "trpg_orchestrator.story_progress.v1",
+            "current_chapter_id": "",
+            "current_phase_id": "",
+            "current_node_id": "",
+            "turns_in_node": 0,
+            "chars_in_node": 0,
+            "total_chars": 0,
+            "completed_node_ids": [],
+            "beat_status": {},
+            "calculated_progress": {
+                "overall": 0,
+                "chapter": 0,
+                "node": 0,
+                "updated_by": "backend",
+            },
+            "pace_command": "normal",
+            "last_transition": {},
+            "protocol_warnings": [],
+            "last_updated_turn": 0,
+        },
         "run_records.json": {
             "campaign_id": campaign_id,
             "scope": "run_records",
@@ -194,7 +224,7 @@ class MemoryStore:
         registry = self.load_registry()
         active = registry.get("active_campaign")
         if not active:
-            raise RuntimeError("ÕÒ²»µ½ active_campaign£¬ÇëÏÈÖ¸¶¨»ò³õÊ¼»¯Ò»¸ö campaign_id¡£")
+            raise RuntimeError("æ‰¾ä¸åˆ° active_campaignï¼Œè¯·å…ˆæŒ‡å®šæˆ–åˆå§‹åŒ–ä¸€ä¸ª campaign_idã€‚")
         return active
 
     def init_campaign(self, campaign_id: str, name: str) -> CampaignPaths:
@@ -229,7 +259,7 @@ class MemoryStore:
                 write_json(path, defaults[name])
         missing = [name for name in MEMORY_FILE_NAMES if not (paths.root / name).exists()]
         if missing:
-            raise FileNotFoundError(f"ÅÜÍÅ¼ÇÒäÎÄ¼þÈ±Ê§: {', '.join(missing)}")
+            raise FileNotFoundError(f"è·‘å›¢è®°å¿†æ–‡ä»¶ç¼ºå¤±: {', '.join(missing)}")
         return {name: read_json(paths.root / name) for name in MEMORY_FILE_NAMES}
 
     def backup_files(self, campaign_id: str, filenames: list[str]) -> Path:

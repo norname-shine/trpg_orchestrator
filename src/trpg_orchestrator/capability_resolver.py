@@ -1,0 +1,144 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import re
+from typing import Any
+
+
+DEFAULT_CAPABILITIES = ["base_director", "base_actor", "story_progress", "recent_context"]
+
+
+KEYWORDS = {
+    "map": ["地图", "更新地图", "点阵地图", "路线", "区域图", "map", "route"],
+    "image": ["生图", "生成图", "画图", "图片", "立绘", "头像", "场景图", "怪物图", "image", "generate image", "portrait"],
+    "dossier": ["资料", "资料夹", "线索", "档案", "文献", "记录", "dossier", "clue", "archive"],
+    "inventory": ["物品", "背包", "装备", "道具", "检查物品", "使用", "获得", "丢失", "inventory", "item", "equipment"],
+    "character_card": ["角色卡", "状态", "属性", "受伤", "成长", "经验", "character", "status", "injury", "growth"],
+    "dice": ["检定", "骰子", "投骰", "判定", "d20", "dice", "roll", "check"],
+}
+
+NEGATED_IMAGE_PATTERNS = [
+    "不生图",
+    "不要生图",
+    "别生图",
+    "不生成图",
+    "不要生成图",
+    "别生成图",
+    "no image",
+    "do not generate image",
+    "don't generate image",
+]
+
+
+def build_capability_plan(
+    campaign_id: str,
+    player_action: str,
+    memory: dict[str, Any],
+    frontend_flags: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    action = str(player_action or "")
+    action_lower = action.lower()
+    loaded = list(DEFAULT_CAPABILITIES)
+    explicit: list[str] = []
+    secondary: list[str] = []
+    warnings: list[str] = []
+
+    def enable(name: str, request: str | None = None) -> None:
+        if name not in loaded:
+            loaded.append(name)
+        if request and request not in explicit:
+            explicit.append(request)
+        if request and request not in secondary:
+            secondary.append(request)
+
+    if _has_keywords(action_lower, KEYWORDS["map"]):
+        enable("map", "user_requested_map")
+    if _has_keywords(action_lower, KEYWORDS["image"]) and not _has_negated_image(action_lower):
+        enable("visual_assets", "user_requested_image")
+    if _has_keywords(action_lower, KEYWORDS["dossier"]):
+        enable("dossier", "user_requested_dossier")
+    if _has_keywords(action_lower, KEYWORDS["inventory"]):
+        enable("inventory", "user_requested_inventory")
+        if _has_keywords(action_lower, ["检查", "鉴定", "识别", "刚获得", "inspect", "identify"]):
+            enable("dossier", "user_requested_dossier")
+    if _has_keywords(action_lower, KEYWORDS["character_card"]):
+        enable("character_card", "user_requested_character_card")
+    if _has_keywords(action_lower, KEYWORDS["dice"]):
+        enable("dice_check_requested", "user_requested_dice")
+
+    recent = memory.get("recent_context.json", {}) if isinstance(memory, dict) else {}
+    scene = recent.get("current_scene", {}) if isinstance(recent, dict) else {}
+    active_npcs = scene.get("active_npcs", []) if isinstance(scene, dict) else []
+    if isinstance(active_npcs, list) and active_npcs:
+        enable("npc_voice")
+        enable("npc_present")
+
+    pressure_text = " ".join(
+        str(value)
+        for value in [
+            scene.get("immediate_pressure", "") if isinstance(scene, dict) else "",
+            recent.get("last_outcome", "") if isinstance(recent, dict) else "",
+        ]
+    ).lower()
+    if _has_keywords(pressure_text, ["enemy", "monster", "mystery", "怪物", "敌", "谜", "危险", "威胁"]):
+        enable("enemy_or_mystery")
+
+    profile = memory.get("campaign_profile.json", {}) if isinstance(memory, dict) else {}
+    mechanics = profile.get("mechanics", {}) if isinstance(profile, dict) else {}
+    if isinstance(mechanics, dict) and mechanics.get("use_dice") is True:
+        enable("dice_possible")
+
+    if isinstance(frontend_flags, dict):
+        if frontend_flags.get("map_panel") == "update":
+            enable("map", "frontend_requested_map")
+        if frontend_flags.get("gallery") == "update":
+            enable("visual_assets", "frontend_requested_visual_assets")
+
+    return {
+        "schema": "trpg_orchestrator.capability_plan.v1",
+        "campaign_id": campaign_id,
+        "turn_intent": {
+            "primary": _primary_intent(explicit),
+            "secondary": secondary,
+            "user_explicit_requests": explicit,
+        },
+        "loaded_capabilities": loaded,
+        "prompt_modules": {"director": [], "actor": [], "audit": [], "excluded": []},
+        "memory_refs": {"director": [], "actor_visible": [], "audit": []},
+        "output_contract": {
+            "allow_map_payload": "map" in loaded,
+            "allow_visual_assets": "visual_assets" in loaded,
+            "allow_gallery_update": "visual_assets" in loaded,
+            "allow_character_card_update": "character_card" in loaded,
+            "allow_inventory_update": "inventory" in loaded,
+            "allow_dossier_update": "dossier" in loaded,
+            "allow_dice_check": "dice_check_requested" in loaded,
+            "allow_canvas_jobs": False,
+            "allow_story_progress_writeback": True,
+        },
+        "frontend_refresh": {
+            "story_log": "update",
+            "story_progress": "update",
+            "map_panel": "update" if "map" in loaded else "keep_previous",
+            "gallery": "update" if "visual_assets" in loaded else "no_update",
+            "inventory": "update" if "inventory" in loaded else "no_update",
+            "character_card": "update" if "character_card" in loaded else "no_update",
+            "dossier": "update" if "dossier" in loaded else "no_update",
+        },
+        "warnings": warnings,
+    }
+
+
+def _has_keywords(text: str, keywords: list[str]) -> bool:
+    return any(keyword.lower() in text for keyword in keywords)
+
+
+def _has_negated_image(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", text)
+    return any(pattern in compact for pattern in NEGATED_IMAGE_PATTERNS)
+
+
+def _primary_intent(explicit: list[str]) -> str:
+    if not explicit:
+        return "continue_scene"
+    return explicit[0]

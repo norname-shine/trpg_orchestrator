@@ -7,7 +7,8 @@ This repository runs on Windows. Some historical Python files may be GBK, but fr
 - Player prose, ChatGPT input, ChatGPT replies, state writeback, JSON memory, and frontend text must never contain mojibake.
 - Runtime data is always written as UTF-8.
 - Legacy files may be read with automatic UTF-8 / UTF-8-BOM / GBK detection, but text must be checked for mojibake before parsing.
-- Do not use `errors="replace"` to silently swallow corruption and continue parsing, writing, or displaying text.
+- Do not use replacement decoding to silently swallow corruption and continue parsing, writing, or displaying text.
+- The forbidden replacement-decoding pattern is any direct `errors = "replace"` / `errors = 'replace'` equivalent in runtime decoding.
 - If runtime text still looks like mojibake, raise an error and stop so the source file or encoding boundary can be fixed.
 
 ## Prompt Language Policy
@@ -23,7 +24,7 @@ This repository runs on Windows. Some historical Python files may be GBK, but fr
 - Ordinary text reads should use `read_text_auto(path)`.
 - Runtime-critical text reads must use `read_runtime_text(path)`.
 - JSON reads must use `read_json(path)`.
-- Do not add `path.read_text(encoding="utf-8", errors="replace")`.
+- Do not add direct `Path.read_text` calls with replacement decoding.
 - Newly generated prompts, JSON, Markdown, HTML, CSS, JS, and outbox text must be UTF-8.
 - Ordinary text writes should use `write_text_utf8(path, text)`.
 - JSON writes should use `write_json(path, data)` with `ensure_ascii=False`.
@@ -42,3 +43,7 @@ This repository runs on Windows. Some historical Python files may be GBK, but fr
 
 - After encoding-related changes run Python compilation for backend files and `node --check trpg_orchestrator/web/app.js`.
 - Check at least one campaign-scoped outbox file and the global outbox mirror to confirm Chinese content is not mojibake.
+- Run `python -m trpg_orchestrator.cli validate-encoding` before and after Codex changes that touch source, prompts, JSON, Markdown, HTML, CSS, JS, or runtime text pipelines.
+- Use `python scripts/normalize_encoding.py` only as a manual migration tool. It rewrites decodable text files to UTF-8 without BOM and LF newlines, but skips files that already look mojibake so humans can repair them.
+- Never copy terminal mojibake back into source, prompt, JSON, outbox, or frontend files. If the terminal display is suspicious, inspect bytes or read through the encoding utilities.
+- Prompt files, JSON memory, outbox runtime files, and frontend responses must be UTF-8 end to end.

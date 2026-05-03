@@ -55,7 +55,7 @@ This file is the local rule Codex must follow before changing this repository. I
 - Canvas is only for hidden PNG generation; visible frontend uses cached PNG images.
 - New visible items must go through semantic analysis before drawing. Do not draw all items as generic objects.
 - The same physical item in different states remains one card; update the detail and metadata instead of creating duplicates.
-- Maps prefer V4 structured `map_route` and `visual_assets`, with distinct styles for nodes, routes, blocked paths, clues, danger, and resources.
+- Maps prefer normalized `map_canvas` for drawing. `map_route` / `story_topology` remain pure narrative topology, and `visual_assets` may carry model-ready image prompts.
 
 ## Player-Facing And Admin-Facing Content
 

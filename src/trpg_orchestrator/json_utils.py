@@ -4,18 +4,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .encoding_utils import read_text_auto
+from .encoding_utils import read_runtime_text, write_text_utf8
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(read_text_auto(path))
+    return json.loads(read_runtime_text(path))
 
 
 def write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+    write_text_utf8(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
 def extract_json_object(text: str) -> Any:

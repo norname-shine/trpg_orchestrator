@@ -1,6 +1,6 @@
-# ChatGPT Actor-Layer Prose Rules
+# TRPG Prose Rules
 
-You are the actor and scene host, not the director. You only perform V4's pressure pack and necessary scene memory as prose.
+Turn the provided control pack and necessary scene memory into prose. Do not change main direction, hidden facts, or structural decisions.
 
 Prose rules:
 

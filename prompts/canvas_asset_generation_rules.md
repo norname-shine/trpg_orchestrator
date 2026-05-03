@@ -45,7 +45,7 @@ These rules describe how the local frontend generates visual assets. They are ru
 
 - NPC portrait assets must be locally generated and cached.
 - NPC portraits must use stable names or ids as seeds.
-- The NPC gallery must exclude the main player character and companion/sub-player names. The main player uses `portrait` assets only; companions use `companion` or `companion_portrait` assets. They must never create `gallery_npc`, `npc_portrait`, separate `player_portrait`, or campaign-specific universal assets such as `palico` for the actor type.
+- The NPC gallery must exclude the main player character and companion/sub-player names. The main player uses `portrait` assets only; companions use `companion` or `companion_portrait` assets. They must never create `gallery_npc`, separate `player_portrait`, or campaign-specific universal assets such as `palico` for the actor type. NPC gallery cards reuse `npc_portrait`.
 - Companion/sub-player drawing must be selected by `archetype`, `species`, or `kind`: for example `palico` for Monster Hunter, `servant` for FATE, and `companion` for a generic fallback.
 - NPC portraits must be visually distinct. Vary at least several of:
   - hair shape
@@ -57,6 +57,17 @@ These rules describe how the local frontend generates visual assets. They are ru
 - Do not use one generic face with only small color changes.
 - Do not fix unconfirmed detailed canon appearance. Treat the portrait as an interface token unless the campaign memory explicitly confirms appearance.
 - Player and NPC message blocks should reuse stable `avatar_key` values so portraits stay consistent.
+
+## Portrait Override From Formal Generated Images
+
+- First Canvas portraits are default placeholders and fallbacks, not permanent visual sources.
+- When a formal generated scene image contains existing player characters, NPCs, companions, servants, monsters, or key characters, automatically identify and crop the matching character portrait from the generated image first.
+- Save cropped results by asset type: main player to `portrait`, companion/servant to `companion` or `companion_portrait`, NPC to `npc_portrait`, and monsters to the monster portrait/gallery asset.
+- For multi-character scene images, attempt to match each recognizable character separately. Do not treat the whole scene image as the only gallery asset.
+- A successfully matched crop should replace the old Canvas portrait. If matching confidence is not reliable, keep the previous portrait and do not overwrite it.
+- When replacing a portrait, update that character's dedicated visual baseline: face shape, facial feature style, hairstyle, clothing tone, primary colors, style mood, distinctive identifiers, and anti-drift constraints.
+- Later avatar, portrait, bust, or full-body generation for the same character must read this visual baseline so the face and style stay consistent.
+- This rule is campaign-agnostic. Do not hard-code Fate, Monster Hunter, COC, DND, wasteland, or original campaign branches; match by role, asset type, and stable `actor_id` / `avatar_key`.
 
 ## Item And Clue Icon Rules
 
@@ -88,3 +99,37 @@ These rules describe how the local frontend generates visual assets. They are ru
 
 - Current frontend generator version: `ASSET_GENERATOR_VERSION = 9`.
 - Version 9 strengthens the Monster Hunter `palico` archetype so companion portraits visibly read as a palico: large cat ears, inner ears, cat nose, whiskers, goggles, and a small mantle.
+
+## map_canvas Scene Map Canvas Algorithm
+
+- When `map_canvas` exists, the map generator must use the semantic map algorithm; use `map_route` only as fallback.
+- Do not reproduce ASCII cell by cell. Do not draw raw grid lines, tactical coordinates, legends, compasses, side explanation panels, or in-image title bars.
+- Fixed drawing order: background -> main map plane -> room structures/walls/floors -> furniture -> special regions -> routes/blocks -> point icons -> label chips.
+- The grid only infers spatial structure: rooms, partitions, passages, merged liquid areas, threat zones, resources, unknowns, and character points.
+- Consecutive `~` symbols must be merged into a single abnormal-fluid region instead of separate wave cells.
+- Draw `#` as thick walls/structural boundaries, `.` as walkable floor, `+` as a unified interaction icon, `!` as a unified hazard icon, and `?` as a unified unknown icon.
+- Icons and labels must be separated using a consistent `[icon] [rounded label chip]` pattern. Labels must not sit on top of icons or cover key geometry.
+- Label chip colors should follow semantics: neutral objects light cream, water light blue, danger light pink, unknown light purple, characters light neutral with a matching accent.
+- Campaign type changes palette and mood only; Fate, COC, DND, wasteland, Monster Hunter, and original campaigns use the same structural protocol.
+- The result should feel like a visual-novel scene record or archive map, not a horror tactical map, realistic photo, poster illustration, or raw character-grid reproduction.
+- All generated maps must be saved through `/api/asset` into the current campaign `assets/maps/`; manifest metadata should preserve the original `map_canvas` for redraw decisions.
+
+
+## Unified Portrait Naming And VCG Locking
+
+- Avatar assets use one role-specific portrait reference per character. NPC gallery cards reuse `npc_portrait`; do not generate `gallery_npc`.
+- Keep the traditional portrait filename stem and append only the version tag: numeric versions use `_v1`, `_v2`, ..., `_v16`; formal CG feedback uses `_VCG`.
+- Example: `npc_portrait_<asset_seed>_<actor_name>_v16.png` and `npc_portrait_<asset_seed>_<actor_name>_VCG.png`.
+- Manifest keys follow the same version rule: numeric `:v16`, formal CG feedback `:VCG`.
+- If a character has a `VCG` portrait asset, automatic Canvas portrait iteration must stop for that character. The latest nearby numeric version remains only as stable fallback.
+- Formal CG feedback may update or replace the `VCG` asset, but ordinary refreshes must not replace it with a new random Canvas portrait.
+- This applies to player characters, NPCs, companions, servants, monsters, and key characters across all campaign types.
+
+## Fixed Gallery Category Admission
+
+- A Canvas asset may enter the gallery only after it maps to the current campaign's startup fixed category ID allowlist.
+- `cg` is a universal gallery category. Formal story CGs, generated scene images, and player-viewable large image assets must enter `cg`.
+- Fate-style campaigns default to `cg`, `master`, `servant`, `npc`, `scene` / `map`, and `item`; other campaign types use their own startup category config.
+- CG is separate from maps/scenes: CG assets use `cg`; map and location thumbnails use `scene`.
+- Undefined kinds, temporary visual records, backend system notes, and ordinary visual assets that cannot map to a stable entity must not create gallery cards merely because a PNG exists.
+- When a card already exists for the same character, item, or scene, the new Canvas PNG may update that card's thumbnail, status, or detail, but must not create a duplicate card.

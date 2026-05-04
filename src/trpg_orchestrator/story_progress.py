@@ -34,13 +34,18 @@ def validate_story_blueprint(blueprint: dict[str, Any]) -> None:
     chapters = blueprint.get("chapters", [])
     if not isinstance(chapters, list):
         raise ValueError("story_blueprint.chapters must be a list")
+    if not chapters:
+        raise ValueError("story_blueprint requires at least one chapter with at least one node")
     chapter_ids: set[str] = set()
     node_ids: set[str] = set()
     beat_ids: set[str] = set()
+    next_refs: list[tuple[str, str]] = []
+    has_node = False
     for chapter in chapters:
         if not isinstance(chapter, dict):
             raise ValueError("chapter must be an object")
         chapter_id = str(chapter.get("chapter_id") or "").strip()
+        _validate_weight(chapter, "chapter", chapter_id or "?")
         if chapter_id:
             if chapter_id in chapter_ids:
                 raise ValueError(f"duplicate chapter_id: {chapter_id}")
@@ -48,12 +53,28 @@ def validate_story_blueprint(blueprint: dict[str, Any]) -> None:
         if not isinstance(chapter.get("nodes", []), list):
             raise ValueError(f"chapter {chapter_id or '?'} nodes must be a list")
         for node in _nodes(chapter):
+            has_node = True
             node_id = str(node.get("node_id") or "").strip()
             if not node_id:
                 raise ValueError("node_id must be non-empty")
             if node_id in node_ids:
                 raise ValueError(f"duplicate node_id: {node_id}")
             node_ids.add(node_id)
+            _validate_weight(node, "node", node_id)
+            for int_key in ("target_chars", "max_turns"):
+                if int_key in node and node.get(int_key) not in (None, ""):
+                    value = node.get(int_key)
+                    if not isinstance(value, int) or value < 0:
+                        raise ValueError(f"node {node_id} {int_key} must be a non-negative integer")
+            next_nodes = node.get("next_nodes", [])
+            if next_nodes in (None, ""):
+                next_nodes = []
+            if not isinstance(next_nodes, list):
+                raise ValueError(f"node {node_id} next_nodes must be a list")
+            for next_node_id in next_nodes:
+                ref = str(next_node_id or "").strip()
+                if ref:
+                    next_refs.append((node_id, ref))
             if not isinstance(node.get("beat_checklist", []), list):
                 raise ValueError(f"node {node_id} beat_checklist must be a list")
             for beat in _beats(node):
@@ -63,6 +84,78 @@ def validate_story_blueprint(blueprint: dict[str, Any]) -> None:
                 if beat_id in beat_ids:
                     raise ValueError(f"duplicate beat_id: {beat_id}")
                 beat_ids.add(beat_id)
+                _validate_weight(beat, "beat", beat_id)
+    if not has_node:
+        raise ValueError("story_blueprint requires at least one chapter with at least one node")
+    for node_id, ref in next_refs:
+        if ref not in node_ids:
+            raise ValueError(f"node {node_id} next_nodes references missing node_id: {ref}")
+
+
+def build_backend_progress_control(
+    blueprint: dict[str, Any],
+    progress: dict[str, Any],
+    pressure_pack_progress_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    incoming = pressure_pack_progress_control if isinstance(pressure_pack_progress_control, dict) else {}
+    control: dict[str, Any] = {}
+    if not _has_blueprint(blueprint):
+        control.update({
+            "current_chapter_id": "",
+            "current_phase_id": "",
+            "current_node_id": "",
+            "current_node_name": "",
+            "node_goal": "",
+            "beat_targets_this_turn": [],
+            "pace_command": "normal",
+            "legal_next_nodes": [],
+            "must_not_repeat": _string_list(incoming.get("must_not_repeat")),
+            "progress_note": str(incoming.get("progress_note") or ""),
+            "protocol_warnings": ["story_blueprint empty; progress_control disabled"],
+        })
+        return control
+    try:
+        validate_story_blueprint(blueprint)
+    except ValueError as exc:
+        warnings.append(f"invalid story_blueprint: {exc}")
+    current_id = str(progress.get("current_node_id") or "").strip()
+    node = find_node(blueprint, current_id) if current_id else None
+    if not node:
+        if current_id:
+            warnings.append(f"story_progress current_node_id missing in blueprint: {current_id}")
+        node = _first_node(blueprint)
+        current_id = str(node.get("node_id") or "") if node else ""
+    chapter_id = _chapter_id_for_node(blueprint, current_id)
+    legal_next = [str(item) for item in (node.get("next_nodes", []) if isinstance(node, dict) else []) if str(item)]
+    incoming_node = str(incoming.get("current_node_id") or "").strip()
+    if incoming_node and incoming_node != current_id:
+        warnings.append(f"v4 progress_control current_node_id ignored: {incoming_node}")
+    incoming_legal = _string_list(incoming.get("legal_next_nodes"))
+    illegal_legal = [item for item in incoming_legal if item not in legal_next]
+    if illegal_legal:
+        warnings.append("v4 progress_control legal_next_nodes filtered: " + ", ".join(illegal_legal))
+    valid_beats = {str(beat.get("beat_id") or "") for beat in _beats(node or {})}
+    beat_targets = []
+    for beat_id in _string_list(incoming.get("beat_targets_this_turn")):
+        if beat_id in valid_beats:
+            beat_targets.append(beat_id)
+        else:
+            warnings.append(f"v4 progress_control beat target filtered: {beat_id}")
+    pace = _pace_command(node, progress) if node else "normal"
+    return {
+        "current_chapter_id": chapter_id,
+        "current_phase_id": str(progress.get("current_phase_id") or ""),
+        "current_node_id": current_id,
+        "current_node_name": _public_name(node, ""),
+        "node_goal": str((node or {}).get("goal") or (node or {}).get("node_goal") or (node or {}).get("description") or ""),
+        "beat_targets_this_turn": beat_targets,
+        "pace_command": pace,
+        "legal_next_nodes": legal_next,
+        "must_not_repeat": _string_list(incoming.get("must_not_repeat")),
+        "progress_note": str(incoming.get("progress_note") or ""),
+        "protocol_warnings": _dedupe_tail(warnings),
+    }
 
 
 def validate_progress_writeback_against_blueprint(
@@ -84,7 +177,7 @@ def validate_progress_writeback_against_blueprint(
         beat_id = str(update.get("beat_id") or "")
         if beat_id and beat_id not in valid_beats:
             warnings.append(f"illegal beat_update ignored: {beat_id}")
-    warnings.extend(_transition_warnings(current_node, progress, progress_writeback.get("transition_request") or {}))
+    warnings.extend(_transition_warnings(current_node, progress, progress_writeback.get("transition_request") or {}, blueprint))
     return warnings
 
 
@@ -147,11 +240,18 @@ def apply_progress_writeback(
         beat_status[beat_id] = {"status": status, "evidence": evidence}
     updated["beat_status"] = beat_status
 
+    pre_transition_pace = _pace_command(current_node, updated)
     transition = progress_writeback.get("transition_request") if isinstance(progress_writeback.get("transition_request"), dict) else {}
-    transition_warnings = _transition_warnings(current_node, updated, transition)
+    transition_warnings = _transition_warnings(current_node, updated, transition, blueprint)
     warnings.extend(transition_warnings)
     node_status = str(progress_writeback.get("node_status") or "").strip()
-    if not transition_warnings and node_status in {"resolved", "skipped", "failed", "merged"}:
+    has_completion_evidence = _has_progress_evidence(progress_writeback)
+    if node_status == "resolved" and not has_completion_evidence:
+        warnings.append("resolved_without_evidence_kept_active")
+        node_status = "active"
+    if pre_transition_pace == "force_advance" and (not transition or transition.get("type") == "stay"):
+        warnings.append("force_advance_without_transition")
+    if not transition_warnings and has_completion_evidence and node_status in {"resolved", "skipped", "failed", "merged"}:
         _append_unique(updated.setdefault("completed_node_ids", []), updated.get("current_node_id", ""))
     if not transition_warnings and transition and transition.get("type") != "stay":
         to_node_id = str(transition.get("to_node_id") or "").strip()
@@ -276,7 +376,7 @@ def _calculated(blueprint: dict[str, Any], progress: dict[str, Any]) -> dict[str
     }
 
 
-def _transition_warnings(node: dict[str, Any], progress: dict[str, Any], transition: dict[str, Any]) -> list[str]:
+def _transition_warnings(node: dict[str, Any], progress: dict[str, Any], transition: dict[str, Any], blueprint: dict[str, Any] | None = None) -> list[str]:
     if not transition:
         return []
     warnings: list[str] = []
@@ -296,6 +396,8 @@ def _transition_warnings(node: dict[str, Any], progress: dict[str, Any], transit
     legal_next = {str(item) for item in node.get("next_nodes", []) if str(item)}
     if to_node_id not in legal_next:
         warnings.append(f"illegal transition to_node_id ignored: {to_node_id}")
+    if blueprint and not find_node(blueprint, to_node_id):
+        warnings.append(f"illegal transition missing blueprint node ignored: {to_node_id}")
     return warnings
 
 
@@ -348,7 +450,7 @@ def _beats(node: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _has_blueprint(blueprint: dict[str, Any]) -> bool:
-    return isinstance(blueprint, dict) and bool(_chapters(blueprint))
+    return isinstance(blueprint, dict) and any(_nodes(chapter) for chapter in _chapters(blueprint))
 
 
 def _first_node(blueprint: dict[str, Any]) -> dict[str, Any] | None:
@@ -375,6 +477,38 @@ def _normalized_weights(items: list[dict[str, Any]], key: str = "weight") -> lis
         return [1 / len(items)] * len(items)
     total = sum(raw)
     return [value / total for value in raw]
+
+
+def _validate_weight(item: dict[str, Any], label: str, item_id: str) -> None:
+    if "weight" not in item or item.get("weight") in (None, ""):
+        return
+    value = item.get("weight")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{label} {item_id} weight must be a non-negative number")
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _has_progress_evidence(progress_writeback: dict[str, Any]) -> bool:
+    evidence = progress_writeback.get("progress_evidence")
+    if isinstance(evidence, list):
+        for item in evidence:
+            if isinstance(item, dict):
+                if str(item.get("evidence") or item.get("text") or item.get("reason") or "").strip():
+                    return True
+            elif str(item or "").strip():
+                return True
+    transition = progress_writeback.get("transition_request")
+    if isinstance(transition, dict) and str(transition.get("reason") or "").strip():
+        return True
+    for item in progress_writeback.get("beat_updates", []) if isinstance(progress_writeback.get("beat_updates"), list) else []:
+        if isinstance(item, dict) and str(item.get("evidence") or "").strip():
+            return True
+    return False
 
 
 def _beat_value(status: str) -> float:

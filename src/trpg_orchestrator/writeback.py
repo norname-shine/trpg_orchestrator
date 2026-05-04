@@ -40,6 +40,7 @@ def apply_approved_writeback(
     approved_writeback: dict[str, Any],
     extra_hashes: list[str] | None = None,
     pressure_pack: dict[str, Any] | None = None,
+    prose_chars_delta: int | None = None,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {}
     long_term = approved_writeback.get("long_term_memory", approved_writeback)
@@ -104,12 +105,13 @@ def apply_approved_writeback(
     protocol_warnings: list[str] = []
     progress_writeback = approved_writeback.get("progress_writeback")
     if isinstance(progress_writeback, dict):
-        prose_chars_delta = _writeback_prose_chars(approved_writeback)
+        if prose_chars_delta is None:
+            prose_chars_delta = _writeback_prose_chars(approved_writeback)
         updated_progress = apply_progress_writeback(
             memory.get("story_blueprint.json", {}),
             memory.get("story_progress.json", {}),
             progress_writeback,
-            prose_chars_delta=prose_chars_delta,
+            prose_chars_delta=prose_chars_delta or 0,
         )
         updates["story_progress.json"] = updated_progress
         protocol_warnings.extend(updated_progress.get("protocol_warnings", []))

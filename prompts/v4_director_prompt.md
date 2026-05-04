@@ -179,6 +179,8 @@ When player action is continue:
 - If the generated image will contain existing characters, list them in `visual_assets.character_targets` with their target portrait asset slots so the runtime can crop portraits from the final image and update each character's visual baseline.
 - `map_route` is reusable narrative topology. Do not put image prompts, ASCII grids, drawing coordinates, or terrain symbols into it.
 - `map_canvas` is drawing data. Use it only when map update is requested or scene geometry changed.
+- By default, image generation should produce a dual-panel composition: the left side in 16:9 and the right side in 9:16. The visual style of generated images should be regulated to some extent, ensuring that it fits the story background.
+
 
 ## Progress And Output Request Protocol
 

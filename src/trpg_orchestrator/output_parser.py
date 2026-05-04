@@ -25,6 +25,23 @@ class ParsedOutput:
     blocks: list[dict[str, Any]]
 
 
+VISIBLE_PROSE_BLOCK_TYPES = {"gm_narration", "player_action", "npc_dialogue", "system_check", "choice_prompt", "cg_image"}
+
+
+def visible_prose_chars(blocks: Any) -> int:
+    """Count player-visible prose characters from structured ChatGPT blocks."""
+    if not isinstance(blocks, list):
+        return 0
+    total = 0
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if str(block.get("type") or "") not in VISIBLE_PROSE_BLOCK_TYPES:
+            continue
+        total += len(str(block.get("body") or ""))
+    return total
+
+
 def missing_markers(text: str) -> list[str]:
     stripped = text.strip()
     if stripped.startswith("{") or stripped.startswith("```"):

@@ -250,6 +250,8 @@ def validate_progress_writeback(data: dict[str, Any]) -> None:
     for key in data:
         if key in FORBIDDEN_PROGRESS_FIELDS:
             raise SchemaValidationError(f"progress_writeback forbidden field: {key}")
+        if key not in allowed:
+            raise SchemaValidationError(f"progress_writeback unknown field: {key}")
     if str(data.get("node_status") or "active") not in PROGRESS_NODE_STATUSES:
         raise SchemaValidationError(f"invalid progress_writeback.node_status: {data.get('node_status')}")
     if not isinstance(data.get("beat_updates", []), list):
@@ -264,6 +266,10 @@ def validate_progress_writeback(data: dict[str, Any]) -> None:
     transition = data.get("transition_request", {})
     if not isinstance(transition, dict):
         raise SchemaValidationError("progress_writeback.transition_request must be an object")
+    transition_allowed = {"type", "from_node_id", "to_node_id", "reason"}
+    for key in transition:
+        if key not in transition_allowed:
+            raise SchemaValidationError(f"transition_request unknown field: {key}")
     transition_type = str(transition.get("type") or "stay")
     if transition_type not in TRANSITION_TYPES:
         raise SchemaValidationError(f"invalid transition_request.type: {transition_type}")
@@ -273,6 +279,20 @@ def validate_progress_writeback(data: dict[str, Any]) -> None:
         raise SchemaValidationError("transition_request.from_node_id must be a string")
     if "progress_evidence" in data and not isinstance(data.get("progress_evidence"), list):
         raise SchemaValidationError("progress_writeback.progress_evidence must be a list")
+    node_status = str(data.get("node_status") or "active")
+    if node_status in {"resolved", "failed", "skipped", "merged"}:
+        has_progress_evidence = any(str(item or "").strip() for item in data.get("progress_evidence", []) if not isinstance(item, dict)) or any(
+            str(item.get("evidence") or item.get("text") or item.get("reason") or "").strip()
+            for item in data.get("progress_evidence", [])
+            if isinstance(item, dict)
+        )
+        has_transition_reason = bool(str(transition.get("reason") or "").strip())
+        has_beat_evidence = any(
+            isinstance(item, dict) and str(item.get("evidence") or "").strip()
+            for item in data.get("beat_updates", [])
+        )
+        if not (has_progress_evidence or has_transition_reason or has_beat_evidence):
+            raise SchemaValidationError(f"progress_writeback.node_status {node_status} requires evidence")
 
 
 def normalize_pressure_pack_compat(data: dict[str, Any]) -> dict[str, Any]:

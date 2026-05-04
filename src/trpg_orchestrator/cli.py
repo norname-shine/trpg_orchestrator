@@ -18,12 +18,13 @@ from .encoding_validator import validate_repository_encoding
 from .json_utils import extract_json_object, read_json, write_json
 from .memory_store import MemoryStore
 from .memory_compactor import build_compaction_report
-from .output_parser import parse_chatgpt_output, public_output
+from .output_parser import parse_chatgpt_output, public_output, visible_prose_chars
 from .output_contract import summarize_payload_keys
 from .payload_fulfillment import build_payload_fulfillment_input, defer_unfulfilled_requests, diff_requested_capabilities, finalize_capability_plan, merge_payload_patch, skipped_payload_patch
 from .prompt_builder import build_audit_user_prompt, build_chatgpt_image_input, build_chatgpt_input, build_director_user_prompt, build_v4_light_action_user_prompt, read_prompt, selected_memory_debug, selected_prompt_modules_debug
 from .rewrite_manager import build_chatgpt_rewrite_input, build_v4_rewrite_user_prompt
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_chatgpt_blocks, validate_payload_patch, validate_pressure_pack, validate_writeback
+from .story_progress import build_backend_progress_control, validate_story_blueprint
 from .quality_gate import quality_gate, is_quality_pass
 from .writeback import apply_approved_writeback, migrate_legacy_facts, writeback_hash, has_applied_writeback
 
@@ -221,6 +222,25 @@ def sync_global_reply_if_newer(outbox_dir: Path) -> None:
         shutil.copy2(global_raw, scoped_raw)
 
 
+def anchor_progress_control(pressure_pack: dict, memory: dict) -> dict:
+    if not isinstance(pressure_pack, dict):
+        return pressure_pack
+    control = build_backend_progress_control(
+        memory.get("story_blueprint.json", {}),
+        memory.get("story_progress.json", {}),
+        pressure_pack.get("progress_control") if isinstance(pressure_pack.get("progress_control"), dict) else {},
+    )
+    warnings = control.pop("protocol_warnings", [])
+    pressure_pack["progress_control"] = control
+    if warnings:
+        pressure_pack.setdefault("protocol_warnings", [])
+        if isinstance(pressure_pack["protocol_warnings"], list):
+            for warning in warnings:
+                if warning not in pressure_pack["protocol_warnings"]:
+                    pressure_pack["protocol_warnings"].append(warning)
+    return pressure_pack
+
+
 def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: bool = False) -> int:
     store = MemoryStore()
     resolved = store.resolve_campaign_id(campaign_id)
@@ -240,6 +260,7 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
             director_user_prompt,
         ))
     core_pressure_pack = normalize_pressure_pack_compat(core_pressure_pack)
+    anchor_progress_control(core_pressure_pack, memory)
     validate_pressure_pack(core_pressure_pack, resolved, require_payloads=False)
     write_json(outbox_dir / "pressure_pack_core.json", core_pressure_pack)
     missing = diff_requested_capabilities(core_pressure_pack.get("output_requests", {}), capability_plan.get("loaded_capabilities", []), core_pressure_pack.get("payloads", {}))
@@ -262,6 +283,7 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
         pressure_pack = core_pressure_pack
     write_json(outbox_dir / "payload_patch.json", payload_patch)
     pressure_pack = normalize_pressure_pack_compat(pressure_pack)
+    anchor_progress_control(pressure_pack, memory)
     validate_pressure_pack(pressure_pack, resolved)
     capability_plan = finalize_capability_plan(capability_plan, pressure_pack)
     write_json(outbox_dir / "pressure_pack.json", pressure_pack)
@@ -335,7 +357,7 @@ def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: boo
         if has_applied_writeback(memory, digest):
             raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
     validate_writeback(approved)
-    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack)
+    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack, prose_chars_delta=visible_prose_chars(parsed.blocks))
     run_records = append_run_record(
         memory.get("run_records.json", {}),
         resolved,
@@ -740,7 +762,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
         if has_applied_writeback(memory, digest):
             raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
     story_progress_before = memory.get("story_progress.json", {})
-    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack)
+    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack, prose_chars_delta=visible_prose_chars(parsed.blocks))
     story_progress_after = updates.get("story_progress.json", story_progress_before)
     run_records = append_run_record(
         memory.get("run_records.json", {}),
@@ -954,7 +976,10 @@ def cmd_validate_memory() -> int:
         print("No campaigns registered.")
         return 0
     for campaign_id in campaigns:
-        store.load_campaign_memory(campaign_id)
+        memory = store.load_campaign_memory(campaign_id)
+        blueprint = memory.get("story_blueprint.json", {})
+        if isinstance(blueprint, dict) and blueprint.get("chapters"):
+            validate_story_blueprint(blueprint)
         print(f"OK memory: {campaign_id}")
     if (OUTBOX_DIR / "pressure_pack.json").exists():
         validate_pressure_pack(read_json(OUTBOX_DIR / "pressure_pack.json"))

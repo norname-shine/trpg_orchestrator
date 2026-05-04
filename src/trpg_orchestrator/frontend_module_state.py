@@ -22,13 +22,14 @@ def build_frontend_modules(
     asset_seed = str(frontend_state_base.get("asset_seed") or campaign_id)
     canvas_jobs = resolve_canvas_jobs({"payloads": payloads, "output_requests": output_requests}, campaign_id, asset_seed)
     map_request = _request(output_requests, "map", "keep_previous")
+    module_refs = frontend_state_base.get("module_refs", {}) if isinstance(frontend_state_base.get("module_refs"), dict) else {}
     return {
-        "story_log": {"mode": "update", "state": "ready", "update_requested": True, "payload": frontend_state_base.get("story_log", {})},
+        "story_log": {"mode": "update", "state": "ready", "update_requested": True, "payload": {}, "payload_ref": module_refs.get("story_log", "")},
         "story_progress": {"mode": "update", "state": "ready", "update_requested": True, "payload": story_progress_payload},
         "map_panel": _map_module(map_request, payloads, assets, warnings),
-        "gallery": _gallery_module(output_requests, payloads),
-        "inventory": _payload_module(output_requests, payloads, "inventory", "inventory_updates", payloads.get("inventory_updates", [])),
-        "dossier": _payload_module(output_requests, payloads, "dossier", "dossier_updates", payloads.get("dossier_updates", [])),
+        "gallery": _gallery_module(output_requests, payloads, module_refs.get("gallery", "")),
+        "inventory": _payload_module(output_requests, payloads, "inventory", "inventory_updates", payloads.get("inventory_updates", []), payload_ref=module_refs.get("inventory", "")),
+        "dossier": _payload_module(output_requests, payloads, "dossier", "dossier_updates", payloads.get("dossier_updates", []), payload_ref=module_refs.get("dossier", "")),
         "character_card": _payload_module(output_requests, payloads, "character_card", "character_card_update", payloads.get("character_card_update", {}), cached_state="cached"),
         "canvas_jobs": {
             "mode": "update" if canvas_jobs else "no_update",
@@ -55,11 +56,11 @@ def _map_module(request: dict[str, Any], payloads: dict[str, Any], assets: list[
     if mode == "keep_previous":
         return {
             "mode": "keep_previous",
-            "state": "cached" if latest else "idle",
+            "state": "cached" if latest else "empty",
             "update_requested": False,
             "payload": {},
-            "payload_ref": latest.get("url", "") or "asset://map/latest",
-            "reason": request.get("reason", ""),
+            "payload_ref": latest.get("url", "") if latest else "",
+            "reason": request.get("reason", "") or ("current campaign cached map asset" if latest else "no current campaign map asset"),
         }
     route = payloads.get("map_route") if isinstance(payloads.get("map_route"), dict) and payloads.get("map_route", {}).get("nodes") else {}
     canvas = payloads.get("map_canvas") if isinstance(payloads.get("map_canvas"), dict) else {}
@@ -83,34 +84,37 @@ def _payload_module(
     payload_key: str,
     payload: Any,
     cached_state: str = "idle",
+    payload_ref: str = "",
 ) -> dict[str, Any]:
     request = _request(output_requests, module)
     mode = str(request.get("mode") or "none")
     if mode in {"none", "keep_previous"}:
-        return {"mode": "no_update", "state": cached_state, "update_requested": False, "payload": {} if isinstance(payload, dict) else []}
+        return {"mode": "no_update", "state": cached_state, "update_requested": False, "payload": {} if isinstance(payload, dict) else [], "payload_ref": payload_ref}
     has_payload = payload not in (None, "", [], {})
     return {
         "mode": "update" if has_payload else "no_update",
         "state": "ready" if has_payload else "deferred",
         "update_requested": has_payload,
         "payload": payload if has_payload else ({} if isinstance(payload, dict) else []),
+        "payload_ref": payload_ref,
         "reason": request.get("reason", ""),
     }
 
 
-def _gallery_module(output_requests: dict[str, Any], payloads: dict[str, Any]) -> dict[str, Any]:
+def _gallery_module(output_requests: dict[str, Any], payloads: dict[str, Any], payload_ref: str = "") -> dict[str, Any]:
     gallery_request = _request(output_requests, "gallery")
     visual_request = _request(output_requests, "visual_assets")
     payload = _gallery_payload(payloads)
     has_payload = bool(payload.get("visual_assets") or payload.get("gallery_updates"))
     authorized = gallery_request.get("mode") == "update" or visual_request.get("mode") in {"create", "update"}
     if not authorized:
-        return {"mode": "no_update", "state": "idle", "update_requested": False, "payload": {}}
+        return {"mode": "no_update", "state": "idle", "update_requested": False, "payload": {}, "payload_ref": payload_ref}
     return {
         "mode": "update" if has_payload else "no_update",
         "state": "ready" if has_payload else "deferred",
         "update_requested": has_payload,
         "payload": payload if has_payload else {},
+        "payload_ref": payload_ref,
         "reason": gallery_request.get("reason") or visual_request.get("reason", ""),
     }
 

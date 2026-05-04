@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TRPG 跑团控制台</title>
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css?v=17">
 </head>
 <body>
   <canvas id="rainCanvas" aria-hidden="true"></canvas>
@@ -25,6 +25,28 @@
         <button class="selectBtn" id="storySelectBtn" type="button">选择跑团 <span>▾</span></button>
         <div class="displayPill wide" id="activeCampaignBtn"><span>故事</span><strong id="campaignName">-</strong></div>
         <div class="displayPill wide" id="chapterBtn"><span>章节</span><strong id="chapterName"></strong></div>
+        <div class="storyProgressTop" id="storyProgressTop">
+          <button class="storyProgressTopBtn" id="storyProgressTopBtn" type="button" aria-expanded="false">
+            <span id="storyProgressTopTitle">未启用结构化进度</span>
+            <b id="storyProgressTopPace">normal</b>
+          </button>
+          <div class="storyProgressMenu hidden" id="storyProgressMenu">
+            <div class="storyProgressMenuHeader">
+              <b id="storyProgressMenuTitle">未启用结构化进度</b>
+              <span id="storyProgressPaceBadge">稳定</span>
+            </div>
+            <div class="storyProgressMenuOverall">
+              <span id="storyProgressOverallText">0%</span>
+              <i><em id="storyProgressOverallBar"></em></i>
+            </div>
+            <div class="storyProgressMenuRows">
+              <div><span>当前章节</span><b id="storyProgressChapterName">-</b><strong id="storyProgressChapterPercent">0%</strong></div>
+              <div><span>当前节点</span><b id="storyProgressNodeName">-</b><strong id="storyProgressNodePercent">0%</strong></div>
+              <div><span>节奏</span><b id="storyProgressPace">normal</b><strong></strong></div>
+            </div>
+            <p id="storyProgressStatusText">未启用结构化故事进度</p>
+          </div>
+        </div>
       </nav>
       <div class="navActions">
         <div class="statusChip" id="jobPill"><span></span><b id="jobText">待机</b></div>
@@ -68,10 +90,10 @@
           </div>
           <div class="companionCard">
             <div class="companionLeft" id="companionAvatarWrap">
-              <img id="palicoImage" alt="伙伴头像 PNG">
+              <img id="companionImage" alt="伙伴头像 PNG">
               <div>
-                <b id="palicoName">伙伴</b>
-                <span id="palicoMeta">同行伙伴</span>
+                <b id="companionName">伙伴</b>
+                <span id="companionMeta">同行伙伴</span>
               </div>
             </div>
             <button id="viewCompanionDataBtn" type="button">查看伙伴数据</button>
@@ -99,6 +121,7 @@
           </div>
           <div class="mapCanvas">
             <img id="mapImage" class="mapImage" alt="区域地图 PNG" />
+            <div class="mapEmptyState" id="mapEmptyState"><b>暂无区域地图</b><span>地图会在路线变化或你请求更新地图后生成。</span></div>
             <canvas id="mapCanvas" class="mapSourceCanvas" width="1280" height="720" aria-hidden="true"></canvas>
           </div>
         </section>
@@ -321,7 +344,7 @@
       </div>
     </div>
   </div>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=17"></script>
 </body>
 </html>
 

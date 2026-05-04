@@ -30,7 +30,11 @@
   ruleFiles: [],
   selectedRule: "",
   frontendState: {},
+  modulePayloadCache: {},
   assetSeed: "",
+  dragPanels: {},
+  activeDragPanel: null,
+  activeReferenceDrag: null,
   runProgress: {
     active: false,
     percent: 0,
@@ -41,15 +45,17 @@
 };
 
 const $ = (id) => document.getElementById(id);
-const ASSET_GENERATOR_VERSION = 16;
+const ASSET_GENERATOR_VERSION = 17;
+const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v17";
+const LEGACY_DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels";
 
 function init() {
   drawBackground();
-  drawPixelAvatar("TRPG", { cache: false });
-  drawPixelMap("TRPG", { cache: false, force: true });
   bindControls();
+  initDraggablePanels();
   hidePlayerHiddenAdminPanels();
   applyCollapseState();
+  resetCampaignScopedUiState("");
   loadCanvasRules();
   refresh();
   state.polling = setInterval(refresh, 2500);
@@ -140,6 +146,17 @@ function bindControls() {
     button.addEventListener("click", () => {
       state.sideTab = button.dataset.sideTab;
       document.querySelectorAll("[data-side-tab]").forEach((x) => x.classList.toggle("active", x === button));
+      if (state.sideTab === "items") {
+        const inventoryModule = state.frontendState?.modules?.inventory || {};
+        if (inventoryModule.payload_ref) {
+          loadModulePayload(inventoryModule.payload_ref, "inventory").then((data) => {
+            if (data?.payload && data.campaign_id === state.activeCampaign) {
+              state.latestInventoryPayload = data.payload;
+              renderSidePanel(state.lastCampaignState);
+            }
+          }).catch((err) => console.warn("inventory module unavailable", err));
+        }
+      }
       renderSidePanel(state.lastCampaignState);
     });
   });
@@ -150,9 +167,14 @@ function bindControls() {
     state.autoScroll = !state.autoScroll;
     $("autoScrollBtn").classList.toggle("active", state.autoScroll);
   });
+  $("storyProgressTopBtn")?.addEventListener("click", toggleStoryProgressMenu);
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest?.("#storyProgressTop")) closeStoryProgressMenu();
+  });
   document.querySelectorAll("#galleryFilters button").forEach((button) => {
     button.addEventListener("click", () => setGalleryFilter(button.dataset.filter));
   });
+  bindActionInputDrop();
 }
 
 function toggleCollapsePanel(name) {
@@ -184,6 +206,165 @@ function collapsePanelLabel(name) {
   }[name] || "窗口";
 }
 
+function initDraggablePanels() {
+  state.dragPanels = loadDragPanelState();
+  [
+    { id: "story", selector: ".logPanel", handle: ".logHeader h2", label: "正文卡" },
+    { id: "task", selector: ".taskPanel", handle: ".panelTitle", label: "任务物品卡" },
+    { id: "memory", selector: ".memoryPanel", handle: ".panelTitle", label: "近期记忆卡" },
+    { id: "gallery", selector: ".galleryPanel", handle: ".panelTitle", label: "资产夹资料卡" },
+  ].forEach((config) => setupDraggablePanel(config));
+  window.addEventListener("resize", clampFloatingPanels);
+}
+
+function setupDraggablePanel({ id, selector, handle, label }) {
+  const panel = document.querySelector(selector);
+  const dragHandle = panel?.querySelector(handle);
+  if (!panel || !dragHandle) return;
+  panel.dataset.dragPanel = id;
+  panel.classList.add("draggablePanel");
+  dragHandle.classList.add("dragHandle");
+  dragHandle.title = `${label}：拖动标题可移动，双击恢复位置`;
+  dragHandle.addEventListener("pointerdown", (event) => beginPanelDrag(event, id, panel));
+  dragHandle.addEventListener("dblclick", () => resetDragPanel(id, panel));
+  applyDragPanelState(id, panel);
+}
+
+function beginPanelDrag(event, id, panel) {
+  if (event.button !== 0) return;
+  if (event.target.closest("button, input, textarea, select, a")) return;
+  if (window.matchMedia("(max-width: 900px)").matches) return;
+  const rect = panel.getBoundingClientRect();
+  const bounds = floatingPanelBounds();
+  const width = Math.min(Math.max(260, rect.width), bounds.width);
+  const height = Math.min(Math.max(160, rect.height), Math.max(180, bounds.height * 0.9));
+  state.activeDragPanel = {
+    id,
+    panel,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+    width,
+    height,
+  };
+  panel.classList.add("is-dragging");
+  panel.style.width = `${width}px`;
+  panel.style.height = `${height}px`;
+  panel.setPointerCapture?.(event.pointerId);
+  document.addEventListener("pointermove", movePanelDrag);
+  document.addEventListener("pointerup", endPanelDrag, { once: true });
+  event.preventDefault();
+}
+
+function movePanelDrag(event) {
+  const drag = state.activeDragPanel;
+  if (!drag) return;
+  const bounds = floatingPanelBounds();
+  const maxLeft = Math.max(bounds.left, bounds.right - drag.width);
+  const maxTop = Math.max(bounds.top, bounds.bottom - drag.height);
+  const left = Math.max(bounds.left, Math.min(maxLeft, event.clientX - drag.offsetX));
+  const top = Math.max(bounds.top, Math.min(maxTop, event.clientY - drag.offsetY));
+  drag.panel.classList.add("floatingPanel");
+  drag.panel.style.left = `${left}px`;
+  drag.panel.style.top = `${top}px`;
+  drag.panel.style.zIndex = String(nextFloatingZIndex());
+}
+
+function endPanelDrag() {
+  const drag = state.activeDragPanel;
+  if (!drag) return;
+  drag.panel.classList.remove("is-dragging");
+  const rect = drag.panel.getBoundingClientRect();
+  state.dragPanels[drag.id] = {
+    left: Math.round(rect.left),
+    top: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+  saveDragPanelState();
+  document.removeEventListener("pointermove", movePanelDrag);
+  state.activeDragPanel = null;
+}
+
+function applyDragPanelState(id, panel) {
+  const saved = state.dragPanels[id];
+  if (!saved || window.matchMedia("(max-width: 900px)").matches) return;
+  const bounds = floatingPanelBounds();
+  const width = Math.min(Math.max(260, Number(saved.width) || panel.offsetWidth), bounds.width);
+  const height = Math.min(Math.max(160, Number(saved.height) || panel.offsetHeight), bounds.height);
+  panel.classList.add("floatingPanel");
+  panel.style.left = `${Math.max(bounds.left, Math.min(bounds.right - width, Number(saved.left) || bounds.left))}px`;
+  panel.style.top = `${Math.max(bounds.top, Math.min(bounds.bottom - height, Number(saved.top) || bounds.top))}px`;
+  panel.style.width = `${width}px`;
+  panel.style.height = `${height}px`;
+  panel.style.zIndex = String(nextFloatingZIndex());
+}
+
+function resetDragPanel(id, panel) {
+  delete state.dragPanels[id];
+  panel.classList.remove("floatingPanel", "is-dragging");
+  ["left", "top", "width", "height", "zIndex"].forEach((prop) => {
+    panel.style[prop] = "";
+  });
+  saveDragPanelState();
+}
+
+function clampFloatingPanels() {
+  const bounds = floatingPanelBounds();
+  document.querySelectorAll(".floatingPanel").forEach((panel) => {
+    const rect = panel.getBoundingClientRect();
+    const width = Math.min(rect.width, bounds.width);
+    const height = Math.min(rect.height, bounds.height);
+    const left = Math.max(bounds.left, Math.min(bounds.right - width, rect.left));
+    const top = Math.max(bounds.top, Math.min(bounds.bottom - height, rect.top));
+    panel.style.width = `${width}px`;
+    panel.style.height = `${height}px`;
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+  });
+}
+
+function floatingPanelBounds() {
+  const shell = document.querySelector(".appShell")?.getBoundingClientRect();
+  if (shell && shell.width > 0 && shell.height > 0) {
+    return {
+      left: Math.round(shell.left),
+      top: Math.round(shell.top),
+      right: Math.round(shell.right),
+      bottom: Math.round(shell.bottom),
+      width: Math.round(shell.width),
+      height: Math.round(shell.height),
+    };
+  }
+  const margin = 8;
+  return {
+    left: margin,
+    top: margin,
+    right: window.innerWidth - margin,
+    bottom: window.innerHeight - margin,
+    width: window.innerWidth - margin * 2,
+    height: window.innerHeight - margin * 2,
+  };
+}
+
+function nextFloatingZIndex() {
+  const current = Number(document.documentElement.dataset.floatZ || 40) + 1;
+  document.documentElement.dataset.floatZ = String(current);
+  return current;
+}
+
+function loadDragPanelState() {
+  try {
+    localStorage.removeItem(LEGACY_DRAG_PANEL_STORAGE_KEY);
+    return JSON.parse(localStorage.getItem(DRAG_PANEL_STORAGE_KEY) || "{}") || {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function saveDragPanelState() {
+  localStorage.setItem(DRAG_PANEL_STORAGE_KEY, JSON.stringify(state.dragPanels || {}));
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: { "content-type": "application/json" },
@@ -191,6 +372,16 @@ async function api(path, options = {}) {
   });
   const data = await res.json();
   if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function loadModulePayload(ref, moduleName = "") {
+  if (!ref || ref.startsWith("asset://")) return null;
+  const key = `${state.activeCampaign}:${moduleName}:${ref}`;
+  if (state.modulePayloadCache[key]) return state.modulePayloadCache[key];
+  const data = await api(ref);
+  if (data.campaign_id && state.activeCampaign && data.campaign_id !== state.activeCampaign) return null;
+  state.modulePayloadCache[key] = data;
   return data;
 }
 
@@ -249,10 +440,19 @@ async function startJob(path, payload, options = {}) {
 async function refresh() {
   try {
     const data = await api("/api/frontend-state");
+    const previousCampaign = state.activeCampaign || "";
+    const nextCampaign = data.active_campaign || "";
     state.frontendState = data.frontend_state || {};
-    state.assetSeed = state.frontendState.asset_seed || state.frontendState.campaign?.asset_seed || state.activeCampaign || "";
+    state.activeCampaign = nextCampaign;
+    state.assetSeed = state.frontendState.asset_seed || state.frontendState.campaign?.asset_seed || nextCampaign || "";
+    if (previousCampaign !== nextCampaign) {
+      resetCampaignScopedUiState(nextCampaign);
+    }
     state.currentPressurePack = data.output?.pressure_pack || {};
-    state.cachedAssets = Array.isArray(data.assets) ? data.assets : [];
+    if (Array.isArray(data.assets)) {
+      state.cachedAssets = data.assets.filter(isAssetForCurrentCampaign);
+    }
+    if (previousCampaign !== nextCampaign) await loadCachedAssets();
     renderStatus(data);
     updateRunProgressFromPipeline(data.pipeline || {}, data.job || {}, data.output || {});
     renderFrontendState(state.frontendState, data.campaign_state || {});
@@ -279,8 +479,6 @@ function renderStatus(data) {
     if (hasChapter) setText("chapterName", chapterName);
   }
   setText("mapLabel", scene.location || "当前路线");
-  renderCachedAvatar(data.campaign_state || {});
-  renderModule("map_panel", state.frontendState?.modules?.map_panel || state.frontendState?.map_panel || {}, state.frontendState || {}, data.campaign_state || {});
 
   const job = data.job || {};
   const failed = job.returncode !== null && job.returncode !== 0;
@@ -312,11 +510,118 @@ async function loadCachedAssets() {
   }
   try {
     const data = await api(`/api/assets?campaign_id=${encodeURIComponent(state.activeCampaign)}`);
-    state.cachedAssets = Array.isArray(data.assets) ? data.assets : [];
+    state.cachedAssets = (Array.isArray(data.assets) ? data.assets : []).filter(isAssetForCurrentCampaign);
   } catch (err) {
     console.warn("asset list unavailable", err);
     state.cachedAssets = [];
   }
+}
+
+function resetCampaignScopedUiState(campaignId) {
+  state.renderedMapKey = "";
+  state.assetCache = {};
+  state.cachedAssets = [];
+  state.galleryAssets = [];
+  state.selectedGalleryKey = "";
+  state.transientGalleryAsset = null;
+  state.currentMapAsset = null;
+  state.currentPressurePack = {};
+  state.modulePayloadCache = {};
+  clearImageElement("avatarImage");
+  clearImageElement("companionImage");
+  clearImageElement("mapImage");
+  clearImageElement("galleryInspectorImage");
+  clearImageElement("companionDialogImage");
+  showAvatarPlaceholder("avatarImage");
+  showAvatarPlaceholder("companionImage");
+  clearMapPlaceholder();
+  clearGalleryDomIfNeeded();
+  resetStoryProgressDropdown();
+  document.querySelector(".characterPanel")?.classList.remove("has-companion");
+  document.querySelector(".characterPanel")?.classList.add("no-companion");
+  document.querySelector(".companionCard")?.setAttribute("hidden", "");
+}
+
+function clearImageElement(id) {
+  const img = $(id);
+  if (!img) return;
+  img.removeAttribute("src");
+  img.dataset.assetKey = "";
+  img.dataset.campaignId = "";
+  img.classList.add("is-empty");
+}
+
+function clearGalleryDomIfNeeded() {
+  const grid = $("galleryGrid");
+  if (grid) grid.innerHTML = "";
+  renderGalleryInspector(null);
+}
+
+function resetStoryProgressDropdown() {
+  setText("storyProgressTopTitle", "未启用结构化进度");
+  setText("storyProgressTopPace", "normal");
+  setText("storyProgressMenuTitle", "未启用结构化进度");
+  setText("storyProgressOverallText", "0%");
+  setText("storyProgressChapterName", "-");
+  setText("storyProgressChapterPercent", "0%");
+  setText("storyProgressNodeName", "-");
+  setText("storyProgressNodePercent", "0%");
+  setText("storyProgressPace", "normal");
+  setText("storyProgressPaceBadge", "稳定");
+  setText("storyProgressStatusText", "未启用结构化故事进度");
+  setText("storyPace", "normal");
+  setText("storyOverallProgress", "0%");
+  setText("storyChapterName", "-");
+  setText("storyChapterProgress", "0%");
+  setText("storyNodeName", "-");
+  setText("storyNodeProgress", "0%");
+  setText("storyProgressStatus", "未启用结构化故事进度");
+  const bar = $("storyProgressOverallBar");
+  if (bar) bar.style.width = "0%";
+  const legacyBar = $("storyOverallBar");
+  if (legacyBar) legacyBar.style.width = "0%";
+  closeStoryProgressMenu();
+}
+
+function toggleStoryProgressMenu(event) {
+  event?.stopPropagation?.();
+  const menu = $("storyProgressMenu");
+  const button = $("storyProgressTopBtn");
+  if (!menu) return;
+  const open = menu.classList.toggle("hidden") === false;
+  if (button) button.setAttribute("aria-expanded", String(open));
+}
+
+function closeStoryProgressMenu() {
+  const menu = $("storyProgressMenu");
+  const button = $("storyProgressTopBtn");
+  if (menu) menu.classList.add("hidden");
+  if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function isAssetForCurrentCampaign(asset) {
+  if (!asset) return false;
+  const cid = asset.campaign_id || asset.campaignId || "";
+  const seed = asset.asset_seed || asset.assetSeed || "";
+  if (!cid || cid !== state.activeCampaign) return false;
+  if (seed && state.assetSeed && seed !== state.assetSeed) return false;
+  if (asset.placeholder || asset.is_placeholder || asset.metadata?.placeholder) return false;
+  return true;
+}
+
+function findCurrentCampaignAsset(predicate) {
+  return (state.cachedAssets || []).find((asset) => isAssetForCurrentCampaign(asset) && predicate(asset));
+}
+
+function makeScopedAssetKey(kind, objectId, variant = "default") {
+  const campaignId = state.activeCampaign || "unknown_campaign";
+  const seed = state.assetSeed || campaignId;
+  const object = slugify(objectId || "unknown");
+  return `${campaignId}:${seed}:${kind}:${object}:${variant}:v${ASSET_GENERATOR_VERSION}`;
+}
+
+function isValidMapRoute(route) {
+  return Boolean(route && typeof route === "object" && Array.isArray(route.nodes) && route.nodes.length > 0);
 }
 
 function renderCachedMap(scene, mapPanel = {}) {
@@ -328,31 +633,35 @@ function renderCachedMap(scene, mapPanel = {}) {
   const mapCanvas = modulePayload.map_canvas || {};
   const routeKey = mapCanvas.title || route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
   setText("mapLabel", route.title || modulePayload.title || scene.location || "当前路线");
-  if (!updateRequested || mode === "keep_previous" || mode === "none") {
-    state.currentMapAsset = {
-      kind: "scene",
-      key: modulePayload.asset_key || "",
-      title: modulePayload.title || scene.location || "当前区域地图",
-      meta: "当前地图",
-      detail: routeKey || scene.immediate_pressure || "当前展示的区域地图。",
-      seed: scopedSeed(seed),
-      scene: { ...scene, map_route: route, map_canvas: mapCanvas },
-      cachedUrl: modulePayload.url || "",
-      status: "cached",
-    };
-    if (modulePayload.url) setAssetImage($("mapImage"), modulePayload.url);
+  if (mode === "no_update" || mode === "none") return;
+  if (!updateRequested || mode === "keep_previous") {
+    const cached = findCurrentCampaignAsset((asset) => {
+      const kind = String(asset.kind || "");
+      return asset.exists && asset.url && (kind === "map" || kind === "map_image" || kind.startsWith("gallery_map"));
+    });
+    const url = modulePayload.url && isUrlForCurrentCampaign(modulePayload.url, modulePayload.asset_key)
+      ? modulePayload.url
+      : cached?.url || "";
+    if (!url) {
+      state.currentMapAsset = null;
+      showMapEmptyState();
+      return;
+    }
+    state.currentMapAsset = galleryMapAssetFromEntry(cached, modulePayload, scene, route, mapCanvas);
+    showMapImage(url, modulePayload.asset_key || cached?.key || "");
     return;
   }
-  if (!Array.isArray(route.nodes) || !route.nodes.length) {
+  if (!isValidMapRoute(route)) {
     console.warn("skip map redraw: empty route payload", mapPanel);
+    showMapEmptyState();
     return;
   }
   const objectId = slugify(`${scene.location || "current_map"}:${routeKey || "base"}`);
-  const mapKey = `${state.activeCampaign}:${objectId}:v${ASSET_GENERATOR_VERSION}`;
+  const mapKey = makeScopedAssetKey("map", objectId, "route");
   const mapScene = { ...scene, map_route: route, map_canvas: mapCanvas };
   state.currentMapAsset = {
     kind: "scene",
-    key: `current_map:${mapKey}`,
+    key: mapKey,
     title: route.title || scene.location || "当前区域地图",
     meta: "当前地图",
     detail: routeKey || scene.immediate_pressure || "当前展示的区域地图。",
@@ -388,10 +697,22 @@ function renderCachedMap(scene, mapPanel = {}) {
   });
 }
 
-function renderCachedAvatar(campaignState = {}) {
-  const characterName = extractPlayerName(campaignState.player || {}, campaignState.character_prompt || {}) || "player";
-  const playerFeedback = formalPortraitFeedbackAsset(characterName, characterName, "player");
-  if (playerFeedback?.url && $("avatarImage")) setAssetImage($("avatarImage"), playerFeedback.url);
+function galleryMapAssetFromEntry(entry, modulePayload = {}, scene = {}, route = {}, mapCanvas = {}) {
+  const metadata = entry?.metadata || {};
+  const url = modulePayload.url || entry?.url || "";
+  return {
+    kind: "scene",
+    key: modulePayload.asset_key || entry?.key || "",
+    title: modulePayload.title || metadata.title || scene.location || "当前区域地图",
+    meta: metadata.meta || "当前地图",
+    detail: metadata.detail || scene.immediate_pressure || "当前展示的区域地图。",
+    seed: scopedSeed(scene.location || state.activeCampaign || "map"),
+    scene: { ...scene, map_route: route, map_canvas: mapCanvas },
+    cachedUrl: url,
+    status: "cached",
+    campaign_id: state.activeCampaign,
+    asset_seed: state.assetSeed,
+  };
 }
 
 function renderCampaignState(campaignState) {
@@ -460,16 +781,51 @@ function renderFrontendState(frontendState, campaignState) {
   state.lastCampaignState = campaignState;
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
+  renderStoryProgressDropdown(fs);
   ["story_progress", "map_panel", "gallery", "inventory", "dossier", "character_card", "canvas_jobs"].forEach((name) => {
     renderModule(name, modules[name], fs, campaignState);
   });
   renderSidePanel(campaignState, fs);
   renderMemoryPanel(campaignState);
+  renderGalleryFilters(fs.gallery?.filters || []);
   if (!modules.gallery || modules.gallery.mode !== "no_update") {
-    renderGalleryFilters(fs.gallery?.filters || []);
     renderGallery(campaignState, fs.gallery || {}, modules.gallery);
   }
+  hydrateLazyFrontendModules(modules, fs, campaignState);
   renderQuickActions(fs.quick_actions || []);
+}
+
+function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignState = {}) {
+  Object.entries(modules || {}).forEach(([name, moduleState]) => {
+    if (!moduleState?.payload_ref) return;
+    const shouldLoad = moduleState.update_requested === true
+      || (name === "story_log" && ["story", "summary", "logs"].includes(state.activePanel))
+      || (name === "gallery" && (!(state.galleryAssets || []).length || !document.getElementById("galleryOverlay")?.classList.contains("hidden")));
+    if (!shouldLoad) return;
+    loadModulePayload(moduleState.payload_ref, name)
+      .then((data) => {
+        if (!data?.payload || (data.campaign_id && data.campaign_id !== state.activeCampaign)) return;
+        if (name === "story_log") {
+          renderOutput({
+            campaign_id: data.campaign_id,
+            source: data.payload.source || "module:story-log",
+            parsed: data.payload,
+            pressure_pack: state.currentPressurePack || {},
+          });
+        } else if (name === "gallery") {
+          renderGalleryFilters(data.payload.filters || frontendState.gallery?.filters || []);
+          renderGallery(campaignState, data.payload || {}, { ...moduleState, payload: data.payload });
+        } else if (name === "map_panel") {
+          updateMapModule(data.payload || {}, campaignState);
+        } else if (name === "inventory") {
+          state.latestInventoryPayload = data.payload || [];
+          renderSidePanel(campaignState, frontendState);
+        } else if (name === "dossier") {
+          state.latestDossierPayload = data.payload || [];
+        }
+      })
+      .catch((err) => console.warn(`module payload unavailable: ${name}`, err));
+  });
 }
 
 function renderModule(name, moduleState = {}, frontendState = {}, campaignState = {}) {
@@ -489,15 +845,30 @@ function renderModule(name, moduleState = {}, frontendState = {}, campaignState 
 function keepPreviousModule(name, moduleState = {}) {
   if (name !== "map_panel") return;
   const ref = moduleState.payload_ref || moduleState.payload?.url || "";
-  if (ref && !ref.startsWith("asset://") && $("mapImage")) setAssetImage($("mapImage"), ref);
+  if (ref && !ref.startsWith("asset://") && isUrlForCurrentCampaign(ref, moduleState.payload?.asset_key)) {
+    showMapImage(ref, moduleState.payload?.asset_key || "");
+    return;
+  }
+  const cached = findCurrentCampaignAsset((asset) => {
+    const kind = String(asset.kind || "");
+    return asset.exists && asset.url && (kind === "map" || kind === "map_image" || kind.startsWith("gallery_map"));
+  });
+  if (cached?.url) {
+    state.currentMapAsset = galleryMapAssetFromEntry(cached);
+    showMapImage(cached.url, cached.key);
+  } else {
+    showMapEmptyState();
+  }
 }
 
 function updateMapModule(moduleState = {}, campaignState = {}) {
+  if (moduleState.mode === "keep_previous") return keepPreviousModule("map_panel", moduleState);
   if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
   renderCachedMap(campaignState?.recent?.current_scene || {}, moduleState);
 }
 
 function updateGalleryModule(moduleState = {}, campaignState = {}) {
+  if (moduleState.payload_ref && moduleState.update_requested === true) return;
   if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
   renderGallery(campaignState, { module_payload: moduleState.payload || {} }, moduleState);
 }
@@ -530,7 +901,7 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
       const mapModule = frontendState.modules?.map_panel || {};
       const payload = mapModule.payload || {};
       const route = payload.map_route || {};
-      if (!Array.isArray(route.nodes) || !route.nodes.length) {
+      if (!isValidMapRoute(route)) {
         console.warn("skip map canvas job without route nodes", job);
         return;
       }
@@ -540,11 +911,12 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
     if (job.kind === "portrait") {
       const card = frontendState.modules?.character_card?.payload || frontendState.character_card || {};
       const seed = card.name || job.asset_key || state.activeCampaign || "portrait";
-      drawPixelAvatar(seed, {
+      drawPixelActorPortrait(seed, {
         cache: true,
-        objectId: slugify(job.asset_key),
+        objectId: slugify(job.asset_key || card.name || "portrait"),
         seedText: scopedSeed(`${state.activeCampaign}:${job.asset_key}`),
-        variant: "npc",
+        role: "player",
+        kind: "player_portrait",
       });
       return;
     }
@@ -594,6 +966,35 @@ function renderStoryProgressModule(moduleState = {}) {
   if (bar) bar.style.width = `${overall}%`;
 }
 
+function renderStoryProgressDropdown(frontendState = {}) {
+  const modules = frontendState.modules || {};
+  const payload = modules.story_progress?.payload || frontendState.story_progress || {};
+  if (!payload || payload.enabled === false || Object.keys(payload).length === 0) {
+    resetStoryProgressDropdown();
+    return;
+  }
+  const overall = clampPercent(payload.overall_progress);
+  const chapter = payload.current_chapter || {};
+  const node = payload.current_node || {};
+  const chapterName = chapter.name || chapter.title || "-";
+  const nodeName = node.name || node.title || "-";
+  const pace = payload.pace_command || "normal";
+  const status = payload.status_text || payload.progress_label || "故事进度正常。";
+  setText("storyProgressTopTitle", chapterName !== "-" ? chapterName : "结构化进度");
+  setText("storyProgressTopPace", pace);
+  setText("storyProgressMenuTitle", chapterName !== "-" ? chapterName : "结构化进度");
+  setText("storyProgressOverallText", `${overall}%`);
+  setText("storyProgressChapterName", chapterName);
+  setText("storyProgressChapterPercent", `${clampPercent(payload.chapter_progress ?? chapter.progress)}%`);
+  setText("storyProgressNodeName", nodeName);
+  setText("storyProgressNodePercent", `${clampPercent(payload.node_progress ?? node.progress)}%`);
+  setText("storyProgressPace", pace);
+  setText("storyProgressPaceBadge", pace === "accelerate" ? "加速" : pace === "slow" ? "放缓" : "稳定");
+  setText("storyProgressStatusText", status);
+  const bar = $("storyProgressOverallBar");
+  if (bar) bar.style.width = `${overall}%`;
+}
+
 function clampPercent(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return 0;
@@ -610,6 +1011,7 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
     mode: "narrative_status",
     name: card.name,
     meta: card.identity || "身份待确认",
+    portrait: card.portrait || {},
     progression: {
       label: card.progress?.label || "进展",
       value: card.progress?.text || "",
@@ -642,6 +1044,7 @@ function protocolCompanionCard(companion = {}, campaignState = {}) {
       meta: companion.identity || companion.archetype || "伙伴",
       seed: raw.visual_seed || companion.visual_seed || companion.portrait?.asset_key || companion.name,
       archetype: companion.archetype || "companion",
+      portrait: companion.portrait || {},
       raw,
     };
   }
@@ -688,85 +1091,16 @@ function applyQuickAction(action) {
 }
 
 function characterFallback(campaignState, name, scene = {}) {
-  const text = normalizeActorName(`${state.activeCampaign} ${campaignState.title || ""} ${campaignState.genre || ""} ${campaignState.tone || ""} ${name}`);
-  const pressured = Boolean(scene?.immediate_pressure);
-  if (text.includes("coc") || text.includes("克苏鲁") || text.includes("调查")) {
-    return {
-      kind: "coc",
-      meta: "COC 调查员",
-      progression: { label: "调查进展", value: pressured ? "线索初开，风险升高" : "案件导入，保持观察", percent: pressured ? 38 : 24 },
-      vitals: [
-        { key: "health", label: "生命值", state: "未受伤", percent: 84, tone: "red" },
-        { key: "sanity", label: "理智值", state: pressured ? "轻微动摇" : "稳定", percent: pressured ? 68 : 78, tone: "blue" },
-        { key: "stamina", label: "体力值", state: "潮湿疲惫", percent: 70, tone: "green" },
-      ],
-      attributes: [
-        { label: "侦", text: "观察" },
-        { label: "图", text: "资料" },
-        { label: "说", text: "话术" },
-        { label: "潜", text: "隐蔽" },
-        { label: "医", text: "急救" },
-        { label: "稳", text: "理智" },
-      ],
-    };
-  }
-  if (text.includes("dnd") || text.includes("奇幻") || text.includes("冒险者")) {
-    return {
-      kind: "dnd",
-      meta: "DND 队伍代表",
-      progression: { label: "冒险进展", value: pressured ? "任务展开，局势紧张" : "第一章，接受委托", percent: pressured ? 34 : 22 },
-      vitals: [
-        { key: "health", label: "生命值", state: "可战斗", percent: 86, tone: "red" },
-        { key: "focus", label: "专注值", state: "警戒", percent: 74, tone: "blue" },
-        { key: "stamina", label: "体力值", state: "整备中", percent: 80, tone: "green" },
-      ],
-      attributes: [
-        { label: "力", text: "近战" },
-        { label: "敏", text: "闪避" },
-        { label: "体", text: "耐久" },
-        { label: "智", text: "知识" },
-        { label: "感", text: "察觉" },
-        { label: "魅", text: "交涉" },
-      ],
-    };
-  }
-  if (text.includes("fate") || text.includes("圣杯") || text.includes("御主") || text.includes("从者")) {
-    return {
-      kind: "fate",
-      meta: "普通高中生 / 新任御主",
-      progression: { label: "同步状态", value: pressured ? "令咒完整，黑痕扩散" : "契约未稳，异常同步", percent: pressured ? 45 : 32 },
-      vitals: [
-        { key: "health", label: "生命值", state: pressured ? "惊惧疲惫" : "可行动", percent: 72, tone: "red" },
-        { key: "focus", label: "专注值", state: "受干扰", percent: 54, tone: "blue" },
-        { key: "stamina", label: "体力值", state: "奔逃后消耗", percent: 58, tone: "green" },
-      ],
-      attributes: [
-        { label: "令", text: "令咒" },
-        { label: "脉", text: "灵脉" },
-        { label: "逃", text: "撤退" },
-        { label: "察", text: "观察" },
-        { label: "匣", text: "井匣" },
-        { label: "契", text: "从者" },
-      ],
-    };
-  }
   return {
-    kind: "monster_hunter",
-    meta: name === "Lee" ? "新晋猎人 / 斩斧 / 正式猎人" : "猎人 / 生态调查",
-    progression: { label: "成长", value: "新人阶段，稳步成长", percent: 42 },
+    kind: "generic",
+    meta: "角色 / 状态待确认",
+    progression: { label: "进展", value: "记录中", percent: 0 },
     vitals: [
-      { key: "health", label: "生命值", state: "状态良好", percent: 82, tone: "red" },
-      { key: "focus", label: "专注值", state: "稳定", percent: 78, tone: "blue" },
-      { key: "stamina", label: "体力值", state: "有消耗", percent: 72, tone: "green" },
+      { key: "condition", label: "状态", state: "稳定", percent: 60, tone: "green" },
+      { key: "focus", label: "专注", state: "待记录", percent: 50, tone: "blue" },
+      { key: "resource", label: "资源", state: "待记录", percent: 50, tone: "amber" },
     ],
-    attributes: [
-      { label: "斧", text: "牵制" },
-      { label: "剑", text: "爆发" },
-      { label: "迹", text: "追踪" },
-      { label: "营", text: "补给" },
-      { label: "捕", text: "陷阱" },
-      { label: "退", text: "保命" },
-    ],
+    attributes: [],
   };
 }
 
@@ -774,7 +1108,7 @@ function normalizeCompanion(companion) {
   if (!companion || typeof companion !== "object") return null;
   const name = String(companion.name || "").trim();
   if (!name) return null;
-  const archetype = companion.archetype || companion.species || companion.kind || companion.type || inferCompanionArchetype(name, companion.meta || companion.personality || "");
+  const archetype = "companion";
   const rawMeta = companion.personality || companion.meta || defaultCompanionMeta(archetype);
   return {
     name,
@@ -786,23 +1120,15 @@ function normalizeCompanion(companion) {
 }
 
 function defaultCompanionMeta(archetype) {
-  if (normalizeActorName(archetype).includes("palico")) return "老练但嘴硬";
-  if (normalizeActorName(archetype).includes("servant")) return "从者 / 契约伙伴";
   return "同行伙伴";
 }
 
 function companionDisplayMeta(meta, archetype) {
-  const type = normalizeActorName(archetype);
   const text = String(meta || "").trim();
-  if (type.includes("palico") && !/艾露猫|艾鲁猫|palico/i.test(text)) return `艾露猫 / ${text || "同行伙伴"}`;
-  if (type.includes("servant") && !/从者|英灵|servant/i.test(text)) return `从者 / ${text || "契约伙伴"}`;
   return text || "同行伙伴";
 }
 
 function inferCompanionArchetype(name, meta = "") {
-  const text = normalizeActorName(`${state.activeCampaign} ${name} ${meta}`);
-  if (text.includes("fate") || text.includes("servant") || text.includes("从者") || text.includes("英灵")) return "servant";
-  if (text.includes("monsterhunter") || text.includes("怪猎") || text.includes("艾露") || text.includes("艾鲁") || text.includes("palico") || text.includes("浩文")) return "palico";
   return "companion";
 }
 
@@ -863,21 +1189,10 @@ function normalizeConditions(conditions, campaignState, scene) {
   const labels = rows.map((item) => typeof item === "string" ? item : item.label || item.name).filter(Boolean);
   if (labels.length) return labels.slice(0, 6);
   const mechanics = campaignState.mechanics || {};
-  const kind = characterFallback(campaignState, extractPlayerName(campaignState.player || {}, campaignState.character_prompt || {}), scene).kind;
-  if (kind === "coc") {
-    return ["谨慎", mechanics.use_dice ? "COC检定" : "叙事调查", "潮湿", scene?.immediate_pressure ? "线索压力" : "案件导入"];
-  }
-  if (kind === "dnd") {
-    return ["警戒", mechanics.use_dice ? "D20检定" : "叙事冒险", "整备", scene?.immediate_pressure ? "任务压力" : "酒馆待命"];
-  }
-  if (kind === "fate") {
-    return ["怕死", "令咒完整", "异常同步", scene?.immediate_pressure ? "黑痕压力" : "契约未稳"];
-  }
   return [
-    "谨慎",
-    mechanics.use_dice ? "严格数值" : "叙事判定",
-    "斩斧",
-    scene?.immediate_pressure ? "任务压力" : "整备中",
+    "稳定",
+    mechanics.use_dice ? "数值待同步" : "叙事记录",
+    scene?.immediate_pressure ? "现场压力" : "待记录",
   ];
 }
 
@@ -897,12 +1212,12 @@ function normalizeAttributes(attributes, mode, fallback = {}) {
     }).slice(0, 6);
   }
   return fallback.attributes || [
-    { label: "斧", text: "牵制" },
-    { label: "剑", text: "爆发" },
-    { label: "迹", text: "追踪" },
-    { label: "营", text: "补给" },
-    { label: "捕", text: "陷阱" },
-    { label: "退", text: "保命" },
+    { label: "一", text: "属性" },
+    { label: "二", text: "属性" },
+    { label: "三", text: "属性" },
+    { label: "四", text: "属性" },
+    { label: "五", text: "属性" },
+    { label: "六", text: "属性" },
   ];
 }
 
@@ -917,25 +1232,44 @@ function renderCharacterCard(card) {
   renderVitals(card.vitals);
   renderConditionBadges(card.conditions);
   renderAttributes(card.attributes, card.name);
-  const avatar = $("avatarImage");
-  const feedback = formalPortraitFeedbackAsset(card.name, card.name, "player");
-  if (avatar && feedback?.url) {
-    setAssetImage(avatar, feedback.url);
-  }
+  renderCharacterPortrait(card);
 }
 
 function renderCompanionCard(companion) {
   const card = document.querySelector(".companionCard");
-  if (card) card.hidden = !companion;
-  if (!companion) return;
-  setText("palicoName", companion.name);
-  setText("palicoMeta", companion.meta);
-  drawCompanionAvatar(companion.seed || companion.name, {
+  const panel = document.querySelector(".characterPanel");
+  if (!companion) {
+    if (card) card.hidden = true;
+    panel?.classList.add("no-companion");
+    panel?.classList.remove("has-companion");
+    clearImageElement("companionImage");
+    return;
+  }
+  if (card) card.hidden = false;
+  panel?.classList.add("has-companion");
+  panel?.classList.remove("no-companion");
+  setText("companionName", companion.name);
+  setText("companionMeta", companion.meta);
+  const resolved = resolveVisualAsset({ ...companion, type: "companion", role: "companion", portrait: companion.portrait || {} });
+  if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
+    showAvatarImage("companionImage", resolved.url, resolved.asset_key || "");
+    return;
+  }
+  drawPixelCompanionPortrait(resolved.fallback_seed || companion.seed || companion.name, {
     cache: true,
-    objectId: slugify(companion.name || "companion"),
-    seedText: scopedSeed(companion.seed || companion.name || "companion"),
-    archetype: companion.archetype,
+    objectId: slugify(resolved.entity_key || companion.name || "companion"),
+    seedText: scopedSeed(resolved.fallback_seed || companion.seed || companion.name || "companion"),
+    archetype: "companion",
     kind: "companion_portrait",
+    metadata: {
+      title: resolved.display_name || companion.name,
+      display_name: resolved.display_name || companion.name,
+      role: "companion",
+      entity_key: makeEntityKey("companion", companion.name),
+      visible_in_gallery: true,
+      visual_spec: "secondary_full_body_story_context",
+      background_context: currentStoryVisualContext(),
+    },
   });
 }
 
@@ -1126,6 +1460,7 @@ function renderSidePanel(campaignState, frontendState = state.frontendState || {
     const span = document.createElement("span");
     span.textContent = row.tag || (index === rows.length - 1 ? "当前" : "记录");
     li.append(b, span);
+    makeTextDraggable(li, `${row.title || row}${row.detail ? `：${row.detail}` : ""}`, row.tag || state.sideTab);
     list.appendChild(li);
   });
 }
@@ -1162,6 +1497,7 @@ function renderMemoryPanel(campaignState) {
     const span = document.createElement("span");
     span.textContent = `${index + 1}条`;
     li.appendChild(span);
+    makeTextDraggable(li, String(row || ""), "memory");
     list.appendChild(li);
   });
 }
@@ -1298,7 +1634,7 @@ async function loadWritebackReview(options = {}) {
 function appendStoryTurnHistory(blocks, fallbackText, output = {}) {
   const campaignId = state.activeCampaign || output.campaign_id || "default";
   const rows = visibleStoryBlocks(blocks);
-  const turnBlocks = rows.length ? rows : legacyTextBlocks(fallbackText);
+  const turnBlocks = rows.length ? rows : fallbackPlayerInstructionBlocks(fallbackText);
   if (!turnBlocks.length) return [];
   const signature = storyTurnSignature(turnBlocks, output);
   const turns = state.storyTurnsByCampaign[campaignId] || [];
@@ -1312,6 +1648,25 @@ function appendStoryTurnHistory(blocks, fallbackText, output = {}) {
     state.storyTurnSignatures[campaignId] = signatures;
   }
   return (state.storyTurnsByCampaign[campaignId] || []).flatMap((turn) => turn.blocks);
+}
+
+function fallbackPlayerInstructionBlocks(fallbackText = "") {
+  const text = String(fallbackText || "").trim();
+  if (text && !isEmptyStoryPlaceholder(text)) return legacyTextBlocks(text);
+  const action = String(state.frontendState?.last_player_action || $("actionInput")?.value || "").trim() || "继续。";
+  const name = state.frontendState?.character_card?.name || $("characterName")?.textContent || "玩家";
+  return [{
+    type: "player_action",
+    speaker: name,
+    actor_id: makeEntityKey("player", name),
+    body: action,
+    time: "现在",
+  }];
+}
+
+function isEmptyStoryPlaceholder(text = "") {
+  const normalized = String(text || "").replace(/\s+/g, "");
+  return !normalized || ["暂无正文。", "暂无正文", "当前跑团暂无正文记录。", "当前跑团暂无正文记录"].includes(normalized);
 }
 
 function clearStoryTurnHistory(campaignId = state.activeCampaign || "default") {
@@ -1332,6 +1687,227 @@ function storyTurnSignature(blocks, output = {}) {
     campaign_id: output.campaign_id || state.activeCampaign || "",
     blocks: simplified,
   });
+}
+
+function renderCharacterPortrait(card) {
+  const resolved = resolveVisualAsset({ ...card, type: "player", role: "player", portrait: card?.portrait || {} });
+  if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
+    showAvatarImage("avatarImage", resolved.url, resolved.asset_key || "");
+    return;
+  }
+  drawPixelActorPortrait(resolved.fallback_seed || card?.name || "player", {
+    cache: true,
+    role: "player",
+    kind: "player_portrait",
+    objectId: slugify(resolved.entity_key || card?.name || "player"),
+    seedText: scopedSeed(resolved.fallback_seed || card?.name || "player"),
+    targetImage: $("avatarImage"),
+    metadata: {
+      title: resolved.display_name || card?.name || "player",
+      display_name: resolved.display_name || card?.name || "player",
+      role: "player",
+      entity_key: resolved.entity_key,
+      visible_in_gallery: false,
+      visual_spec: "primary_full_body_story_context",
+      background_context: currentStoryVisualContext(),
+    },
+  });
+}
+
+function currentStoryVisualContext() {
+  const scene = state.lastCampaignState?.recent?.current_scene || {};
+  const pressure = state.currentPressurePack || {};
+  return [
+    scene.location,
+    scene.immediate_pressure,
+    scene.mood,
+    pressure.human_readable_note,
+  ].filter(Boolean).join(" / ").slice(0, 180);
+}
+
+function findPortraitUrl(assetKey = "", kinds = ["portrait", "player_portrait"]) {
+  const key = String(assetKey || "");
+  const allowed = new Set(kinds);
+  const byKey = key ? findCurrentCampaignAsset((asset) => asset.exists && asset.url && asset.key === key && allowed.has(String(asset.kind || ""))) : null;
+  if (byKey?.url) return byKey.url;
+  const byKind = findCurrentCampaignAsset((asset) => asset.exists && asset.url && allowed.has(String(asset.kind || "")));
+  return byKind?.url || "";
+}
+
+function showAvatarPlaceholder(id) {
+  const img = $(id);
+  if (!img) return;
+  img.removeAttribute("src");
+  img.classList.add("is-empty");
+  img.dataset.assetKey = "";
+  img.dataset.campaignId = state.activeCampaign || "";
+}
+
+function showAvatarImage(id, url, assetKey = "") {
+  const img = $(id);
+  if (!img || !url) return showAvatarPlaceholder(id);
+  img.onload = () => img.classList.remove("is-empty");
+  img.onerror = () => showAvatarPlaceholder(id);
+  img.dataset.assetKey = assetKey;
+  img.dataset.campaignId = state.activeCampaign || "";
+  setAssetImage(img, url);
+}
+
+function resolveVisualAsset(entityLike = {}, frontendState = state.frontendState || {}, cachedAssets = state.cachedAssets || []) {
+  const registry = frontendState.visual_registry || {};
+  const rawName = entityLike.display_name || entityLike.name || entityLike.title || entityLike.speaker || entityLike.actor_id || entityLike.key || "";
+  const requestedRole = normalizeVisualRole(entityLike.role || entityLike.actor_kind || entityLike.kind || entityLike.type || inferRoleFromEntity(entityLike));
+  const portraitKey = entityLike.portrait?.asset_key || entityLike.asset_key || entityLike.avatar_key || "";
+  const registryMatch = findVisualRegistryEntity(entityLike, registry);
+  const role = normalizeVisualRole(registryMatch?.role || roleFromEntityKey(entityLike.entity_key || entityLike.entityKey || "") || requestedRole);
+  const entityKey = registryMatch?.entity_key || entityLike.entity_key || entityLike.entityKey || makeEntityKey(role, rawName);
+  const directUrl = entityLike.portrait?.url || entityLike.url || entityLike.cachedUrl || entityLike.cached_url || "";
+  const registered = registryMatch || (registry.actors || {})[entityKey] || (registry.objects || {})[entityKey] || (portraitKey ? registry.asset_key_index?.[portraitKey] && ((registry.actors || {})[registry.asset_key_index[portraitKey]] || (registry.objects || {})[registry.asset_key_index[portraitKey]]) : null);
+  const assetKind = registered?.asset_kind || assetKindForRole(role);
+  const byKey = portraitKey ? findCurrentCampaignAsset((asset) => asset.exists && asset.url && asset.key === portraitKey) : null;
+  const byEntity = findCurrentCampaignAsset((asset) => asset.exists && asset.url && (asset.entity_key === entityKey || asset.metadata?.entity_key === entityKey) && normalizeVisualRole(asset.role || asset.metadata?.role || role) === role);
+  const byKindName = findCurrentCampaignAsset((asset) => {
+    if (!asset.exists || !asset.url) return false;
+    if (String(asset.kind || "") !== assetKind) return false;
+    const metaName = normalizeActorName(asset.display_name || asset.metadata?.display_name || asset.metadata?.title || asset.metadata?.object_id || "");
+    return metaName && metaName === normalizeActorName(rawName);
+  });
+  const picked = byKey || byEntity || byKindName;
+  const url = isUrlForCurrentCampaign(directUrl, portraitKey) ? directUrl : registered?.url || picked?.url || "";
+  return {
+    entity_key: entityKey,
+    role,
+    asset_kind: assetKind,
+    asset_key: registered?.asset_key || picked?.key || portraitKey || "",
+    url: url && isUrlForCurrentCampaign(url, registered?.asset_key || picked?.key || portraitKey || "") ? url : "",
+    display_name: registered?.display_name || rawName || entityKey,
+    fallback_seed: registered?.fallback_seed || `${state.activeCampaign}:${entityKey}:${role}`,
+    renderer: role === "item" ? "item_icon" : "actor_portrait",
+    visible_in_gallery: registered?.visible_in_gallery ?? !["player"].includes(role),
+  };
+}
+
+function canonicalEntityKeyForBlock(block = {}) {
+  const registry = state.frontendState?.visual_registry || {};
+  const playerName = state.frontendState?.character_card?.name || $("characterName")?.textContent || "";
+  if (block.type === "player_action") return makeEntityKey("player", playerName || displaySpeaker(block) || block.actor_id || "player");
+  if (block.type !== "npc_dialogue") return "";
+  const match = findVisualRegistryEntity({
+    name: displaySpeaker(block) || block.speaker || block.actor_id || block.avatar_key,
+    speaker: block.speaker,
+    actor_id: block.actor_id,
+    avatar_key: block.avatar_key,
+    role: block.actor_kind || "",
+  }, registry);
+  if (match?.entity_key) return match.entity_key;
+  const candidate = bestEntityCandidateName(block.avatar_key, block.actor_id, block.speaker, displaySpeaker(block));
+  const prefixRole = roleFromEntityKey(block.avatar_key);
+  const role = isCompanionActorName(candidate) ? "companion" : normalizeVisualRole(prefixRole || block.actor_kind || "npc");
+  return makeEntityKey(role, candidate || displaySpeaker(block) || block.actor_id || "npc");
+}
+
+function findVisualRegistryEntity(entityLike = {}, registry = state.frontendState?.visual_registry || {}) {
+  const actorRows = Object.values(registry.actors || {});
+  const objectRows = Object.values(registry.objects || {});
+  const rows = [...actorRows, ...objectRows];
+  const explicitEntity = entityLike.entity_key || entityLike.entityKey || "";
+  if (explicitEntity) {
+    const direct = rows.find((row) => row?.entity_key === explicitEntity);
+    if (direct) return direct;
+  }
+  const assetKey = entityLike.portrait?.asset_key || entityLike.asset_key || entityLike.avatar_key || "";
+  const indexedEntity = assetKey ? registry.asset_key_index?.[assetKey] : "";
+  if (indexedEntity) {
+    const indexed = rows.find((row) => row?.entity_key === indexedEntity);
+    if (indexed) return indexed;
+  }
+  const candidates = [
+    entityLike.name,
+    entityLike.display_name,
+    entityLike.title,
+    entityLike.speaker,
+    entityLike.actor_id,
+    entityLike.avatar_key,
+    entityLike.key,
+  ].flatMap(entityNameCandidates).filter(Boolean);
+  const companion = visibleCompanion();
+  if (companion?.name && candidates.some((name) => normalizeActorName(name) === normalizeActorName(companion.name))) {
+    const key = makeEntityKey("companion", companion.name);
+    return (registry.actors || {})[key] || {
+      entity_key: key,
+      role: "companion",
+      asset_kind: "companion_portrait",
+      display_name: companion.name,
+      fallback_seed: `${state.activeCampaign}:${key}:companion`,
+      renderer: "actor_portrait",
+      visible_in_gallery: true,
+    };
+  }
+  for (const candidate of candidates) {
+    const normalized = normalizeActorName(candidate);
+    const match = rows.find((row) => {
+      if (!row) return false;
+      const display = normalizeActorName(row.display_name || "");
+      const suffix = normalizeActorName(String(row.entity_key || "").split(":").pop() || "");
+      return normalized && (normalized === display || normalized === suffix);
+    });
+    if (match) return match;
+  }
+  return null;
+}
+
+function entityNameCandidates(...values) {
+  return values.flatMap((value) => {
+    const text = String(value || "").trim();
+    if (!text) return [];
+    const withoutPrefix = text.includes(":") ? text.split(":").slice(1).join(":") : text;
+    return [text, withoutPrefix, withoutPrefix.replace(/[_-]+/g, " ")];
+  });
+}
+
+function bestEntityCandidateName(...values) {
+  return entityNameCandidates(...values).find((value) => normalizeActorName(value)) || "";
+}
+
+function roleFromEntityKey(value = "") {
+  const prefix = String(value || "").split(":", 1)[0] || "";
+  return prefix && String(value).includes(":") ? normalizeVisualRole(prefix) : "";
+}
+
+function normalizeVisualRole(value = "") {
+  const raw = normalizeActorName(value);
+  if (raw.includes("companion") || raw.includes("伙伴")) return "companion";
+  if (raw.includes("master") || raw.includes("御主")) return "master";
+  if (raw.includes("item") || raw.includes("weapon") || raw.includes("supply") || raw.includes("ritual") || raw.includes("device") || raw.includes("document")) return "item";
+  if (raw.includes("scene") || raw.includes("map") || raw.includes("location")) return "scene";
+  if (raw.includes("player")) return "player";
+  if (raw.includes("npc")) return "npc";
+  return "npc";
+}
+
+function inferRoleFromEntity(entityLike = {}) {
+  if (entityLike.type === "player" || entityLike.kind === "player") return "player";
+  if (entityLike.type === "companion" || entityLike.archetype) return "companion";
+  if (entityLike.type === "item" || entityLike.visualPrompt || entityLike.visual_prompt) return "item";
+  return entityLike.actor_kind || entityLike.kind || "npc";
+}
+
+function makeEntityKey(role, name) {
+  return `${normalizeVisualRole(role)}:${slugify(normalizeActorName(name || "unknown"))}`;
+}
+
+function assetKindForRole(role) {
+  return {
+    player: "player_portrait",
+    companion: "companion_portrait",
+    master: "master_portrait",
+    npc: "npc_portrait",
+    item: "item_icon",
+    scene: "scene_image",
+    map: "map_image",
+    monster: "monster_image",
+    cg: "cg_image",
+  }[role] || "npc_portrait";
 }
 
 function visibleStoryBlocks(blocks) {
@@ -1427,7 +2003,9 @@ function protocolQuestRows(frontendState = {}, campaignState = {}) {
 }
 
 function protocolInventoryRows(frontendState = {}, campaignState = {}) {
-  const rows = Array.isArray(frontendState.inventory) ? frontendState.inventory : [];
+  const rows = Array.isArray(state.latestInventoryPayload) && state.latestInventoryPayload.length
+    ? state.latestInventoryPayload
+    : Array.isArray(frontendState.inventory) ? frontendState.inventory : [];
   if (rows.length) {
     return rows.map((row) => ({
       title: row.short_name || row.raw_name || row.id,
@@ -1666,9 +2244,7 @@ function renderChoiceBlock(block) {
 function blockRole(block) {
   if (block.type === "player_action") return "player";
   if (block.type === "npc_dialogue") {
-    const key = block.avatar_key || block.actor_id || block.speaker || "";
-    if (isCompanionActorName(key)) return "companion";
-    return "npc";
+    return normalizeVisualRole(roleFromEntityKey(canonicalEntityKeyForBlock(block)) || "npc");
   }
   if (block.type === "cg_image") return "system";
   if (block.type === "system_check") return "system";
@@ -1993,7 +2569,7 @@ async function selectCampaign(campaignId) {
   });
   state.activeCampaign = campaignId;
   state.selectedCampaign = campaignId;
-  state.renderedMapKey = "";
+  resetCampaignScopedUiState(campaignId);
   closeStoryPicker();
   await refresh();
 }
@@ -2097,6 +2673,9 @@ function showPanel(name) {
   document.querySelectorAll("[data-panel-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.panelTab === name);
   });
+  if (["story", "summary", "logs"].includes(name)) {
+    hydrateLazyFrontendModules(state.frontendState?.modules || {}, state.frontendState || {}, state.lastCampaignState || {});
+  }
   scrollActiveFeed();
 }
 
@@ -2117,6 +2696,130 @@ function setGalleryFilter(filter) {
   if (!$("galleryOverlay")?.classList.contains("hidden")) renderGalleryDialog();
 }
 
+function makeTextDraggable(element, text, kind = "record") {
+  if (!element || !text) return;
+  element.draggable = false;
+  element.classList.add("dragSource");
+  element.title = "可拖到行动输入";
+  element.dataset.dragText = String(text || "").trim();
+  element.addEventListener("pointerdown", (event) => beginReferenceDrag(event, element.dataset.dragText));
+  element.addEventListener("dragstart", (event) => {
+    const payload = String(text || "").trim();
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData("text/plain", payload);
+    event.dataTransfer.setData("application/trpg-reference", JSON.stringify({ kind, text: payload }));
+  });
+}
+
+function makeAssetDraggable(element, asset) {
+  if (!element || !asset) return;
+  element.draggable = false;
+  element.classList.add("dragSource");
+  element.title = "可拖到行动输入";
+  const title = asset.title || asset.key || "资料";
+  const dragText = asset.kind === "npc" ? `@${title}：` : `查看资料「${title}」：`;
+  element.dataset.dragText = dragText;
+  element.addEventListener("pointerdown", (event) => beginReferenceDrag(event, dragText));
+  element.addEventListener("dragstart", (event) => {
+    const text = dragText;
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData("text/plain", text);
+    event.dataTransfer.setData("application/trpg-reference", JSON.stringify({
+      kind: asset.kind || "asset",
+      key: asset.key || "",
+      title,
+      text,
+    }));
+  });
+}
+
+function beginReferenceDrag(event, text) {
+  if (event.button !== 0 || !text) return;
+  if (event.target.closest("button, input, textarea, select, a")) return;
+  state.activeReferenceDrag = {
+    text,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    ghost: null,
+  };
+  document.addEventListener("pointermove", moveReferenceDrag);
+  document.addEventListener("pointerup", endReferenceDrag, { once: true });
+}
+
+function moveReferenceDrag(event) {
+  const drag = state.activeReferenceDrag;
+  if (!drag) return;
+  const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+  if (!drag.moved && distance < 6) return;
+  drag.moved = true;
+  if (!drag.ghost) {
+    drag.ghost = document.createElement("div");
+    drag.ghost.className = "dragGhost";
+    drag.ghost.textContent = drag.text;
+    document.body.appendChild(drag.ghost);
+    document.body.classList.add("referenceDragging");
+  }
+  drag.ghost.style.left = `${event.clientX + 12}px`;
+  drag.ghost.style.top = `${event.clientY + 12}px`;
+  $("actionInput")?.classList.toggle("dropTarget", isPointInsideElement(event.clientX, event.clientY, $("actionInput")));
+  event.preventDefault();
+}
+
+function endReferenceDrag(event) {
+  const drag = state.activeReferenceDrag;
+  if (!drag) return;
+  const input = $("actionInput");
+  if (drag.moved && isPointInsideElement(event.clientX, event.clientY, input)) {
+    appendToActionInput(drag.text);
+  }
+  drag.ghost?.remove();
+  input?.classList.remove("dropTarget");
+  document.body.classList.remove("referenceDragging");
+  document.removeEventListener("pointermove", moveReferenceDrag);
+  state.activeReferenceDrag = null;
+}
+
+function isPointInsideElement(x, y, element) {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+function appendToActionInput(text) {
+  const input = $("actionInput");
+  const value = String(text || "").trim();
+  if (!input || !value) return;
+  input.value = input.value.trim() ? `${input.value.trim()}\n${value}` : value;
+  input.focus();
+}
+
+function bindActionInputDrop() {
+  const input = $("actionInput");
+  if (!input) return;
+  input.addEventListener("dragover", (event) => {
+    if (!dataTransferHasType(event.dataTransfer, "text/plain")) return;
+    event.preventDefault();
+    input.classList.add("dropTarget");
+    event.dataTransfer.dropEffect = "copy";
+  });
+  input.addEventListener("dragleave", () => input.classList.remove("dropTarget"));
+  input.addEventListener("drop", (event) => {
+    event.preventDefault();
+    input.classList.remove("dropTarget");
+    const text = event.dataTransfer.getData("text/plain").trim();
+    appendToActionInput(text);
+  });
+}
+
+function dataTransferHasType(dataTransfer, type) {
+  const types = dataTransfer?.types;
+  if (!types) return false;
+  if (typeof types.includes === "function") return types.includes(type);
+  if (typeof types.contains === "function") return types.contains(type);
+  return Array.from(types).includes(type);
+}
+
 function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   const grid = $("galleryGrid");
   if (!grid) return;
@@ -2128,7 +2831,8 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   const protocolAssets = moduleAssets.length ? moduleAssets : Array.isArray(galleryState.assets) ? galleryState.assets.map(protocolGalleryAsset).filter(Boolean) : [];
   const fallbackAssets = buildVisualAssets(campaignState).map((asset) => normalizeGalleryAssetForFixedFilters(asset)).filter(Boolean);
   const cachedAssets = cachedGalleryAssets().map((asset) => normalizeGalleryAssetForFixedFilters(asset)).filter(Boolean);
-  const assets = markGalleryArchiveState(protocolAssets.length ? mergeGalleryAssets(protocolAssets, cachedAssets) : mergeGalleryAssets(fallbackAssets, cachedAssets));
+  const assets = markGalleryArchiveState(protocolAssets.length ? mergeGalleryAssets(protocolAssets, cachedAssets) : mergeGalleryAssets(fallbackAssets, cachedAssets))
+    .filter((asset) => !asset.campaign_id || asset.campaign_id === state.activeCampaign);
   state.galleryAssets = assets;
   grid.innerHTML = "";
   assets.forEach((asset) => {
@@ -2138,6 +2842,7 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `查看资料：${asset.title}`);
+    makeAssetDraggable(card, asset);
     const image = document.createElement("img");
     image.className = "galleryThumb";
     image.alt = `${asset.title} PNG`;
@@ -2183,12 +2888,17 @@ function renderGalleryFilters(filters) {
 }
 
 function protocolGalleryAsset(asset) {
-  const kind = fixedGalleryKind(asset.kind);
+  const role = normalizeVisualRole(asset.role || asset.entity_role || asset.asset_kind || asset.kind || "");
+  let kind = fixedGalleryKind(asset.kind);
+  if (role === "companion") kind = "companion";
+  if (role === "item") kind = "item";
   if (!kind) return null;
   const detail = asset.detail || "";
+  const entityKey = asset.entity_key || asset.entityKey || makeEntityKey(role === "npc" || role === "companion" || role === "master" || role === "item" ? role : kind, asset.title || asset.display_name || asset.key || kind);
+  const logicalKey = asset.key || entityKey;
   return {
     kind,
-    key: asset.key || `${kind}:${asset.title}`,
+    key: logicalKey,
     title: conciseTitle(asset.title || asset.key || "资料", 22),
     meta: asset.meta || galleryKindLabel(kind),
     seed: scopedSeed(asset.seed || asset.title || asset.key),
@@ -2200,6 +2910,12 @@ function protocolGalleryAsset(asset) {
     createdAt: asset.created_at || "",
     visualPrompt: asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(asset.title || asset.key || "", detail, kind),
     imagePrompt: asset.image_prompt || asset.imagePrompt || {},
+    campaign_id: asset.campaign_id || state.activeCampaign,
+    asset_seed: asset.asset_seed || state.assetSeed,
+    role: role || asset.role || "",
+    entity_key: entityKey,
+    assetKind: asset.asset_kind || asset.assetKind || "",
+    visible_in_gallery: asset.visible_in_gallery !== false,
   };
 }
 
@@ -2230,6 +2946,16 @@ function openCurrentMapOverlay() {
 
 function openGalleryOverlay(assetKey = "", transientAsset = null) {
   state.transientGalleryAsset = transientAsset;
+  const galleryModule = state.frontendState?.modules?.gallery || {};
+  if (galleryModule.payload_ref) {
+    loadModulePayload(galleryModule.payload_ref, "gallery").then((data) => {
+      if (!data?.payload || data.campaign_id !== state.activeCampaign) return;
+      renderGalleryFilters(data.payload.filters || state.frontendState?.gallery?.filters || []);
+      renderGallery(state.lastCampaignState || {}, data.payload || {}, { ...galleryModule, payload: data.payload });
+      if (assetKey) state.selectedGalleryKey = assetKey;
+      renderGalleryDialog();
+    }).catch((err) => console.warn("gallery module unavailable", err));
+  }
   const requested = state.galleryAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.galleryFilter)) {
     state.galleryFilter = requested.kind === "monster" || requested.kind === "ecology" ? "monster" : requested.kind;
@@ -2265,9 +2991,12 @@ function galleryAssetMatchesFilter(asset, filter) {
   if (value === "cg") return asset.kind === "cg";
   if (value === "monster") return asset.kind === "monster" || asset.kind === "ecology";
   if (value === "scene") return asset.kind === "scene" || asset.kind === "location";
-  if (value === "item") return ["item", "weapon", "supply", "material", "ritual_tool"].includes(asset.kind);
+  if (value === "item") return ["item", "weapon", "supply", "material", "ritual_tool"].includes(asset.kind) || asset.role === "item" || asset.assetKind === "item_icon";
   if (value === "clue") return ["clue", "document", "ritual_tool"].includes(asset.kind);
   if (value === "character") return ["character", "npc", "companion"].includes(asset.kind);
+  if (value === "companion") return asset.kind === "companion" || asset.role === "companion" || asset.assetKind === "companion_portrait";
+  if (value === "master") return asset.kind === "master" || asset.role === "master";
+  if (value === "npc") return asset.kind === "npc" && !["player", "master", "companion"].includes(asset.role);
   return asset.kind === value;
 }
 
@@ -2494,10 +3223,12 @@ function buildVisualAssets(campaignState) {
   const rows = [];
   rows.push({
     kind: "scene",
-    key: `map:${scene.location || state.activeCampaign || "current"}`,
+    key: makeScopedAssetKey("map", scene.location || "current", "gallery"),
     title: conciseTitle(scene.location || "当前区域地图", 18),
     meta: "地图",
-    seed: scene.location || state.activeCampaign || "map",
+    seed: scopedSeed(scene.location || state.activeCampaign || "map"),
+    campaign_id: state.activeCampaign,
+    asset_seed: state.assetSeed,
     scene,
   });
   (scene.active_npcs || [])
@@ -2506,30 +3237,40 @@ function buildVisualAssets(campaignState) {
     .forEach((name) => {
     rows.push({
       kind: "npc",
-      key: `npc:${name}`,
+      key: makeScopedAssetKey("npc_portrait", name, "gallery"),
       title: name,
       meta: "NPC",
-      seed: name,
+      seed: scopedSeed(name),
+      campaign_id: state.activeCampaign,
+      asset_seed: state.assetSeed,
     });
   });
   itemRows(campaignState).slice(-6).forEach((item, index) => {
+    const itemEntity = makeEntityKey("item", item.title || item.key || `item-${index}`);
     rows.push({
       kind: "item",
-      key: `item:${item.title}:${index}`,
+      key: makeScopedAssetKey("item_icon", itemEntity, "memory"),
       title: conciseTitle(item.title, 20),
       meta: item.tag || "物品",
-      seed: `${item.title}:${item.detail}`,
+      seed: scopedSeed(`${item.title}:${item.detail}`),
       detail: item.detail,
+      campaign_id: state.activeCampaign,
+      asset_seed: state.assetSeed,
+      role: "item",
+      entity_key: itemEntity,
+      assetKind: "item_icon",
     });
   });
   monsterRows(campaignState).slice(-3).forEach((monster, index) => {
     rows.push({
       kind: "monster",
-      key: `monster:${monster.title}:${index}`,
+      key: makeScopedAssetKey("gallery_monster", `${monster.title}:${index}`, "memory"),
       title: conciseTitle(monster.title, 20),
       meta: monster.tag || "生态",
-      seed: `${monster.title}:${monster.detail}`,
+      seed: scopedSeed(`${monster.title}:${monster.detail}`),
       detail: monster.detail,
+      campaign_id: state.activeCampaign,
+      asset_seed: state.assetSeed,
     });
   });
   return dedupeAssets([...rows, ...pressureAssets]).slice(0, 16);
@@ -2551,12 +3292,12 @@ function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCa
       : asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(title, detail, kind);
     return {
       kind,
-      key: `v4:${kind}:${asset.id || title}:${index}`,
+      key: makeScopedAssetKey(`gallery_${kind}`, asset.id || title || index, "v4"),
       title: conciseTitle(title, 22),
       meta: kind === "item" && rawKind === "scene"
         ? "视觉记录"
         : asset.certainty === "confirmed" ? galleryKindLabel(kind) : `${galleryKindLabel(kind)} / ${asset.certainty || "clue"}`,
-      seed: `${asset.id || title}:${detail}`,
+      seed: scopedSeed(`${asset.id || title}:${detail}`),
       detail,
       certainty: asset.certainty || "clue",
       displayZone: asset.display_zone || "gallery",
@@ -2564,6 +3305,8 @@ function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCa
       sourceMemory: asset.source_memory || "",
       visualPrompt,
       imagePrompt: asset.image_prompt || asset.imagePrompt || buildImagePrompt(title, detail, kind),
+      campaign_id: state.activeCampaign,
+      asset_seed: state.assetSeed,
     };
   }).filter((asset) => asset.kind !== "scene" || asset.displayZone === "map")
     .filter((asset) => !(asset.kind === "npc" && isProtectedActorName(asset.title, protectedActors)));
@@ -2579,19 +3322,23 @@ function normalizePressureKind(kind) {
 
 function cachedGalleryAssets() {
   return (state.cachedAssets || []).filter((entry) => {
+    if (!isAssetForCurrentCampaign(entry)) return false;
     const kind = String(entry.kind || "");
     const metadata = entry.metadata || {};
-    const reusableNpcPortrait = kind === "npc_portrait";
-    if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_") || reusableNpcPortrait)) return false;
+    if (entry.debug_only || entry.visible_in_gallery === false || metadata.debug_only || metadata.visible_in_gallery === false) return false;
+    const reusableKind = ["npc_portrait", "companion_portrait", "master_portrait", "item_icon", "scene_image", "map_image", "monster_image", "cg_image", "gallery_image"].includes(kind);
+    if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_") || reusableKind)) return false;
     const normalizedKind = normalizeGalleryKind(kind);
-    if (normalizedKind === "scene" && !(kind === "map" || entry.metadata?.source === "map_route")) return false;
+    if (normalizedKind === "scene" && !(["map", "map_image", "scene_image"].includes(kind) || entry.metadata?.source === "map_route")) return false;
+    if (normalizedKind === "npc" && ["player", "master", "companion"].includes(entry.role || metadata.role)) return false;
     if (normalizedKind !== "npc") return true;
-    const title = metadata.title || readableAssetTitle(entry.key, normalizedKind);
+    const title = entry.display_name || metadata.display_name || metadata.title || readableAssetTitle(entry.key, normalizedKind);
+    if (looksLikeGeneratedAssetTitle(title, entry.key)) return false;
     return !isProtectedActorName(title) && !isProtectedActorName(metadata.object_id);
   }).map((entry) => {
     const metadata = entry.metadata || {};
     const normalizedKind = normalizeGalleryKind(entry.kind);
-    const title = metadata.title || readableAssetTitle(entry.key, normalizedKind);
+    const title = entry.display_name || metadata.display_name || metadata.title || readableAssetTitle(entry.key, normalizedKind);
     return {
       kind: normalizedKind,
       key: entry.key,
@@ -2603,8 +3350,27 @@ function cachedGalleryAssets() {
       sourceObjectId: metadata.object_id || "",
       generatorVersion: entry.generator_version,
       imagePrompt: metadata.image_prompt || {},
+      campaign_id: entry.campaign_id || state.activeCampaign,
+      asset_seed: entry.asset_seed || state.assetSeed,
+      role: entry.role || metadata.role || "",
+      entity_key: entry.entity_key || metadata.entity_key || "",
+      assetKind: entry.kind || "",
+      visible_in_gallery: entry.visible_in_gallery !== false,
     };
   });
+}
+
+function looksLikeGeneratedAssetTitle(title = "", key = "") {
+  const text = normalizeActorName(title);
+  const seed = normalizeActorName(state.assetSeed || "");
+  const campaign = normalizeActorName(state.activeCampaign || "");
+  const rawKey = normalizeActorName(key || "");
+  if (!text) return true;
+  if (seed && text.includes(seed.slice(0, 10))) return true;
+  if (campaign && text.includes(campaign.slice(0, 16))) return true;
+  if (/^[0-9a-f]{10,}/i.test(String(title || ""))) return true;
+  if (/npcportrait|gallerynpc|playerportrait|companionportrait|itemicon/.test(text) && rawKey.includes(text.replace(/[^a-z0-9]/g, ""))) return true;
+  return false;
 }
 
 function protectedActorNames(campaignState = state.lastCampaignState || {}) {
@@ -2653,14 +3419,26 @@ function openCompanionOverlay() {
   renderCompanionData(companion);
   const image = $("companionDialogImage");
   if (image) {
-    drawCompanionAvatar(companion.seed || companion.name, {
-      cache: true,
-      objectId: slugify(companion.name || "companion"),
-      targetImage: image,
-      seedText: scopedSeed(companion.seed || companion.name || "companion"),
-      archetype: companion.archetype,
-      kind: "companion_portrait",
-    });
+    const resolved = resolveVisualAsset({ ...companion, type: "companion", role: "companion", portrait: companion.portrait || {} });
+    if (resolved.url) {
+      setAssetImage(image, resolved.url);
+    } else {
+      drawPixelCompanionPortrait(resolved.fallback_seed || companion.seed || companion.name, {
+        cache: true,
+        objectId: slugify(resolved.entity_key || companion.name || "companion"),
+        targetImage: image,
+        seedText: scopedSeed(resolved.fallback_seed || companion.seed || companion.name || "companion"),
+        archetype: "companion",
+        kind: "companion_portrait",
+        metadata: {
+          title: resolved.display_name || companion.name,
+          display_name: resolved.display_name || companion.name,
+          role: "companion",
+          entity_key: makeEntityKey("companion", companion.name),
+          visible_in_gallery: true,
+        },
+      });
+    }
   }
   const overlay = $("companionOverlay");
   if (!overlay) return;
@@ -2702,7 +3480,8 @@ function closeCompanionOverlay() {
 
 function isCompanionActorName(value) {
   const companion = visibleCompanion();
-  return Boolean(companion?.name && normalizeActorName(value) === normalizeActorName(companion.name));
+  const candidates = entityNameCandidates(value);
+  return Boolean(companion?.name && candidates.some((candidate) => normalizeActorName(candidate) === normalizeActorName(companion.name)));
 }
 
 function isProtectedActorName(value, protectedActors = protectedActorNames()) {
@@ -2718,21 +3497,40 @@ function normalizeActorName(value) {
 
 function mergeGalleryAssets(primary, cached) {
   const rows = [...primary];
-  const existing = new Set(primary.map((asset) => slugify(asset.key || asset.title)));
+  const existing = new Set(primary.flatMap((asset) => galleryDedupeKeys(asset)));
   cached.forEach((asset) => {
-    const key = slugify(asset.kind === "scene" ? (asset.key || asset.title) : (asset.sourceObjectId || asset.key || asset.title));
-    if (!existing.has(key)) {
+    const keys = galleryDedupeKeys(asset);
+    if (!keys.some((key) => existing.has(key))) {
       rows.push(asset);
-      existing.add(key);
+      keys.forEach((key) => existing.add(key));
     }
   });
   return rows.slice(0, 120);
 }
 
+function galleryDedupeKeys(asset = {}) {
+  const kind = normalizeGalleryKind(asset.kind) || asset.kind || "asset";
+  const title = normalizeActorName(asset.title || asset.display_name || asset.name || "");
+  const entity = normalizeActorName(asset.entity_key || asset.entityKey || "");
+  const key = slugify(asset.kind === "scene" ? (asset.key || asset.title) : (asset.sourceObjectId || asset.key || asset.title));
+  return [
+    key,
+    title ? `${kind}:${title}` : "",
+    entity ? `${kind}:${entity}` : "",
+  ].filter(Boolean);
+}
+
 function normalizeGalleryKind(kind) {
   const value = String(kind || "").toLowerCase();
+  if (["cg_image", "gallery_image"].includes(value)) return "cg";
+  if (value === "companion_portrait") return "companion";
+  if (value === "master_portrait") return "master";
+  if (value === "npc_portrait") return "npc";
+  if (["scene_image", "map_image"].includes(value)) return "scene";
+  if (value === "item_icon") return "item";
+  if (value === "monster_image") return "monster";
+  if (value.includes("companion")) return "companion";
   if (["cg", "generated_cg", "gallery_image", "formal_cg", "剧情图", "生图"].some((token) => value.includes(token))) return "cg";
-  if (value.includes("servant") || value.includes("从者")) return "servant";
   if (value.includes("master") || value.includes("御主")) return "master";
   if (value.includes("document") || value.includes("文献")) return "document";
   if (value.includes("clue") || value.includes("线索")) return "clue";
@@ -2817,29 +3615,38 @@ function conciseTitle(text, maxLen) {
 }
 
 function galleryKindLabel(kind) {
-  return { cg: "CG", master: "御主", servant: "从者", npc: "NPC", scene: "场景", item: "物品", monster: "生态", clue: "线索", document: "文献", anomaly: "异常", character: "角色", quest: "任务" }[kind] || "资料";
+  return { cg: "CG", master: "御主", companion: "伙伴", npc: "NPC", scene: "场景", item: "物品", monster: "生态", clue: "线索", document: "文献", anomaly: "异常", character: "角色", quest: "任务" }[kind] || "资料";
 }
 
 function drawGalleryAsset(targetImage, asset) {
-  if (asset.kind === "npc") {
-    const feedback = formalPortraitFeedbackAsset(asset.title, asset.title, "npc");
-    if (feedback?.url) {
-      setAssetImage(targetImage, feedback.url);
-      return;
-    }
+  const resolved = resolveVisualAsset({ ...asset, role: asset.role || asset.kind, type: asset.kind });
+  if (targetImage) {
+    targetImage.dataset.assetKey = resolved.asset_key || asset.key || "";
+    targetImage.dataset.campaignId = state.activeCampaign || "";
+    targetImage.dataset.fallbackSeed = resolved.fallback_seed || resolved.entity_key || asset.key || asset.title || "";
   }
-  if (asset.cachedUrl) {
-    setAssetImage(targetImage, asset.cachedUrl);
+  if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
+    setAssetImage(targetImage, resolved.url);
+    return;
+  }
+  if (asset.cachedUrl && String(asset.key || "").includes(`:v${ASSET_GENERATOR_VERSION}`) && isCurrentGeneratorAssetUrl(asset.cachedUrl)) {
+    if (isUrlForCurrentCampaign(asset.cachedUrl, asset.key)) setAssetImage(targetImage, asset.cachedUrl);
+    return;
+  }
+  if (asset.kind === "scene" && !isValidMapRoute(asset.scene?.map_route)) {
+    targetImage.removeAttribute("src");
+    targetImage.classList.add("is-empty");
     return;
   }
   const canvas = createAssetCanvas(128, 128);
-  const kind = asset.kind === "scene" ? "gallery_map" : asset.kind === "npc" ? "npc_portrait" : `gallery_${asset.kind}`;
-  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master" ? "portraits" : asset.kind === "cg" ? "generated" : "items";
+  const kind = asset.kind === "scene" ? "map_image" : resolved.asset_kind || (asset.kind === "npc" ? "npc_portrait" : asset.kind === "companion" ? "companion_portrait" : asset.kind === "item" ? "item_icon" : `gallery_${asset.kind}`);
+  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" || asset.kind === "companion" || asset.kind === "master" ? "portraits" : asset.kind === "cg" ? "generated" : "items";
   const draw = () => {
     if (asset.kind === "scene") drawPixelMap(asset.seed, { cache: false, canvas, scene: asset.scene, compact: true });
-    else if (asset.kind === "npc" || asset.kind === "servant" || asset.kind === "master") drawPixelPortraitToCanvas(canvas, asset.seed, "npc");
+    else if (asset.kind === "companion") drawPixelCompanionPortrait(asset.seed || resolved.fallback_seed || asset.title, { cache: false, canvas, targetImage: null, archetype: "companion" });
+    else if (asset.kind === "npc" || asset.kind === "master") drawPixelActorPortrait(asset.seed, { cache: false, role: resolved.role === "master" ? "master" : "npc", canvas, targetImage: null });
     else if (asset.kind === "monster") drawCanvasMonster(canvas, asset);
-    else drawCanvasItem(canvas, asset);
+    else drawPixelItemIcon(asset.seed || asset.title, { cache: false, canvas, targetImage: null, asset });
   };
   if (state.activeCampaign) {
     cacheCanvasAsset({
@@ -2847,7 +3654,7 @@ function drawGalleryAsset(targetImage, asset) {
       targetImage,
       kind,
       subdir,
-      objectId: slugify(asset.key || asset.title),
+      objectId: slugify(resolved.entity_key || asset.entity_key || asset.key || asset.title),
       seedText: scopedSeed(asset.seed || asset.title),
       metadata: {
         title: asset.title,
@@ -2855,6 +3662,10 @@ function drawGalleryAsset(targetImage, asset) {
         meta: asset.meta || galleryKindLabel(asset.kind),
         source: "gallery",
         object_id: asset.key || asset.title,
+        display_name: asset.title,
+        role: resolved.role,
+        entity_key: resolved.entity_key,
+        visible_in_gallery: resolved.visible_in_gallery,
         certainty: asset.certainty || undefined,
         display_zone: asset.displayZone || undefined,
         cache_policy: asset.cachePolicy || undefined,
@@ -3019,40 +3830,63 @@ function hashSeed(text) {
 }
 
 function drawBlockAvatar(targetImage, block, role) {
-  const actorKey = block.avatar_key || block.actor_id || block.speaker || role;
-  const feedback = formalPortraitFeedbackAsset(actorKey, block.speaker, role);
-  if (feedback?.url) {
-    setAssetImage(targetImage, feedback.url);
+  const playerName = state.frontendState?.character_card?.name || $("characterName")?.textContent || "";
+  const entityKey = canonicalEntityKeyForBlock(block) || makeEntityKey(role, displaySpeaker(block) || block.actor_id || role);
+  const canonicalRole = normalizeVisualRole(roleFromEntityKey(entityKey) || role);
+  const speakerName = canonicalRole === "player" ? playerName : "";
+  const resolved = resolveVisualAsset({
+    name: speakerName || displaySpeaker(block) || block.speaker || block.actor_id || role,
+    actor_id: block.actor_id,
+    avatar_key: block.avatar_key,
+    actor_kind: canonicalRole,
+    type: canonicalRole,
+    role: canonicalRole,
+    entity_key: entityKey,
+  });
+  if (resolved.url) {
+    if (targetImage) {
+      targetImage.dataset.assetKey = resolved.asset_key || "";
+      targetImage.dataset.campaignId = state.activeCampaign || "";
+      targetImage.dataset.fallbackSeed = resolved.fallback_seed || resolved.entity_key || "";
+    }
+    setAssetImage(targetImage, resolved.url);
     return;
   }
-  const actorSeed = scopedSeed(actorKey);
-  const canvas = createAssetCanvas(role === "companion" ? 160 : 96, role === "companion" ? 160 : 96);
+  const actorKey = resolved.entity_key || entityKey || block.avatar_key || block.actor_id || block.speaker || canonicalRole;
+  const actorSeed = scopedSeed(resolved.fallback_seed || actorKey);
+  const canvas = createAssetCanvas(canonicalRole === "companion" ? 160 : 96, canonicalRole === "companion" ? 160 : 96);
 
   let kind, draw;
-  if (role === "companion") {
+  if (canonicalRole === "companion") {
     const companion = visibleCompanion();
-    const companionSeed = scopedSeed(companion?.seed || companion?.name || actorKey);
+    const companionSeed = scopedSeed(resolved.fallback_seed || companion?.seed || companion?.name || actorKey);
     kind = "companion_portrait";
-    draw = () => drawCompanionToCanvas(canvas, companionSeed, companion?.archetype);
+    draw = () => drawCompanionToCanvas(canvas, companionSeed, "companion");
     if (state.activeCampaign) {
       cacheCanvasAsset({
         canvas,
         targetImage,
         kind,
         subdir: "portraits",
-        objectId: slugify(companion?.name || actorKey),
+        objectId: slugify(resolved.entity_key || companion?.name || actorKey),
         seedText: companionSeed,
+        metadata: {
+          title: companion?.name || resolved.display_name || actorKey,
+          display_name: companion?.name || resolved.display_name || actorKey,
+          role: "companion",
+          entity_key: resolved.entity_key || makeEntityKey("companion", companion?.name || actorKey),
+          visible_in_gallery: true,
+        },
         draw,
       });
       return;
     }
-  } else if (role === "npc") {
-    kind = "npc_portrait";
-    draw = () => drawPixelPortraitToCanvas(canvas, actorSeed, "npc");
+  } else if (canonicalRole === "npc") {
+    kind = resolved.asset_kind || "npc_portrait";
+    draw = () => drawPixelActorPortrait(actorSeed, { cache: false, role: "npc", canvas, targetImage: null });
   } else {
-    // Player log avatars reuse the main character portrait cache.
-    kind = "portrait";
-    draw = () => drawPixelAvatar(actorSeed, { cache: false, variant: "hunter", canvas, targetImage: null });
+    kind = resolved.asset_kind || "player_portrait";
+    draw = () => drawPixelActorPortrait(actorSeed, { cache: false, role: "player", canvas, targetImage: null });
   }
 
   if (state.activeCampaign) {
@@ -3063,12 +3897,26 @@ function drawBlockAvatar(targetImage, block, role) {
       subdir: "portraits",
       objectId: slugify(actorKey),
       seedText: actorSeed,
+      metadata: {
+        title: resolved.display_name || actorKey,
+        display_name: resolved.display_name || actorKey,
+        role: resolved.role,
+        entity_key: resolved.entity_key,
+        visible_in_gallery: resolved.visible_in_gallery,
+      },
       draw,
     });
     return;
   }
   draw();
   setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function isCurrentGeneratorAssetUrl(url = "") {
+  const text = String(url || "");
+  if (!text || /cg_feedback|manual_cg|formal_cg|_VCG|:VCG/i.test(text)) return true;
+  const match = text.match(/[_-]v(\d+)\.png/i) || text.match(/[?&]v=(\d+)/i);
+  return !match || Number(match[1]) === ASSET_GENERATOR_VERSION;
 }
 
 function formalPortraitFeedbackAsset(actorKey = "", speaker = "", role = "") {
@@ -3080,6 +3928,7 @@ function formalPortraitFeedbackAsset(actorKey = "", speaker = "", role = "") {
       ? new Set(["companion", "companion_portrait"])
       : new Set(["npc_portrait"]);
   const candidates = (state.cachedAssets || []).filter((asset) => {
+    if (!isAssetForCurrentCampaign(asset)) return false;
     if (!asset?.exists || !asset.url || !roleKinds.has(String(asset.kind || ""))) return false;
     const metadata = asset.metadata || {};
     const title = normalizeActorName(metadata.title || asset.key || "");
@@ -3170,6 +4019,81 @@ function drawPixelPortraitToCanvas(canvas, seedText, role) {
     px(18, 14, 2, 1, "#d6bc75");
   }
   px(4, 22, 16, 2, "#8f846f");
+}
+
+function drawPixelActorPortrait(seedText, options = {}) {
+  const canvas = options.canvas || createAssetCanvas(96, 96);
+  const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
+  const role = normalizeVisualRole(options.role || "npc");
+  const effectiveSeed = options.seedText || scopedSeed(`${state.activeCampaign}:${seedText}:${role}`);
+  const kind = options.kind || assetKindForRole(role);
+  if (options.cache && state.activeCampaign) {
+    cacheCanvasAsset({
+      canvas,
+      targetImage,
+      kind,
+      subdir: "portraits",
+      objectId: options.objectId || slugify(seedText),
+      seedText: effectiveSeed,
+      metadata: options.metadata || {
+        title: String(seedText || role),
+        display_name: String(seedText || role),
+        role,
+        entity_key: makeEntityKey(role, seedText),
+        visible_in_gallery: role !== "player",
+      },
+      draw: () => drawPixelActorPortrait(effectiveSeed, { cache: false, role, canvas, targetImage: null }),
+    });
+    return;
+  }
+  if (role === "player") {
+    drawPlayerFullBodyToCanvas(canvas, effectiveSeed);
+  } else {
+    drawPixelPortraitToCanvas(canvas, effectiveSeed, role);
+  }
+  if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function drawPixelCompanionPortrait(seedText, options = {}) {
+  return drawCompanionAvatar(seedText, options);
+}
+
+function drawPixelItemIcon(seedText, options = {}) {
+  const canvas = options.canvas || createAssetCanvas(128, 128);
+  const targetImage = options.targetImage || null;
+  const asset = options.asset || { title: seedText, detail: "", kind: "item", seed: seedText };
+  if (options.cache && state.activeCampaign) {
+    cacheCanvasAsset({
+      canvas,
+      targetImage,
+      kind: "item_icon",
+      subdir: "items",
+      objectId: options.objectId || slugify(seedText),
+      seedText: options.seedText || scopedSeed(seedText),
+      metadata: options.metadata || {
+        title: asset.title || seedText,
+        display_name: asset.title || seedText,
+        role: "item",
+        entity_key: makeEntityKey("item", asset.title || seedText),
+        visible_in_gallery: true,
+        visual_prompt: asset.visualPrompt || asset.visual_prompt || inferItemVisualPrompt(asset.title || seedText, asset.detail || "", asset.kind || "item"),
+      },
+      draw: () => drawCanvasItem(canvas, asset),
+    });
+    return;
+  }
+  drawCanvasItem(canvas, asset);
+  if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function drawPixelSystemIcon(kind = "system") {
+  const canvas = createAssetCanvas(96, 96);
+  drawIconBase(canvas.getContext("2d"), canvas.width, canvas.height, "#d9d0be", "#6f6252");
+  return canvas.toDataURL("image/png");
+}
+
+function drawPixelFallbackAvatar(seedText, options = {}) {
+  return drawPixelActorPortrait(seedText, { ...options, role: options.role || "npc", cache: false });
 }
 
 function shadeColor(hex, amount) {
@@ -3267,7 +4191,7 @@ function drawPlayerFullBodyToCanvas(canvas, seedText) {
   const accent = ["#d2b56b", "#9fb7c7", "#b66c45", "#c9c0a0"][(seed >>> 14) % 4];
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, size, size);
-  px(0, 0, 32, 32, bg);
+  drawStoryContextBackdrop(canvas, seedText, bg, 32);
   px(5, 28, 22, 2, "rgba(76, 58, 39, .28)");
   px(11, 3, 10, 3, hair);
   px(9, 5, 14, 3, hair);
@@ -3289,21 +4213,40 @@ function drawPlayerFullBodyToCanvas(canvas, seedText) {
   px(18, 29, 7, 1, "#25221d");
   px(23, 12, 2, 13, accent);
   px(24, 11, 1, 3, "#efe0ad");
-  if (normalizeActorName(state.activeCampaign).includes("fate")) {
-    px(25, 16, 2, 9, "#1e2531");
-    px(24, 15, 4, 1, "#c9b76a");
-  } else if (normalizeActorName(state.activeCampaign).includes("coc")) {
-    px(6, 20, 5, 4, "#d8d0b6");
-    px(7, 21, 3, 1, "#5b4a35");
-  } else if (normalizeActorName(state.activeCampaign).includes("dnd")) {
-    px(5, 17, 4, 6, "#8b8f93");
-    px(4, 16, 2, 8, "#b9c0c8");
+}
+
+function drawStoryContextBackdrop(canvas, seedText, baseColor = "#d8c7a8", cells = 32) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`story-bg:${state.activeCampaign}:${currentStoryVisualContext()}:${seedText}`);
+  const cell = canvas.width / cells;
+  const fill = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const context = `${currentStoryVisualContext()} ${state.activeCampaign}`.toLowerCase();
+  const night = /夜|雨|黑|暗|shadow|night|rain/.test(context) || ((seed >>> 4) & 1);
+  const warm = /店|灯|市|火|market|light/.test(context) || ((seed >>> 6) & 1);
+  fill(0, 0, cells, Math.max(7, Math.floor(cells * .36)), night ? "rgba(34,42,54,.42)" : "rgba(225,215,194,.58)");
+  fill(0, Math.floor(cells * .68), cells, Math.ceil(cells * .32), night ? "rgba(55,49,45,.34)" : "rgba(128,104,76,.18)");
+  if (warm) {
+    fill(Math.floor(cells * .68), Math.floor(cells * .12), Math.floor(cells * .18), Math.floor(cells * .22), "rgba(218,161,68,.42)");
+    fill(Math.floor(cells * .73), Math.floor(cells * .16), Math.max(1, Math.floor(cells * .04)), Math.floor(cells * .16), "rgba(255,230,150,.65)");
+  }
+  if (/门|巷|街|gate|door|alley|street/.test(context)) {
+    fill(Math.floor(cells * .08), Math.floor(cells * .18), Math.floor(cells * .2), Math.floor(cells * .56), "rgba(83,64,48,.32)");
+    fill(Math.floor(cells * .11), Math.floor(cells * .23), Math.max(1, Math.floor(cells * .03)), Math.floor(cells * .43), "rgba(36,32,30,.28)");
+  }
+  if (/水|雨|water|rain/.test(context)) {
+    fill(0, Math.floor(cells * .76), cells, Math.max(2, Math.floor(cells * .08)), "rgba(70,93,103,.28)");
+    for (let i = 0; i < 5; i += 1) fill((seed >>> (i * 3)) % cells, Math.floor(cells * (.8 + i * .025)), Math.floor(cells * .22), 1, "rgba(210,225,221,.28)");
   }
 }
 
 function drawCompanionAvatar(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(160, 160);
-  const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
+  const targetImage = options.targetImage === undefined ? $("companionImage") : options.targetImage;
   const effectiveSeed = options.seedText || seedText;
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
@@ -3313,6 +4256,13 @@ function drawCompanionAvatar(seedText, options = {}) {
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
       seedText: effectiveSeed,
+      metadata: options.metadata || {
+        title: String(seedText || "companion"),
+        display_name: String(seedText || "companion"),
+        role: normalizeVisualRole(options.archetype || "companion"),
+        entity_key: makeEntityKey(options.archetype || "companion", seedText),
+        visible_in_gallery: true,
+      },
       draw: () => drawCompanionToCanvas(canvas, effectiveSeed, options.archetype),
     });
     return;
@@ -3322,64 +4272,7 @@ function drawCompanionAvatar(seedText, options = {}) {
 }
 
 function drawCompanionToCanvas(canvas, seedText, archetype = "") {
-  const type = normalizeActorName(archetype || inferCompanionArchetype(seedText));
-  if (type.includes("palico") || type.includes("艾露") || type.includes("艾鲁") || normalizeActorName(seedText).includes("浩文")) {
-    drawHighSpecPalicoToCanvas(canvas, seedText);
-    return;
-  }
-  if (type.includes("servant")) {
-    drawHighSpecServantToCanvas(canvas, seedText);
-    return;
-  }
-  drawHighSpecCompanionToCanvas(canvas, seedText, type);
-}
-
-function drawHighSpecServantToCanvas(canvas, seedText) {
-  const ctx = canvas.getContext("2d");
-  const seed = hashSeed(`servant-high:${seedText}`);
-  const cell = canvas.width / 40;
-  const px = (x, y, w, h, color) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
-  };
-  const mirror = (x, y, w, h, color) => {
-    px(x, y, w, h, color);
-    px(40 - x - w, y, w, h, color);
-  };
-  const skin = ["#d1a173", "#c08a63", "#deb383", "#a97860"][seed % 4];
-  const hair = ["#1d1e26", "#20242d", "#2b241c", "#423342"][(seed >>> 4) % 4];
-  const coat = ["#1d2431", "#2f2538", "#1f3032", "#342637"][(seed >>> 8) % 4];
-  const accent = ["#c8b45f", "#9cb4d8", "#d6d0ea", "#b96363"][(seed >>> 12) % 4];
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  px(0, 0, 40, 40, "#d4c8b5");
-  for (let i = 0; i < 7; i += 1) {
-    px(4 + i * 5, 6 + ((seed >>> i) & 3), 2, 18 - (i % 3), "rgba(64,69,88,.38)");
-  }
-  px(15, 4, 10, 3, hair);
-  px(13, 6, 14, 4, hair);
-  mirror(12, 8, 3, 8, hair);
-  px(14, 10, 12, 10, skin);
-  mirror(13, 13, 2, 5, shadeColor(skin, -18));
-  px(16, 12, 8, 3, "#e1b98b");
-  mirror(16, 14, 2, 1, "#10151a");
-  px(19, 16, 2, 1, "#805338");
-  px(17, 19, 6, 1, "#4e2c24");
-  px(13, 21, 14, 3, "#2a1d20");
-  px(11, 24, 18, 9, coat);
-  mirror(7, 23, 5, 10, shadeColor(coat, 10));
-  px(15, 24, 10, 1, accent);
-  px(17, 26, 6, 5, shadeColor(coat, -14));
-  px(12, 33, 6, 4, "#202027");
-  px(22, 33, 6, 4, "#202027");
-  px(11, 37, 8, 1, "#131418");
-  px(21, 37, 8, 1, "#131418");
-  mirror(5, 10, 2, 16, "rgba(25,30,40,.64)");
-  mirror(4, 9, 1, 5, accent);
-  px(27, 19, 2, 12, "#151923");
-  px(26, 18, 4, 1, accent);
-  px(30, 14, 2, 10, "rgba(245,236,208,.65)");
-  px(14, 3, 12, 1, accent);
+  drawHighSpecCompanionToCanvas(canvas, seedText, "companion");
 }
 
 function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "") {
@@ -3395,124 +4288,7 @@ function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "") {
     px(6, 8, 20, 10, "#5b6f7d");
     px(8, 10, 16, 6, "#8fb0bf");
     px(13, 12, 6, 2, "#d8edf2");
-  } else if (type.includes("familiar")) {
-    px(4, 5, 5, 5, "#8b6d45");
-    px(23, 5, 5, 5, "#8b6d45");
-    px(6, 22, 20, 2, "#c8b45f");
   }
-}
-
-function drawHighSpecPalicoToCanvas(canvas, seedText) {
-  const ctx = canvas.getContext("2d");
-  const seed = hashSeed(`palico-high:${seedText}`);
-  const cell = canvas.width / 40;
-  const px = (x, y, w, h, color) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
-  };
-  const mirror = (x, y, w, h, color) => {
-    px(x, y, w, h, color);
-    px(40 - x - w, y, w, h, color);
-  };
-  const fur = ["#8a6b48", "#6f573f", "#9a7650"][(seed >>> 2) % 3];
-  const light = ["#d7b784", "#e4c38e", "#cfa878"][(seed >>> 6) % 3];
-  const armor = ["#354f53", "#5f432b", "#38465f", "#596342"][(seed >>> 9) % 4];
-  const accent = ["#d6a23e", "#c8b07c", "#9fb7c7"][(seed >>> 12) % 3];
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  px(0, 0, 40, 40, "#eadfca");
-  px(6, 5, 8, 11, fur);
-  px(26, 5, 8, 11, fur);
-  px(8, 7, 4, 7, "#f2d7a8");
-  px(28, 7, 4, 7, "#f2d7a8");
-  px(10, 8, 20, 15, fur);
-  px(11, 9, 18, 13, shadeColor(fur, 12));
-  px(13, 13, 14, 8, light);
-  px(15, 11, 10, 3, "#f0cf99");
-  mirror(14, 15, 3, 3, "#141716");
-  px(19, 17, 2, 2, "#6c4931");
-  px(16, 20, 3, 1, "#6c4931");
-  px(21, 20, 3, 1, "#6c4931");
-  px(17, 22, 6, 1, "#4e2c24");
-  px(8, 18, 6, 1, "#6c4931");
-  px(26, 18, 6, 1, "#6c4931");
-  px(8, 20, 6, 1, "#6c4931");
-  px(26, 20, 6, 1, "#6c4931");
-  px(13, 6, 14, 3, "#5c4b37");
-  px(14, 5, 12, 1, accent);
-  px(26, 8, 6, 5, accent);
-  px(27, 9, 4, 2, "#f2dfad");
-  px(11, 24, 18, 4, "#9f3030");
-  px(12, 28, 16, 7, armor);
-  mirror(6, 28, 6, 6, "#6d5a43");
-  px(9, 35, 7, 2, "#3a3329");
-  px(24, 35, 7, 2, "#3a3329");
-  px(30, 22, 4, 10, "#8a6b48");
-  px(32, 20, 2, 4, light);
-  if ((seed >>> 16) & 1) {
-    px(5, 26, 4, 7, "#7f5b36");
-    px(4, 25, 2, 9, "#c8b07c");
-  }
-}
-
-function drawPixelPalico(seedText, options = {}) {
-  const canvas = options.canvas || createAssetCanvas(96, 96);
-  const targetImage = options.targetImage === undefined ? $("palicoImage") : options.targetImage;
-  const effectiveSeed = options.seedText || seedText;
-  if (options.cache && state.activeCampaign) {
-    cacheCanvasAsset({
-      canvas,
-      targetImage,
-      kind: "companion",
-      subdir: "portraits",
-      objectId: options.objectId || slugify(seedText),
-      seedText: effectiveSeed,
-      draw: () => drawPixelPalico(effectiveSeed, { cache: false, canvas, targetImage: null }),
-    });
-    return;
-  }
-  const ctx = canvas.getContext("2d");
-  const seed = hashSeed(effectiveSeed);
-  const size = canvas.width;
-  const cell = size / 32;
-  const px = (x, y, w, h, color) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(x * cell, y * cell, w * cell, h * cell);
-  };
-  const mirror = (x, y, w, h, color) => {
-    px(x, y, w, h, color);
-    px(32 - x - w, y, w, h, color);
-  };
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, size, size);
-  px(0, 0, 32, 32, "#eadfca");
-  px(5, 3, 7, 9, "#69513a");
-  px(20, 3, 7, 9, "#69513a");
-  px(7, 5, 4, 6, "#f2d7a8");
-  px(21, 5, 4, 6, "#f2d7a8");
-  px(8, 8, 16, 13, "#8a6b48");
-  px(9, 9, 14, 11, "#9b7851");
-  px(10, 11, 12, 8, "#d7b784");
-  px(12, 10, 8, 2, "#f0cf99");
-  mirror(11, 13, 3, 3, "#141716");
-  px(15, 15, 2, 2, "#6c4931");
-  px(12, 17, 3, 1, "#6c4931");
-  px(17, 17, 3, 1, "#6c4931");
-  px(13, 19, 6, 1, "#4e2c24");
-  px(5, 15, 5, 1, "#6c4931");
-  px(22, 15, 5, 1, "#6c4931");
-  px(5, 17, 5, 1, "#6c4931");
-  px(22, 17, 5, 1, "#6c4931");
-  px(11, 5, 10, 3, "#5c4b37");
-  px(12, 4, 8, 1, "#d6a23e");
-  px(20, 7, 5, 4, "#d6a23e");
-  px(21, 8, 3, 2, "#f2dfad");
-  px(8, 21, 16, 3, "#9f3030");
-  px(10, 24, 12, 4, (seed & 1) ? "#3b4e53" : "#5f432b");
-  mirror(5, 24, 5, 5, "#6d5a43");
-  px(4, 19, 5, 3, "#8a6b48");
-  px(23, 19, 5, 3, "#8a6b48");
-  if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
 function drawPixelMap(seedText, options = {}) {
@@ -4762,21 +5538,107 @@ function createAssetCanvas(width, height) {
 }
 
 function setAssetImage(targetImage, url) {
-  if (!targetImage || !url) return;
-  targetImage.classList.toggle("formalAsset", /cg_feedback|manual_cg|formal_cg|_VCG|:VCG/i.test(url));
-  if (url.startsWith("/campaign-assets/")) {
-    targetImage.src = `${url}${url.includes("?") ? "&" : "?"}v=${ASSET_GENERATOR_VERSION}`;
+  if (!targetImage) return;
+  const source = String(url || "");
+  if (!source) {
+    targetImage.removeAttribute("src");
+    targetImage.classList.add("is-empty");
     return;
   }
-  targetImage.src = url;
+  targetImage.classList.toggle("formalAsset", /cg_feedback|manual_cg|formal_cg|_VCG|:VCG/i.test(source));
+  targetImage.classList.add("pixelAsset");
+  targetImage.onerror = () => {
+    if (targetImage.dataset.fallbackApplied === "true") {
+      targetImage.removeAttribute("src");
+      targetImage.classList.add("is-empty");
+      return;
+    }
+    targetImage.dataset.fallbackApplied = "true";
+    targetImage.classList.remove("formalAsset");
+    targetImage.src = fallbackImageDataUrl(targetImage.dataset.fallbackSeed || targetImage.dataset.assetKey || targetImage.alt || "fallback");
+  };
+  targetImage.onload = () => {
+    targetImage.classList.remove("is-empty");
+    targetImage.dataset.fallbackApplied = "";
+  };
+  if (source.startsWith("/campaign-assets/")) {
+    targetImage.src = `${source}${source.includes("?") ? "&" : "?"}v=${ASSET_GENERATOR_VERSION}`;
+    return;
+  }
+  targetImage.src = source;
+}
+
+function fallbackImageDataUrl(seedText = "fallback") {
+  const canvas = createAssetCanvas(96, 96);
+  drawPixelFallbackAvatar(seedText, { canvas, targetImage: null, role: "npc" });
+  return canvas.toDataURL("image/png");
+}
+
+function isUrlForCurrentCampaign(url = "", assetKey = "") {
+  const text = String(url || "");
+  if (!text) return false;
+  if (text.startsWith("/campaign-assets/")) {
+    return text.startsWith(`/campaign-assets/${encodeURIComponent(state.activeCampaign)}/`)
+      || text.startsWith(`/campaign-assets/${state.activeCampaign}/`);
+  }
+  if (assetKey) {
+    return String(assetKey).includes(state.activeCampaign || "") && (!state.assetSeed || String(assetKey).includes(state.assetSeed));
+  }
+  return !text.startsWith("/campaign-assets/");
+}
+
+function showMapEmptyState(message = "暂无区域地图") {
+  const img = $("mapImage");
+  const empty = $("mapEmptyState");
+  if (img) {
+    img.removeAttribute("src");
+    img.classList.add("hidden");
+    img.classList.add("is-empty");
+    img.dataset.assetKey = "";
+    img.dataset.campaignId = state.activeCampaign || "";
+  }
+  if (empty) {
+    empty.classList.remove("hidden");
+    const title = empty.querySelector("b");
+    if (title) title.textContent = message;
+  }
+}
+
+function showMapImage(url, assetKey = "") {
+  const img = $("mapImage");
+  const empty = $("mapEmptyState");
+  if (!img || !url) return showMapEmptyState();
+  img.onload = () => {
+    img.classList.remove("hidden");
+    img.classList.remove("is-empty");
+    if (empty) empty.classList.add("hidden");
+  };
+  img.onerror = () => showMapEmptyState("地图加载失败");
+  img.dataset.assetKey = assetKey;
+  img.dataset.campaignId = state.activeCampaign || "";
+  setAssetImage(img, url);
+}
+
+function clearMapPlaceholder() {
+  showMapEmptyState();
 }
 
 async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, seedText, metadata, draw }) {
   const campaignId = state.activeCampaign;
   const campaignSeed = state.assetSeed || campaignId || "campaign";
   const safeId = slugify(objectId || seedText || kind);
-  const key = `${kind}:${campaignId}:${campaignSeed}:${safeId}:v${ASSET_GENERATOR_VERSION}`;
+  const key = makeScopedAssetKey(kind, safeId, metadata?.variant || "default");
   const safeSeed = slugify(campaignSeed).slice(0, 24) || "seed";
+  if (targetImage) {
+    targetImage.dataset.assetKey = key;
+    targetImage.dataset.campaignId = campaignId || "";
+    targetImage.dataset.fallbackSeed = seedText || key;
+  }
+  if (isPlaceholderAssetRequest({ key, kind, metadata, seedText })) {
+    draw();
+    if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
+    return;
+  }
   const locked = lockedAvatarAsset(kind, safeId, metadata);
   if (locked?.url) {
     state.assetCache[key] = { url: locked.url };
@@ -4847,6 +5709,7 @@ function lockedAvatarAsset(kind, safeId, metadata = {}) {
     metadata.actor_id,
   ].map(normalizeActorName).filter(Boolean));
   return (state.cachedAssets || []).find((asset) => {
+    if (!isAssetForCurrentCampaign(asset)) return false;
     if (!asset?.exists || !asset.url || String(asset.kind || "") !== String(kind)) return false;
     if (assetVersionTag(asset) !== "VCG") return false;
     const assetMeta = asset.metadata || {};
@@ -4858,6 +5721,12 @@ function lockedAvatarAsset(kind, safeId, metadata = {}) {
     ].map(normalizeActorName).filter(Boolean);
     return assetNames.some((name) => requestedNames.has(name));
   }) || null;
+}
+
+function isPlaceholderAssetRequest({ key = "", kind = "", metadata = {}, seedText = "" }) {
+  const text = `${key} ${kind} ${seedText} ${metadata?.title || ""} ${metadata?.source || ""} ${metadata?.status || ""}`.toLowerCase();
+  if (metadata?.placeholder || metadata?.fallback || metadata?.cache_policy === "placeholder") return true;
+  return /placeholder|fallback|default_trpg|empty_map|base_map/.test(text);
 }
 
 function assetMetadataReusable(requested, existing) {
@@ -4896,8 +5765,7 @@ function drawImageToCanvas(canvas, url, fallback) {
 
 function updateMapImageIfNeeded(canvas, url) {
   if (canvas.id !== "mapCanvas") return;
-  const image = $("mapImage");
-  if (image && url) image.src = url;
+  if (url) showMapImage(url, state.currentMapAsset?.key || "");
 }
 
 function slugify(value) {

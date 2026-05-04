@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>新建跑团</title>
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css?v=17">
   <style>
     .createShell {
       width: min(1180px, calc(100vw - 28px));
@@ -12,9 +12,9 @@
       padding: 22px 0;
     }
     .createLayout {
-      min-height: calc(100vh - 44px);
+      min-height: calc(100dvh - 44px);
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 380px;
+      grid-template-columns: minmax(0, 1fr) 360px;
       gap: 16px;
     }
     .createMain,
@@ -34,10 +34,13 @@
       font-size: 28px;
       line-height: 1.2;
     }
-    .createHeader p {
+    .createHeader p,
+    .hintLine,
+    .checkText small {
       margin: 6px 0 0;
       color: var(--muted);
-      line-height: 1.65;
+      line-height: 1.6;
+      font-size: 13px;
     }
     .createForm {
       display: grid;
@@ -45,8 +48,20 @@
     }
     .formGrid {
       display: grid;
-      grid-template-columns: 180px minmax(0, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
+    }
+    .formSection {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.52);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .formSection h2 {
+      margin: 0;
+      font-size: 16px;
     }
     .createForm label {
       display: grid;
@@ -58,30 +73,47 @@
     .createForm select,
     .createForm textarea {
       width: 100%;
-      min-height: 44px;
+      min-height: 42px;
       border: 1px solid var(--line-strong);
-      border-radius: 12px;
-      padding: 0 12px;
+      border-radius: 10px;
+      padding: 0 11px;
       background: rgba(255,255,255,.78);
       color: var(--ink);
       font: inherit;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.78);
     }
     .createForm textarea {
-      min-height: 190px;
+      min-height: 150px;
       resize: vertical;
-      padding-top: 11px;
+      padding-top: 10px;
       line-height: 1.65;
     }
-    #customRules {
-      min-height: 110px;
+    .compactTextarea { min-height: 92px; }
+    .checkLabel {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-weight: 700;
+      color: #5c472e;
     }
-    .hintLine {
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.6;
+    .checkLabel input {
+      width: auto;
+      min-height: 0;
+      margin-top: 4px;
     }
+    .checkText {
+      display: grid;
+      gap: 2px;
+    }
+    .conditional {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(248, 242, 232, .72);
+      border: 1px dashed rgba(138, 102, 55, .26);
+    }
+    .conditional.hidden { display: none; }
     .createActions {
       display: flex;
       justify-content: space-between;
@@ -96,10 +128,11 @@
       flex-wrap: wrap;
     }
     .createActions button,
-    .ruleToggle {
-      min-height: 42px;
-      border-radius: 12px;
-      padding: 0 16px;
+    .ruleToggle,
+    .secondaryBtn {
+      min-height: 40px;
+      border-radius: 10px;
+      padding: 0 14px;
       font-weight: 800;
     }
     .primaryCreate {
@@ -138,7 +171,7 @@
     }
     .ruleCard {
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 10px;
       background: rgba(255,255,255,.62);
       overflow: hidden;
     }
@@ -179,45 +212,201 @@
         <div class="createHeader">
           <div>
             <h1>新建跑团</h1>
-            <p>只填写玩家能理解的内容。技术字段、题材和基调由后台生成并写入记忆。</p>
+            <p>先确定故事模板、模型接入、规则显示和安全边界。这里只写初始化记忆，不触发正文生成。</p>
           </div>
           <button type="button" onclick="window.location.href='/'">返回控制台</button>
         </div>
+
         <form class="createForm" id="createForm">
-          <div class="formGrid">
+          <section class="formSection">
+            <h2>故事模板</h2>
+            <div class="formGrid">
+              <label>
+                模板
+                <select id="template" name="template">
+                  <option value="custom">自定义</option>
+                  <option value="coc">COC</option>
+                  <option value="dnd">DND</option>
+                </select>
+              </label>
+              <label>
+                故事名称
+                <input id="name" name="name" autocomplete="off" placeholder="给这个跑团取一个名字">
+              </label>
+            </div>
+            <button class="secondaryBtn" id="restoreTemplateBtn" type="button">恢复模板默认值</button>
+          </section>
+
+          <section class="formSection">
+            <h2>模型调用模式</h2>
             <label>
-              初始化模板
-              <select id="campaignTemplate">
-                <option value="custom">自定义</option>
-                <option value="fate">FATE 亚种圣杯战争</option>
-                <option value="dnd">DND</option>
-                <option value="coc">COC</option>
+              模式
+              <select id="model_mode" name="model_mode">
+                <option value="dual_director_actor">V4 导演 + GPT 演员</option>
+                <option value="deepseek_v4_only">DeepSeek V4 全流程</option>
+                <option value="chatgpt_only">ChatGPT 全流程</option>
+                <option value="custom_model">自定义模型接入</option>
               </select>
             </label>
+            <div class="conditional hidden" id="customModelSection">
+              <div class="formGrid">
+                <label>
+                  Provider
+                  <select id="provider_type" name="provider_type">
+                    <option value="openai_compatible">OpenAI Compatible</option>
+                    <option value="deepseek_compatible">DeepSeek Compatible</option>
+                    <option value="custom_http">Custom HTTP</option>
+                  </select>
+                </label>
+                <label>
+                  用途
+                  <select id="custom_role" name="custom_role">
+                    <option value="single">单模型全流程</option>
+                    <option value="director">只做导演</option>
+                    <option value="actor">只做演员</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                Base URL
+                <input id="custom_base_url" name="custom_base_url" placeholder="https://api.example.com/v1">
+              </label>
+              <label>
+                模型名
+                <input id="custom_model_name" name="custom_model_name" placeholder="deepseek-chat / qwen-plus / gpt-4o-mini">
+              </label>
+              <label>
+                API Key
+                <input id="custom_api_key" name="custom_api_key" type="password" autocomplete="new-password" placeholder="可留空，稍后在本地配置">
+              </label>
+              <p class="hintLine">真实 API Key 不写入 campaign_profile.json；后端只保存 custom_api_key_ref。</p>
+            </div>
+          </section>
+
+          <section class="formSection">
+            <h2>故事设定 / 开场 Prompt</h2>
             <label>
-              API 调用模式
-              <select id="aiMode">
-                <option value="v4_director_chatgpt_api_actor">Deepseek V4 导演 + ChatGPT API 演员生成</option>
-                <option value="v4_api_chatgpt_conversation">Deepseek V4 API + ChatGPT 对话联动</option>
-                <option value="deepseek_v4_only">全程仅使用 Deepseek V4 API</option>
-                <option value="chatgpt_only">全程仅使用 ChatGPT AI</option>
-              </select>
+              用户 Prompt
+              <textarea id="user_prompt" name="user_prompt" placeholder="请描述世界观、主角处境、开局钩子、故事基调和不想出现的内容。"></textarea>
             </label>
-          </div>
-          <label>
-            跑团名称
-            <input id="campaignNameInput" value="怪物猎人风新大陆远征" autocomplete="off">
-          </label>
-          <label>
-            统一 Prompt / 故事钩子
-            <textarea id="userPrompt">新人猎人抵达边境据点，第一份委托来自一支迟迟未归的商队。希望强调真实生态、准备、观察和狩猎风险。</textarea>
-          </label>
-          <p class="hintLine">后台会从这里归纳题材类型与故事基调；双模型模式会自动拆分导演端和演员端 Prompt。</p>
-          <label>
-            自定义新增规则
-            <textarea id="customRules" placeholder="例如：不要让 NPC 直接说出秘密；战斗前必须给玩家撤退和准备机会。"></textarea>
-          </label>
-          <p class="hintLine">自定义规则会由后台归类为导演端或演员端上下文，无需手动指定。</p>
+          </section>
+
+          <section class="formSection">
+            <h2>伙伴 / 副角色</h2>
+            <label class="checkLabel">
+              <input id="companion_enabled" name="companion_enabled" type="checkbox">
+              <span class="checkText">启用伙伴 / 副角色<small>不勾选时不会生成伙伴卡，也不会默认生成任何伙伴类型。</small></span>
+            </label>
+            <div class="conditional hidden" id="companionSection">
+              <div class="formGrid">
+                <label>
+                  生成方式
+                  <select id="companion_mode" name="companion_mode">
+                    <option value="auto">AI 自动生成</option>
+                    <option value="manual">手动填写</option>
+                  </select>
+                </label>
+                <label>
+                  名称
+                  <input id="companion_name" name="companion_name" placeholder="手动模式下建议填写">
+                </label>
+              </div>
+              <label>
+                定位
+                <input id="companion_role" name="companion_role" placeholder="例如：向导、队友、守护者、联系人">
+              </label>
+              <label>
+                性格
+                <textarea class="compactTextarea" id="companion_personality" name="companion_personality"></textarea>
+              </label>
+              <label class="checkLabel">
+                <input id="companion_card_visible" name="companion_card_visible" type="checkbox" checked>
+                <span class="checkText">显示伙伴卡</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="formSection">
+            <h2>角色卡</h2>
+            <label class="checkLabel">
+              <input id="character_card_enabled" name="character_card_enabled" type="checkbox" checked>
+              <span class="checkText">启用角色卡<small>关闭后，正文仍可描述状态，但初始化不要求明文角色卡。</small></span>
+            </label>
+            <div class="conditional" id="characterCardSection">
+              <label>
+                状态显示
+                <select id="stat_visibility" name="stat_visibility">
+                  <option value="narrative">叙事状态</option>
+                  <option value="hybrid">半数值</option>
+                  <option value="numeric">完整数值</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="formSection">
+            <h2>骰子 / 检定</h2>
+            <label class="checkLabel">
+              <input id="dice_enabled" name="dice_enabled" type="checkbox">
+              <span class="checkText">启用骰子 / 检定<small>骰子和角色卡互相独立，可单独开启或关闭。</small></span>
+            </label>
+            <div class="conditional hidden" id="diceSection">
+              <div class="formGrid">
+                <label>
+                  骰子类型
+                  <select id="dice_type" name="dice_type">
+                    <option value="d100">d100</option>
+                    <option value="d20">d20</option>
+                    <option value="custom">custom</option>
+                  </select>
+                </label>
+                <label>
+                  检定模式
+                  <select id="roll_mode" name="roll_mode">
+                    <option value="percentile">percentile</option>
+                    <option value="d20_attribute">d20_attribute</option>
+                    <option value="narrative_check">narrative_check</option>
+                    <option value="custom">custom</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                检定属性
+                <textarea class="compactTextarea" id="roll_attributes" name="roll_attributes" placeholder="每行一个属性"></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="formSection">
+            <h2>规则强度与主角模式</h2>
+            <div class="formGrid">
+              <label>
+                规则强度
+                <select id="rules_strictness" name="rules_strictness">
+                  <option value="light">轻规则</option>
+                  <option value="standard">标准</option>
+                  <option value="strict">严格</option>
+                </select>
+              </label>
+              <label>
+                主角模式
+                <select id="party_mode" name="party_mode">
+                  <option value="solo">单主角</option>
+                  <option value="party">小队</option>
+                  <option value="ensemble">群像</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="formSection">
+            <h2>安全边界 / 禁止内容</h2>
+            <label>
+              安全边界
+              <textarea class="compactTextarea" id="safety_lines" name="safety_lines" placeholder="写下不想出现的内容、需要淡化的描写、禁止主题或玩家边界。"></textarea>
+            </label>
+          </section>
+
           <div class="createActions">
             <div class="notice" id="notice"></div>
             <div class="buttonRow">
@@ -227,19 +416,61 @@
           </div>
         </form>
       </div>
+
       <aside class="panel rulesSide">
         <div class="rulesSideHeader">
-          <h2>内置默认规则</h2>
-          <p>后台会自动聚合生图、对话、行文、NPC 设定规则，并随跑团配置一起进入模型上下文。</p>
+          <h2>内置规则</h2>
+          <p>这些规则会由后端按跑团配置写入初始化记忆。新建页面不会触发正文生成。</p>
         </div>
         <div class="defaultRules" id="defaultRules"></div>
       </aside>
     </section>
   </main>
+
   <script>
     const $ = (id) => document.getElementById(id);
     const canvas = $("rainCanvas");
     const ctx = canvas.getContext("2d");
+
+    const TEMPLATE_DEFAULTS = {
+      custom: {
+        name: "",
+        user_prompt: "",
+        character_card_enabled: true,
+        stat_visibility: "narrative",
+        dice_enabled: false,
+        dice_type: "",
+        roll_mode: "",
+        roll_attributes: [],
+        rules_strictness: "light",
+        party_mode: "solo",
+      },
+      coc: {
+        name: "雾港调查档案",
+        user_prompt: "一组调查员收到一份异常委托，前往一座被旧案、失踪者和地方传闻笼罩的城镇。希望强调线索调查、人物关系、理智压力、资料档案、隐秘真相和逐步升级的异常感。不要过早揭露真相。",
+        character_card_enabled: true,
+        stat_visibility: "numeric",
+        dice_enabled: true,
+        dice_type: "d100",
+        roll_mode: "percentile",
+        roll_attributes: ["侦查", "聆听", "图书馆使用", "心理学", "闪避", "理智"],
+        rules_strictness: "standard",
+        party_mode: "party",
+      },
+      dnd: {
+        name: "边境地城远征",
+        user_prompt: "一支初出茅庐的冒险队抵达边境城镇，第一份委托与失踪商队、地下遗迹和附近怪物活动有关。希望强调队伍协作、职业能力、探索、资源消耗、战斗风险和逐步展开的冒险主线。",
+        character_card_enabled: true,
+        stat_visibility: "numeric",
+        dice_enabled: true,
+        dice_type: "d20",
+        roll_mode: "d20_attribute",
+        roll_attributes: ["力量", "敏捷", "体质", "智力", "感知", "魅力"],
+        rules_strictness: "standard",
+        party_mode: "party",
+      },
+    };
+    const dirty = { name: false, user_prompt: false };
 
     function resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -279,6 +510,96 @@
       return String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
     }
 
+    function setChecked(id, value) {
+      $(id).checked = Boolean(value);
+    }
+
+    function setValue(id, value) {
+      $(id).value = Array.isArray(value) ? value.join("\n") : (value || "");
+    }
+
+    function applyTemplateDefaults(forceText = false) {
+      const template = $("template").value;
+      const defaults = TEMPLATE_DEFAULTS[template] || TEMPLATE_DEFAULTS.custom;
+      if (forceText || !dirty.name) setValue("name", defaults.name);
+      if (forceText || !dirty.user_prompt) setValue("user_prompt", defaults.user_prompt);
+      setChecked("character_card_enabled", defaults.character_card_enabled);
+      setValue("stat_visibility", defaults.stat_visibility);
+      setChecked("dice_enabled", defaults.dice_enabled);
+      setValue("dice_type", defaults.dice_type);
+      setValue("roll_mode", defaults.roll_mode);
+      setValue("roll_attributes", defaults.roll_attributes);
+      setValue("rules_strictness", defaults.rules_strictness);
+      setValue("party_mode", defaults.party_mode);
+      if (forceText) {
+        dirty.name = false;
+        dirty.user_prompt = false;
+      }
+      syncConditionalSections();
+    }
+
+    function syncConditionalSections() {
+      $("customModelSection").classList.toggle("hidden", $("model_mode").value !== "custom_model");
+      $("companionSection").classList.toggle("hidden", !$("companion_enabled").checked);
+      $("characterCardSection").classList.toggle("hidden", !$("character_card_enabled").checked);
+      $("diceSection").classList.toggle("hidden", !$("dice_enabled").checked);
+    }
+
+    function splitLines(value) {
+      return String(value || "").split(/[\n,，、]+/).map((line) => line.trim()).filter(Boolean);
+    }
+
+    function validateForm() {
+      const errors = [];
+      if (!$("name").value.trim()) errors.push("故事名称必填。");
+      if (!$("user_prompt").value.trim()) errors.push("用户 Prompt 必填。");
+      if (!$("model_mode").value) errors.push("模型调用模式必填。");
+      if ($("model_mode").value === "custom_model") {
+        if (!$("custom_base_url").value.trim()) errors.push("自定义模型 Base URL 必填。");
+        if (!$("custom_model_name").value.trim()) errors.push("自定义模型名必填。");
+        if (!$("custom_role").value) errors.push("自定义模型用途必填。");
+        if (!$("custom_api_key").value.trim()) errors.push("API Key 留空，将使用本地已有密钥或稍后配置。");
+      }
+      if ($("companion_enabled").checked && $("companion_mode").value === "manual" && !$("companion_name").value.trim()) {
+        errors.push("手动伙伴模式建议填写伙伴名称。");
+      }
+      if ($("dice_enabled").checked) {
+        if (!$("dice_type").value) errors.push("骰子类型必填。");
+        if (!$("roll_mode").value) errors.push("检定模式必填。");
+        if (!splitLines($("roll_attributes").value).length) errors.push("检定属性至少填写一个。");
+      }
+      return errors;
+    }
+
+    function payloadFromForm() {
+      return {
+        template: $("template").value,
+        name: $("name").value.trim(),
+        model_mode: $("model_mode").value,
+        provider_type: $("provider_type").value,
+        custom_base_url: $("custom_base_url").value.trim(),
+        custom_model_name: $("custom_model_name").value.trim(),
+        custom_api_key: $("custom_api_key").value,
+        custom_role: $("custom_role").value,
+        user_prompt: $("user_prompt").value.trim(),
+        companion_enabled: $("companion_enabled").checked,
+        companion_mode: $("companion_mode").value,
+        companion_name: $("companion_name").value.trim(),
+        companion_role: $("companion_role").value.trim(),
+        companion_personality: $("companion_personality").value.trim(),
+        companion_card_visible: $("companion_card_visible").checked,
+        character_card_enabled: $("character_card_enabled").checked,
+        stat_visibility: $("stat_visibility").value,
+        dice_enabled: $("dice_enabled").checked,
+        dice_type: $("dice_type").value,
+        roll_mode: $("roll_mode").value,
+        roll_attributes: splitLines($("roll_attributes").value),
+        rules_strictness: $("rules_strictness").value,
+        party_mode: $("party_mode").value,
+        safety_lines: splitLines($("safety_lines").value),
+      };
+    }
+
     async function loadDefaults() {
       try {
         const data = await api("/api/new-campaign-defaults");
@@ -306,25 +627,20 @@
 
     async function createCampaign(event) {
       event.preventDefault();
-      const name = $("campaignNameInput").value.trim();
-      const userPrompt = $("userPrompt").value.trim();
-      if (!name || !userPrompt) {
-        notice("请填写跑团名称和统一 Prompt。");
+      const errors = validateForm();
+      const blocking = errors.filter((text) => !text.startsWith("API Key 留空"));
+      if (blocking.length) {
+        notice(blocking[0]);
         return;
       }
+      if (errors.length) notice(errors.join(" "));
       const button = $("createCampaignBtn");
       button.disabled = true;
-      notice("后台正在生成 ID、归纳题材基调并写入规则...");
+      notice("正在创建跑团并写入初始化配置...");
       try {
         const data = await api("/api/create-campaign-smart", {
           method: "POST",
-          body: JSON.stringify({
-            name,
-            template: $("campaignTemplate").value,
-            ai_mode: $("aiMode").value,
-            user_prompt: userPrompt,
-            custom_rules: $("customRules").value.trim(),
-          }),
+          body: JSON.stringify(payloadFromForm()),
         });
         const genre = data.analysis?.genre || "已归纳";
         const tone = data.analysis?.tone || "已归纳";
@@ -337,9 +653,17 @@
     }
 
     window.addEventListener("resize", resize);
+    $("template").addEventListener("change", () => applyTemplateDefaults(false));
+    $("restoreTemplateBtn").addEventListener("click", () => applyTemplateDefaults(true));
+    $("name").addEventListener("input", () => { dirty.name = true; });
+    $("user_prompt").addEventListener("input", () => { dirty.user_prompt = true; });
+    ["model_mode", "companion_enabled", "character_card_enabled", "dice_enabled"].forEach((id) => {
+      $(id).addEventListener("change", syncConditionalSections);
+    });
     $("createForm").addEventListener("submit", createCampaign);
     resize();
     frame();
+    applyTemplateDefaults(false);
     loadDefaults();
   </script>
 </body>

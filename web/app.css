@@ -679,6 +679,9 @@ textarea.dropTarget {
   padding: 8px 10px 4px 0;
   pointer-events: none;
 }
+.attributeStar[hidden] {
+  display: none;
+}
 .attributeStar img {
   width: min(150px, 100%);
   height: auto;
@@ -1489,6 +1492,25 @@ textarea:focus {
 .globalActionBar button:hover {
   border-color: rgba(146,105,49,.58);
   background: #fff6df;
+}
+.rollActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.rollActionBar button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border-color: rgba(71,125,184,.34);
+  background: #eef5ff;
+  color: #285b9f;
+  font-weight: 800;
+}
+.characterPanel.character-disabled .attributeStar,
+.noNumericTrack {
+  display: none;
 }
 .quickBar button {
   min-height: 34px;

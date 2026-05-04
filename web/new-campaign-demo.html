@@ -6,12 +6,30 @@
   <title>新建跑团</title>
   <link rel="stylesheet" href="/app.css?v=17">
   <style>
+    html,
+    body {
+      overflow: hidden;
+    }
+    body.dragScrolling {
+      cursor: grabbing;
+      user-select: none;
+    }
+    body.dragScrolling * {
+      cursor: grabbing !important;
+    }
     .createShell {
-      width: min(1180px, calc(100vw - 28px));
-      margin: 0 auto;
-      padding: 22px 0;
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100dvh;
+      margin: 0;
+      padding: 22px 14px;
+      overflow: auto;
+      cursor: grab;
     }
     .createLayout {
+      width: min(1180px, 100%);
+      margin: 0 auto;
       min-height: calc(100dvh - 44px);
       display: grid;
       grid-template-columns: minmax(0, 1fr) 360px;
@@ -81,6 +99,7 @@
       color: var(--ink);
       font: inherit;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.78);
+      cursor: auto;
     }
     .createForm textarea {
       min-height: 150px;
@@ -189,6 +208,7 @@
       padding: 12px;
       border-top: 1px solid var(--line);
       font-size: 12px;
+      cursor: auto;
     }
     .ruleFiles {
       display: block;
@@ -206,7 +226,7 @@
 </head>
 <body>
   <canvas id="rainCanvas" aria-hidden="true"></canvas>
-  <main class="createShell">
+  <main class="createShell" id="createScroller">
     <section class="createLayout">
       <div class="panel createMain">
         <div class="createHeader">
@@ -492,6 +512,39 @@
       requestAnimationFrame(frame);
     }
 
+    function initDragScroll() {
+      const dragState = { active: false, pointerId: 0, x: 0, y: 0, scrollX: 0, scrollY: 0 };
+      const interactiveSelector = "button, input, select, textarea, a, pre, [data-rule-index]";
+      document.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || event.target.closest(interactiveSelector)) return;
+        dragState.active = true;
+        dragState.pointerId = event.pointerId;
+        dragState.x = event.clientX;
+        dragState.y = event.clientY;
+        dragState.scrollX = window.scrollX;
+        dragState.scrollY = window.scrollY;
+        document.body.classList.add("dragScrolling");
+        document.body.setPointerCapture?.(event.pointerId);
+      });
+      document.addEventListener("pointermove", (event) => {
+        if (!dragState.active || event.pointerId !== dragState.pointerId) return;
+        event.preventDefault();
+        window.scrollTo({
+          left: dragState.scrollX + dragState.x - event.clientX,
+          top: dragState.scrollY + dragState.y - event.clientY,
+          behavior: "auto",
+        });
+      }, { passive: false });
+      const stopDrag = (event) => {
+        if (!dragState.active || event.pointerId !== dragState.pointerId) return;
+        dragState.active = false;
+        document.body.classList.remove("dragScrolling");
+        document.body.releasePointerCapture?.(event.pointerId);
+      };
+      document.addEventListener("pointerup", stopDrag);
+      document.addEventListener("pointercancel", stopDrag);
+    }
+
     async function api(path, options = {}) {
       const res = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -521,8 +574,10 @@
     function applyTemplateDefaults(forceText = false) {
       const template = $("template").value;
       const defaults = TEMPLATE_DEFAULTS[template] || TEMPLATE_DEFAULTS.custom;
-      if (forceText || !dirty.name) setValue("name", defaults.name);
-      if (forceText || !dirty.user_prompt) setValue("user_prompt", defaults.user_prompt);
+      const shouldFillEmptyName = template !== "custom" && !$("name").value.trim();
+      const shouldFillEmptyPrompt = template !== "custom" && !$("user_prompt").value.trim();
+      if (forceText || !dirty.name || shouldFillEmptyName) setValue("name", defaults.name);
+      if (forceText || !dirty.user_prompt || shouldFillEmptyPrompt) setValue("user_prompt", defaults.user_prompt);
       setChecked("character_card_enabled", defaults.character_card_enabled);
       setValue("stat_visibility", defaults.stat_visibility);
       setChecked("dice_enabled", defaults.dice_enabled);
@@ -551,6 +606,7 @@
 
     function validateForm() {
       const errors = [];
+      const warnings = [];
       if (!$("name").value.trim()) errors.push("故事名称必填。");
       if (!$("user_prompt").value.trim()) errors.push("用户 Prompt 必填。");
       if (!$("model_mode").value) errors.push("模型调用模式必填。");
@@ -558,7 +614,7 @@
         if (!$("custom_base_url").value.trim()) errors.push("自定义模型 Base URL 必填。");
         if (!$("custom_model_name").value.trim()) errors.push("自定义模型名必填。");
         if (!$("custom_role").value) errors.push("自定义模型用途必填。");
-        if (!$("custom_api_key").value.trim()) errors.push("API Key 留空，将使用本地已有密钥或稍后配置。");
+        if (!$("custom_api_key").value.trim()) warnings.push("API Key 留空，将使用本地已有密钥或稍后配置。");
       }
       if ($("companion_enabled").checked && $("companion_mode").value === "manual" && !$("companion_name").value.trim()) {
         errors.push("手动伙伴模式建议填写伙伴名称。");
@@ -568,7 +624,7 @@
         if (!$("roll_mode").value) errors.push("检定模式必填。");
         if (!splitLines($("roll_attributes").value).length) errors.push("检定属性至少填写一个。");
       }
-      return errors;
+      return { errors, warnings };
     }
 
     function payloadFromForm() {
@@ -627,16 +683,15 @@
 
     async function createCampaign(event) {
       event.preventDefault();
-      const errors = validateForm();
-      const blocking = errors.filter((text) => !text.startsWith("API Key 留空"));
-      if (blocking.length) {
-        notice(blocking[0]);
+      const { errors, warnings } = validateForm();
+      if (errors.length) {
+        notice(errors[0]);
         return;
       }
-      if (errors.length) notice(errors.join(" "));
       const button = $("createCampaignBtn");
       button.disabled = true;
-      notice("正在创建跑团并写入初始化配置...");
+      const prefix = warnings.length ? `${warnings.join(" ")} ` : "";
+      notice(`${prefix}正在创建跑团并写入初始化配置...`);
       try {
         const data = await api("/api/create-campaign-smart", {
           method: "POST",
@@ -661,6 +716,7 @@
       $(id).addEventListener("change", syncConditionalSections);
     });
     $("createForm").addEventListener("submit", createCampaign);
+    initDragScroll();
     resize();
     frame();
     applyTemplateDefaults(false);

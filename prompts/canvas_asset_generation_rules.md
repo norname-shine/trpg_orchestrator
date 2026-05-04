@@ -100,6 +100,16 @@ These rules describe how the local frontend generates visual assets. They are ru
 - Current frontend generator version: `ASSET_GENERATOR_VERSION = 9`.
 - Version 9 strengthens the Monster Hunter `palico` archetype so companion portraits visibly read as a palico: large cat ears, inner ears, cat nose, whiskers, goggles, and a small mantle.
 
+## Player And Companion Portraits
+
+- Player portraits must be higher-spec than ordinary NPC portraits and must function as stable main-character identifiers.
+- Companion and sub-player portraits must be cached separately from NPC portraits and must never enter the NPC gallery.
+- Companion drawing must first resolve an open-ended `visual_profile` from current campaign memory, companion raw setup, personality, species/form, equipment, and campaign style.
+- `companion_type_raw` is an open string and must be preserved. It is not a whitelist, not a gallery category, and not a reason to turn the companion into an NPC.
+- `companion_type_preset` may add visual rules for common hints such as palico, servant, familiar, construct, or vehicle, but missing a preset must fall back to a custom companion profile rather than the player or NPC template.
+- Companion Canvas metadata must include `runtime_role: companion`, `gallery_category: hidden`, `visible_in_gallery: false`, `not_in_gallery_filters: true`, `render_tier: companion`, `companion_type_raw`, `companion_type_preset`, and `visual_profile`.
+- If `visual_profile.certainty` is not `confirmed`, the generated portrait is only a UI token and must not confirm long-term appearance facts.
+
 ## map_canvas Scene Map Canvas Algorithm
 
 - When `map_canvas` exists, the map generator must use the semantic map algorithm; use `map_route` only as fallback.
@@ -127,9 +137,11 @@ These rules describe how the local frontend generates visual assets. They are ru
 
 ## Fixed Gallery Category Admission
 
-- A Canvas asset may enter the gallery only after it maps to the current campaign's startup fixed category ID allowlist.
-- `cg` is a universal gallery category. Formal story CGs, generated scene images, and player-viewable large image assets must enter `cg`.
-- Fate-style campaigns default to `cg`, `master`, `servant`, `npc`, `scene` / `map`, and `item`; other campaign types use their own startup category config.
+- A Canvas asset may enter the gallery only after it maps to the current campaign's `gallery_taxonomy` allowlist.
+- `gallery_taxonomy.core_categories` are system-stable categories such as `cg`, `npc`, `scene`, and `item`.
+- `gallery_taxonomy.campaign_categories` are campaign-defined extensions from campaign setup, profile, rules, world setup, or template defaults.
+- `all` is a frontend aggregate filter only; it is not a gallery category ID.
+- `companion` is not a gallery category. Current player and current bound companion/sub-player assets default to `gallery_category: hidden`.
 - CG is separate from maps/scenes: CG assets use `cg`; map and location thumbnails use `scene`.
 - Undefined kinds, temporary visual records, backend system notes, and ordinary visual assets that cannot map to a stable entity must not create gallery cards merely because a PNG exists.
 - When a card already exists for the same character, item, or scene, the new Canvas PNG may update that card's thumbnail, status, or detail, but must not create a duplicate card.

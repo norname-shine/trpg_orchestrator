@@ -70,6 +70,7 @@ def build_director_user_prompt(
         [
             "# V4 Director Turn Input",
             f"campaign_id: {campaign_id}",
+            campaign_setup_controls_section(memory),
             "## Player Action",
             player_action,
             "## Capability Plan",
@@ -107,6 +108,7 @@ def build_chatgpt_input(
             "```json\n" + json.dumps(capability_plan, ensure_ascii=False, indent=2) + "\n```",
             "## campaign_id",
             campaign_id,
+            campaign_setup_controls_section(memory),
             "## Player Action",
             player_action,
             "## Visible Memory For This Turn",
@@ -184,6 +186,7 @@ def build_v4_light_action_user_prompt(
     return "\n\n".join(
         [
             f"campaign_id: {campaign_id}",
+            campaign_setup_controls_section(memory),
             "Light action rules:",
             read_prompt("v4_light_action_rules.md"),
             "Player light action:",
@@ -197,6 +200,68 @@ def build_v4_light_action_user_prompt(
             "Output strict JSON only. The JSON must contain blocks, summary, and state_writeback. Keep prose concise and operational because this is a lightweight fixed action.",
         ]
     )
+
+
+def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
+    profile = memory.get("campaign_profile.json", {}) if isinstance(memory, dict) else {}
+    profile = profile if isinstance(profile, dict) else {}
+    rules = profile.get("rules_config") if isinstance(profile.get("rules_config"), dict) else {}
+    companion = profile.get("companion_config") if isinstance(profile.get("companion_config"), dict) else {}
+    model = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
+    controls = {
+        "template": _valid_template(profile.get("template")),
+        "model_mode": str(model.get("model_mode") or "").strip(),
+        "character_card_enabled": bool(rules.get("character_card_enabled", True)),
+        "stat_visibility": _choice(rules.get("stat_visibility"), {"narrative", "hybrid", "numeric"}, "narrative"),
+        "dice_enabled": bool(rules.get("dice_enabled")),
+        "dice_type": str(rules.get("dice_type") or "").strip(),
+        "roll_mode": str(rules.get("roll_mode") or "").strip(),
+        "roll_attributes": _string_list(rules.get("roll_attributes")),
+        "rules_strictness": _choice(rules.get("rules_strictness"), {"light", "standard", "strict"}, "light"),
+        "party_mode": _choice(rules.get("party_mode"), {"solo", "party", "ensemble"}, "solo"),
+        "companion_enabled": bool(companion.get("companion_enabled")),
+        "companion_mode": _choice(companion.get("companion_mode"), {"auto", "manual"}, "auto"),
+        "companion_name": str(companion.get("companion_name") or "").strip(),
+        "companion_role": str(companion.get("companion_role") or "").strip(),
+        "companion_personality": str(companion.get("companion_personality") or "").strip(),
+        "safety_lines": _string_list(profile.get("safety_lines")),
+    }
+    rules_text = [
+        "If character_card_enabled=false, do not force character-card numbers or character_card_update payloads.",
+        "If stat_visibility=narrative, do not expose explicit HP/SAN/AC/attribute numbers in prose or writeback.",
+        "If stat_visibility=hybrid, use coarse state bands or percentages only; avoid full explicit attributes.",
+        "If stat_visibility=numeric, explicit stats are allowed when supported by memory and rules.",
+        "If dice_enabled=false, do not proactively ask for rolls.",
+        "If dice_enabled=true, key risky actions may request checks using dice_type, roll_mode, and roll_attributes.",
+        "If companion_enabled=true, the long-term companion should enter story continuity and memory.",
+        "If companion_enabled=false, do not create a default companion, servant, palico, familiar, or sidekick.",
+        "Always obey safety_lines.",
+    ]
+    return "\n".join([
+        "## Campaign Setup Controls",
+        "These controls override generic template habits for this campaign.",
+        "```json\n" + json.dumps(controls, ensure_ascii=False, indent=2) + "\n```",
+        "### Campaign Setup Rules",
+        "\n".join(f"- {line}" for line in rules_text),
+    ])
+
+
+def _valid_template(value: Any) -> str:
+    template = str(value or "custom").strip().lower()
+    return template if template in {"custom", "coc", "dnd"} else "custom"
+
+
+def _choice(value: Any, allowed: set[str], fallback: str) -> str:
+    text = str(value or fallback).strip()
+    return text if text in allowed else fallback
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        rows = value
+    else:
+        rows = str(value or "").replace("，", "\n").replace(",", "\n").splitlines()
+    return [str(item).strip() for item in rows if str(item).strip()]
 
 
 def build_audit_user_prompt(

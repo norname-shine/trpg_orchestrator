@@ -1,5 +1,24 @@
 # Canvas 资产生成规则
 
+## 同步补充：玩家与伙伴头像
+
+- 玩家头像规格必须高于普通 NPC，并作为主角色稳定识别标识。
+- 伙伴 / 副玩家头像必须与 NPC 头像分开缓存，不得进入 NPC 栏或资料夹。
+- 伙伴绘制前必须先从当前团记忆、伙伴原始设定、性格、物种 / 形态、装备与世界风格解析开放式 `visual_profile`。
+- `companion_type_raw` 是开放字符串，必须保留原文；它不是白名单，不是资料夹分类，也不能把未知伙伴降级成 NPC。
+- `companion_type_preset` 只用于常见提示的视觉增强，例如 palico、servant、familiar、construct、vehicle；未命中 preset 时必须生成 custom 伙伴 profile，不得复用玩家或 NPC 模板。
+- 伙伴 Canvas metadata 必须包含 `runtime_role: companion`、`gallery_category: hidden`、`visible_in_gallery: false`、`not_in_gallery_filters: true`、`render_tier: companion`、`companion_type_raw`、`companion_type_preset` 和 `visual_profile`。
+- 如果 `visual_profile.certainty` 不是 `confirmed`，头像只是 UI 标识，不得把未确认外观写成长期事实。
+
+## 同步补充：gallery_taxonomy 准入
+
+- Canvas 资产是否进入资料夹，必须先通过当前团 `gallery_taxonomy` 白名单。
+- `gallery_taxonomy.core_categories` 是系统稳定分类，例如 `cg`、`npc`、`scene`、`item`。
+- `gallery_taxonomy.campaign_categories` 是当前团扩展分类，来自建团配置、campaign profile、rules、world setup 或模板默认。
+- `all` 只是前端聚合筛选，不是资料夹分类 ID。
+- `companion` 不是资料夹分类。当前玩家与当前绑定伙伴 / 副玩家默认 `gallery_category: hidden`。
+- 未在 taxonomy 中注册的分类不得只因为 PNG 存在就自动创建筛选或资料卡。
+
 本规则说明本地前端如何生成视觉资产。它是 Codex 与 Web 控制台的运行时规则，不是要求 ChatGPT 直接生成图片的规则。
 
 ## 总边界

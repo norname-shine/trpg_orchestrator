@@ -1,0 +1,21 @@
+{
+  "browser": "chrome",
+  "executablePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "headless": true,
+  "url": "http://127.0.0.1:8787/",
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "panelDrag": {
+    "panelSelector": ".logPanel",
+    "handleSelector": ".logPanel .logHeader h2",
+    "deltaX": 220,
+    "deltaY": 90
+  },
+  "dropTargets": {
+    "taskItemSelector": "#sideList li",
+    "galleryItemSelector": "#galleryGrid article:not(.hidden)",
+    "inputSelector": "#actionInput"
+  }
+}

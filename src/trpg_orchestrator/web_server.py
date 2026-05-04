@@ -421,7 +421,7 @@ def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
             data.setdefault("campaign_id", campaign_id)
             data.setdefault("asset_seed", campaign_asset_seed(campaign_id))
             data.setdefault("assets", {})
-            migrated = migrateAssetKinds(data, {})
+            migrated = migrateAssetKinds(data, build_actor_identity_context(campaign_id))
             if migrated.get("_migration_changed"):
                 migrated.pop("_migration_changed", None)
                 write_json(path, migrated)
@@ -573,6 +573,407 @@ def entity_key_for_asset(asset: dict[str, Any]) -> str:
     return f"{role}:{safe_segment(str(name).lower())}"
 
 
+def actor_identity_names_from_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
+    player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
+    provided = first_dict(player.get("character_card"), prompt.get("character_card"))
+    identity = first_dict(provided.get("identity"), player.get("confirmed_identity"), prompt.get("confirmed_identity"))
+    companion = first_dict(provided.get("companion"), prompt.get("companion_card"))
+    if not companion and isinstance(identity.get("companion"), dict):
+        companion = identity.get("companion")
+    return identity, companion
+
+
+def actor_identity_context_from_state(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    identity, companion = actor_identity_names_from_state(state)
+    player_name = str(identity.get("name") or inferred_player_name(
+        state.get("player", {}) if isinstance(state.get("player"), dict) else {},
+        state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {},
+    ) or "").strip()
+    companion_name = str(companion.get("name") or "").strip()
+    companion_config = state.get("companion_config") if isinstance(state.get("companion_config"), dict) else {}
+    if not companion_name and companion_config.get("companion_enabled") and companion_config.get("companion_name"):
+        companion_name = str(companion_config.get("companion_name") or "").strip()
+    player_key = f"player:{stable_entity_name(player_name or campaign_id)}"
+    companion_key = f"companion:{stable_entity_name(companion_name)}" if companion_name else ""
+    companion_type = str(
+        companion.get("companion_type")
+        or companion.get("kind")
+        or companion.get("type")
+        or companion_config.get("companion_type")
+        or companion.get("archetype")
+        or ""
+    ).strip()
+    return {
+        "campaign_id": campaign_id,
+        "player": {"name": player_name, "entity_key": player_key},
+        "companion": {
+            "name": companion_name,
+            "entity_key": companion_key,
+            "companion_type": companion_type,
+            "companion_type_raw": companion_type,
+            "archetype": str(companion.get("archetype") or companion.get("class") or companion.get("kind") or "").strip(),
+            "species": str(companion.get("species") or companion.get("race") or "").strip(),
+            "source": companion,
+        },
+        "protected_actor_keys": {key for key in (player_key, companion_key) if key},
+        "protected_actor_names": {normalized_name(name) for name in (player_name, companion_name) if name},
+    }
+
+
+def build_actor_identity_context(campaign_id: str) -> dict[str, Any]:
+    try:
+        return actor_identity_context_from_state(campaign_id, campaign_state(campaign_id))
+    except Exception:
+        return {"campaign_id": campaign_id, "player": {}, "companion": {}, "protected_actor_keys": set(), "protected_actor_names": set()}
+
+
+def build_companion_visual_profile(companion: dict[str, Any], campaign_memory: dict[str, Any] | None = None, style_profile: dict[str, Any] | None = None, image_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    companion = companion if isinstance(companion, dict) else {}
+    campaign_memory = campaign_memory if isinstance(campaign_memory, dict) else {}
+    style_profile = style_profile if isinstance(style_profile, dict) else {}
+    image_profile = image_profile if isinstance(image_profile, dict) else {}
+    raw_type = str(
+        companion.get("companion_type_raw")
+        or companion.get("companion_type")
+        or companion.get("kind")
+        or companion.get("type")
+        or companion.get("archetype")
+        or companion.get("role")
+        or ""
+    ).strip()
+    species = list_payload(companion.get("species") or companion.get("race") or companion.get("origin") or "")
+    archetype = str(companion.get("archetype") or companion.get("class") or companion.get("kind") or "").strip()
+    personality = list_payload(companion.get("personality") or companion.get("temperament") or "")
+    equipment = list_payload(companion.get("equipment") or companion.get("weapon") or companion.get("gear") or "")
+    style_markers = list_payload(style_profile.get("style") or style_profile.get("tone") or image_profile.get("style_preset") or campaign_memory.get("template") or "")
+    text = " ".join([raw_type, archetype, " ".join(species), " ".join(personality), " ".join(equipment)]).lower()
+    preset = "custom"
+    body_form = raw_type or archetype or "distinct campaign companion"
+    body_structure: list[str] = []
+    material_traits: list[str] = []
+    face_rules: list[str] = []
+    silhouette_rules = ["must differ from the main player silhouette", "do not reuse player face template"]
+    pose_rules = ["companion-focused posture", "clear role silhouette"]
+    color_rules = ["use campaign palette markers without copying the player palette"]
+    if re.search(r"palico|felyne|cat|feline|猫|艾露", text):
+        preset = "palico"
+        body_form = "small feline companion"
+        body_structure.extend(["large ears", "compact body", "tail marker"])
+        material_traits.extend(["fur", "cloth or leather support gear"])
+        face_rules.extend(["cat nose", "whisker marks", "non-human muzzle"])
+    elif re.search(r"servant|assassin|caster|saber|knight|rider|lancer|archer|从者|英灵|骑士|术士|暗杀", text):
+        preset = "servant"
+        body_form = "high-spec humanoid companion with class silhouette"
+        body_structure.extend(["ceremonial posture", "class-readable outline"])
+        material_traits.extend(["ritual cloth", "metal or shadow accents"])
+        face_rules.extend(["masked or stylized face option", "not the player face"])
+    elif re.search(r"familiar|spirit|ghost|wisp|summon|灵|魔宠|使魔|召唤", text):
+        preset = "familiar"
+        body_form = "spiritual or magical familiar"
+        body_structure.extend(["floating or compact magical body", "non-ordinary companion outline"])
+        material_traits.extend(["glow", "mist", "soft magical edges"])
+        face_rules.extend(["symbolic face", "non-player facial structure"])
+    elif re.search(r"mechanical|construct|robot|drone|ai|android|mecha|机械|构装|无人机|机器人", text):
+        preset = "mechanical"
+        body_form = "mechanical companion"
+        body_structure.extend(["segmented chassis", "visible joints", "device-like head"])
+        material_traits.extend(["metal", "glass", "indicator lights"])
+        face_rules.extend(["sensor face", "no human skin template"])
+    elif re.search(r"ship|vehicle|bike|car|mount|载具|船|车|坐骑", text):
+        preset = "vehicle"
+        body_form = "vehicle or mount companion"
+        body_structure.extend(["vehicle silhouette", "front marker", "utility attachments"])
+        material_traits.extend(["painted shell", "metal", "worn utility surfaces"])
+        face_rules.extend(["no human face"])
+    certainty = "confirmed" if raw_type or species or archetype else "fallback"
+    return {
+        "source": "resolved_from_campaign_memory",
+        "companion_type_raw": raw_type,
+        "companion_type_preset": preset,
+        "body_form": body_form,
+        "body_structure": body_structure or ["custom companion silhouette", "distinct from player body"],
+        "species_or_origin": species or list_payload(archetype),
+        "material_traits": material_traits or ["campaign-appropriate material markers"],
+        "costume_or_equipment": equipment,
+        "temperament": personality,
+        "campaign_style_markers": style_markers,
+        "scale": str(companion.get("scale") or "companion scale"),
+        "silhouette_rules": silhouette_rules,
+        "face_rules": face_rules or ["do not reuse player face template", "avoid ordinary NPC face unless confirmed"],
+        "pose_rules": pose_rules,
+        "color_rules": color_rules,
+        "avoid": [
+            "do_not_reuse_player_face_template",
+            "do_not_draw_as_ordinary_npc_unless_confirmed",
+            "do_not_ignore_non_human_structure",
+        ],
+        "certainty": certainty,
+    }
+
+
+def actor_name_candidates(asset: dict[str, Any], key: str = "") -> set[str]:
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    values = {
+        asset.get("display_name"),
+        asset.get("title"),
+        asset.get("name"),
+        asset.get("object_id"),
+        metadata.get("display_name"),
+        metadata.get("title"),
+        metadata.get("name"),
+        metadata.get("object_id"),
+        metadata.get("actor_id"),
+        metadata.get("avatar_key"),
+    }
+    entity_key = str(metadata.get("entity_key") or asset.get("entity_key") or "")
+    if ":" in entity_key:
+        values.add(entity_key.split(":", 1)[1])
+    for part in re.split(r"[:/\\_-]+", str(key or asset.get("key") or "")):
+        values.add(part)
+    return {normalized_name(value) for value in values if normalized_name(value)}
+
+
+def _identity_template(role: str, entity_key: str, display_name: str = "") -> dict[str, Any]:
+    if role == "player":
+        return {
+            "entity_key": entity_key,
+            "runtime_role": "player",
+            "role": "player",
+            "companion_type": "",
+            "archetype": "",
+            "species": "",
+            "asset_kind": "player_portrait",
+            "portrait_asset_kind": "player_portrait",
+            "display_slot": "main_character_card",
+            "detail_slot": "main_character_detail",
+            "gallery_category": "hidden",
+            "visible_in_gallery": False,
+            "not_in_gallery_filters": True,
+            "avatar_key": entity_key,
+            "render_tier": "player",
+            "avatar_locked_by_vcg": False,
+            "display_name": display_name,
+        }
+    if role == "companion":
+        return {
+            "entity_key": entity_key,
+            "runtime_role": "companion",
+            "role": "companion",
+            "companion_type": "generic",
+            "companion_type_raw": "",
+            "companion_type_preset": "custom",
+            "archetype": "",
+            "species": "",
+            "asset_kind": "companion_portrait",
+            "portrait_asset_kind": "companion_portrait",
+            "display_slot": "companion_card",
+            "detail_slot": "companion_detail",
+            "gallery_category": "hidden",
+            "visible_in_gallery": False,
+            "not_in_gallery_filters": True,
+            "avatar_key": entity_key,
+            "render_tier": "companion",
+            "avatar_locked_by_vcg": False,
+            "display_name": display_name,
+        }
+    category = "npc" if role in {"", "unknown", "npc"} else role
+    return {
+        "entity_key": entity_key,
+        "runtime_role": "npc" if role in {"", "unknown"} else role,
+        "role": "npc" if role in {"", "unknown"} else role,
+        "companion_type": "",
+        "archetype": "",
+        "species": "",
+        "asset_kind": "npc_portrait" if category in {"npc", "master", "servant", "key_character"} else ROLE_ASSET_KIND.get(category, f"{category}_image"),
+        "portrait_asset_kind": "npc_portrait" if category in {"npc", "master", "servant", "key_character"} else ROLE_ASSET_KIND.get(category, f"{category}_image"),
+        "display_slot": "dossier_gallery",
+        "detail_slot": "dossier_detail",
+        "gallery_category": "npc" if category == "key_character" else category,
+        "visible_in_gallery": category != "hidden",
+        "not_in_gallery_filters": False,
+        "avatar_key": entity_key,
+        "render_tier": "npc" if category in {"npc", "master", "servant", "key_character"} else category,
+        "avatar_locked_by_vcg": False,
+        "display_name": display_name,
+    }
+
+
+def resolve_entity_role(entity_or_asset: dict[str, Any], memory: dict[str, Any] | None = None, manifest_entry: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = memory if isinstance(memory, dict) else {}
+    asset = {**(manifest_entry or {}), **(entity_or_asset or {})}
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    key = str(asset.get("key") or "")
+    display = asset_display_name(asset) or readable_asset_name(key, str(asset.get("kind") or ""))
+    names = actor_name_candidates(asset, key)
+    existing_entity_key = str(metadata.get("entity_key") or asset.get("entity_key") or "").strip()
+    player = context.get("player") if isinstance(context.get("player"), dict) else {}
+    companion = context.get("companion") if isinstance(context.get("companion"), dict) else {}
+    player_key = str(player.get("entity_key") or "")
+    companion_key = str(companion.get("entity_key") or "")
+    player_name = normalized_name(player.get("name"))
+    companion_name = normalized_name(companion.get("name"))
+    if player_key and (existing_entity_key == player_key or existing_entity_key.startswith("player:") or (player_name and player_name in names)):
+        return _identity_template("player", player_key, str(player.get("name") or display))
+    if companion_key and (
+        existing_entity_key == companion_key
+        or existing_entity_key.startswith("companion:")
+        or (existing_entity_key.startswith(("npc:", "master:", "servant:")) and companion_name and existing_entity_key.split(":", 1)[1] == stable_entity_name(companion.get("name")))
+        or (companion_name and companion_name in names)
+    ):
+        identity = _identity_template("companion", companion_key, str(companion.get("name") or display))
+        identity["companion_type"] = str(companion.get("companion_type_raw") or companion.get("companion_type") or "")
+        identity["companion_type_raw"] = str(companion.get("companion_type_raw") or companion.get("companion_type") or "")
+        identity["archetype"] = str(companion.get("archetype") or "")
+        identity["species"] = str(companion.get("species") or "")
+        identity["visual_profile"] = build_companion_visual_profile(companion.get("source") or companion, context, {}, {})
+        identity["companion_type_preset"] = identity["visual_profile"].get("companion_type_preset", "custom")
+        return identity
+    role = str(metadata.get("runtime_role") or metadata.get("role") or asset.get("runtime_role") or asset.get("role") or infer_asset_role(asset) or "").lower()
+    category = str(metadata.get("gallery_category") or asset.get("gallery_category") or normalize_frontend_gallery_kind(asset.get("kind")) or role or "npc").lower()
+    if role in {"player", "companion"}:
+        role = "npc"
+    if category in {"", "character", "gallery_npc", "npc_portrait"}:
+        category = "npc"
+    if role in {"item", "scene", "map", "monster", "cg"}:
+        category = role
+    if category in {"master", "servant", "npc", "monster"}:
+        role = "npc" if category in {"master", "servant"} else category
+    entity_key = existing_entity_key or entity_key_for_asset(asset)
+    if category in {"master", "servant"} and not entity_key.startswith(f"{category}:"):
+        entity_key = f"{category}:{stable_entity_name(display or key)}"
+    if category == "npc" and not entity_key.startswith("npc:"):
+        entity_key = f"npc:{stable_entity_name(display or key)}"
+    identity = _identity_template(role or category or "npc", entity_key, display)
+    identity["gallery_category"] = category
+    identity["visible_in_gallery"] = category != "hidden"
+    return identity
+
+
+def add_migration_note(entry: dict[str, Any], note: str) -> None:
+    notes = entry.setdefault("migration_notes", [])
+    if isinstance(notes, list) and note not in notes:
+        notes.append(note)
+
+
+def apply_actor_identity_to_asset(entry: dict[str, Any], identity: dict[str, Any]) -> None:
+    metadata = entry.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        entry["metadata"] = metadata
+    old_kind = str(entry.get("kind") or "")
+    old_role = str(metadata.get("role") or entry.get("role") or "")
+    old_category = str(metadata.get("gallery_category") or entry.get("gallery_category") or "")
+    old_visible = metadata.get("visible_in_gallery", entry.get("visible_in_gallery", None))
+    entry["kind"] = identity["asset_kind"]
+    entry["role"] = identity["role"]
+    entry["entity_key"] = identity["entity_key"]
+    entry["visible_in_gallery"] = bool(identity["visible_in_gallery"])
+    metadata.update({
+        "role": identity["role"],
+        "runtime_role": identity["runtime_role"],
+        "entity_key": identity["entity_key"],
+        "avatar_key": identity["avatar_key"],
+        "portrait_asset_kind": identity["portrait_asset_kind"],
+        "gallery_category": identity["gallery_category"],
+        "visible_in_gallery": bool(identity["visible_in_gallery"]),
+        "not_in_gallery_filters": bool(identity["not_in_gallery_filters"]),
+        "display_slot": identity["display_slot"],
+        "detail_slot": identity["detail_slot"],
+        "render_tier": identity["render_tier"],
+    })
+    for field in ("companion_type", "companion_type_raw", "companion_type_preset", "archetype", "species", "display_name"):
+        if identity.get(field):
+            metadata[field] = identity[field]
+    if identity.get("visual_profile") and not isinstance(metadata.get("visual_profile"), dict):
+        metadata["visual_profile"] = identity["visual_profile"]
+    if identity["runtime_role"] == "player":
+        if old_role != "player":
+            add_migration_note(entry, "actor_role_corrected_to_player")
+        if old_kind != "player_portrait":
+            add_migration_note(entry, "portrait_kind_corrected_to_player_portrait")
+    if identity["runtime_role"] == "companion":
+        if old_role != "companion":
+            add_migration_note(entry, "actor_role_corrected_to_companion")
+        if old_kind != "companion_portrait":
+            add_migration_note(entry, "portrait_kind_corrected_to_companion_portrait")
+    if identity["runtime_role"] in {"player", "companion"}:
+        if old_category and old_category != "hidden":
+            add_migration_note(entry, "gallery_category_corrected_to_hidden_for_player_or_companion")
+        if old_visible is not False:
+            add_migration_note(entry, "visible_in_gallery_corrected_false_for_player_or_companion")
+
+
+def is_gallery_visible_asset(asset: dict[str, Any]) -> bool:
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    role = str(metadata.get("runtime_role") or metadata.get("role") or asset.get("runtime_role") or asset.get("role") or "").lower()
+    category = str(metadata.get("gallery_category") or asset.get("gallery_category") or normalize_frontend_gallery_kind(asset.get("kind")) or "").lower()
+    if asset.get("debug_only") or metadata.get("debug_only"):
+        return False
+    if asset.get("visible_in_gallery") is False or metadata.get("visible_in_gallery") is False:
+        return False
+    if metadata.get("not_in_gallery_filters") is True or asset.get("not_in_gallery_filters") is True:
+        return False
+    if category in {"", "hidden", "companion"}:
+        return False
+    if role in {"player", "companion"}:
+        return False
+    return True
+
+
+def is_vcg_avatar_asset(asset: dict[str, Any]) -> bool:
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    text = " ".join(str(value or "") for value in (
+        asset.get("key"), asset.get("path"), asset.get("filename"),
+        metadata.get("avatar_source"), metadata.get("source"), metadata.get("generator_version"),
+    )).lower()
+    return (
+        ":vcg" in str(asset.get("key") or "").lower()
+        or "_vcg" in text
+        or str(metadata.get("avatar_source") or "").lower() == "vcg"
+        or str(metadata.get("source") or "").lower() in {"formal_cg_crop", "cg_feedback", "manual_import_cg_crop", "vcg"}
+        or str(metadata.get("generator_version") or "").upper() == "VCG"
+    )
+
+
+def avatar_asset_priority(asset: dict[str, Any]) -> tuple[int, int, str]:
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    source = str(metadata.get("source") or metadata.get("avatar_source") or "").lower()
+    if is_vcg_avatar_asset(asset):
+        tier = 500
+    elif source in {"manual_import_cg_crop", "formal_cg_crop", "cg_feedback"}:
+        tier = 400
+    elif int(asset.get("generator_version") or 0) >= 17:
+        tier = 300
+    elif asset.get("placeholder") or metadata.get("placeholder"):
+        tier = 0
+    else:
+        tier = 200
+    try:
+        version = int(asset.get("generator_version") or 0)
+    except Exception:
+        version = 0
+    return (tier, version, str(asset.get("created_at") or asset.get("key") or ""))
+
+
+def select_best_avatar_asset(entity_key: str, portrait_asset_kind: str, assets: list[dict[str, Any]]) -> dict[str, Any]:
+    exact = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        if str(metadata.get("entity_key") or asset.get("entity_key") or "") != entity_key:
+            continue
+        kind = normalize_asset_kind(asset.get("kind"), metadata, str(asset.get("key") or ""))
+        portrait_kind = str(metadata.get("portrait_asset_kind") or kind)
+        if portrait_kind != portrait_asset_kind and kind != portrait_asset_kind:
+            continue
+        exact.append(asset)
+    if not exact:
+        return {}
+    return sorted(exact, key=avatar_asset_priority, reverse=True)[0]
+
+
 def looks_like_hash_title(value: Any) -> bool:
     text = str(value or "").strip()
     return bool(re.fullmatch(r"[0-9a-fA-F]{10,}", text) or re.fullmatch(r"[0-9a-fA-F]{6,}(?:[-_:][0-9a-fA-F]{4,})+", text))
@@ -599,6 +1000,7 @@ def migrateAssetKinds(manifest: dict[str, Any], entityIndex: dict[str, Any] | No
     if not isinstance(assets, dict):
         return manifest
     changed = False
+    context = entityIndex if isinstance(entityIndex, dict) else {}
     for key, entry in list(assets.items()):
         if not isinstance(entry, dict):
             continue
@@ -607,12 +1009,34 @@ def migrateAssetKinds(manifest: dict[str, Any], entityIndex: dict[str, Any] | No
             metadata = {}
             entry["metadata"] = metadata
         before = json.dumps(entry, ensure_ascii=False, sort_keys=True)
-        role = infer_asset_role({"key": key, **entry, "metadata": metadata})
-        normalized_kind = normalize_asset_kind(entry.get("kind"), metadata, key)
-        entry["kind"] = normalized_kind
-        if role:
-            metadata.setdefault("role", role)
-        metadata.setdefault("entity_key", entity_key_for_asset({"key": key, **entry, "metadata": metadata}))
+        identity = resolve_entity_role({"key": key, **entry, "metadata": metadata}, context, entry)
+        if identity.get("runtime_role") in {"player", "companion"}:
+            apply_actor_identity_to_asset(entry, identity)
+            normalized_kind = str(entry.get("kind") or "")
+        else:
+            role = infer_asset_role({"key": key, **entry, "metadata": metadata})
+            normalized_kind = normalize_asset_kind(entry.get("kind"), metadata, key)
+            entry["kind"] = normalized_kind
+            if role:
+                metadata["role"] = role
+                metadata["runtime_role"] = metadata.get("runtime_role") or role
+            metadata["entity_key"] = metadata.get("entity_key") or entity_key_for_asset({"key": key, **entry, "metadata": metadata})
+            category = str(metadata.get("gallery_category") or normalize_frontend_gallery_kind(normalized_kind) or role or "").lower()
+            if category == "companion":
+                category = "npc"
+            if normalized_kind == "npc_portrait" and category in {"", "character", "portrait"}:
+                category = "npc"
+            if category:
+                metadata["gallery_category"] = category
+            if normalized_kind == "npc_portrait" and metadata.get("runtime_role") not in {"player", "companion"}:
+                metadata["role"] = "npc"
+                metadata["runtime_role"] = "npc"
+                metadata["portrait_asset_kind"] = "npc_portrait"
+                metadata["render_tier"] = "npc"
+                metadata.setdefault("display_slot", "dossier_gallery")
+                metadata.setdefault("detail_slot", "dossier_detail")
+                metadata["visible_in_gallery"] = metadata.get("visible_in_gallery", entry.get("visible_in_gallery", True))
+                entry["visible_in_gallery"] = bool(metadata["visible_in_gallery"])
         display = asset_display_name({"key": key, **entry, "metadata": metadata})
         if display:
             metadata.setdefault("display_name", display)
@@ -622,14 +1046,14 @@ def migrateAssetKinds(manifest: dict[str, Any], entityIndex: dict[str, Any] | No
             entry["debug_only"] = True
             metadata["visible_in_gallery"] = False
             metadata["debug_only"] = True
-        elif (not title or looks_like_generated_asset_title(title, key)) and normalized_kind in {"npc_portrait", "companion_portrait"}:
+        elif identity.get("runtime_role") not in {"player", "companion"} and (not title or looks_like_generated_asset_title(title, key)) and normalized_kind in {"npc_portrait", "companion_portrait"}:
             entry["visible_in_gallery"] = False
             entry["debug_only"] = True
             metadata["visible_in_gallery"] = False
             metadata["debug_only"] = True
-        elif normalized_kind in GALLERY_VISIBLE_KINDS:
-            entry.setdefault("visible_in_gallery", True)
-            metadata.setdefault("visible_in_gallery", entry.get("visible_in_gallery", True))
+        elif normalized_kind in GALLERY_VISIBLE_KINDS and identity.get("runtime_role") not in {"player", "companion"}:
+            entry["visible_in_gallery"] = bool(metadata.get("visible_in_gallery", entry.get("visible_in_gallery", True)))
+            metadata["visible_in_gallery"] = entry.get("visible_in_gallery", True)
         note = f"asset_kind_migrated:{normalized_kind}"
         notes = entry.setdefault("migration_notes", [])
         if isinstance(notes, list) and note not in notes and before != json.dumps(entry, ensure_ascii=False, sort_keys=True):
@@ -832,6 +1256,11 @@ def normalized_asset_entry(campaign_id: str, key: str, entry: dict[str, Any]) ->
     display_name = asset_display_name({**normalized, "kind": kind})
     visible = entry.get("visible_in_gallery", metadata.get("visible_in_gallery", True))
     debug_only = bool(entry.get("debug_only") or metadata.get("debug_only"))
+    runtime_role = str(metadata.get("runtime_role") or role or "").lower()
+    gallery_category = str(metadata.get("gallery_category") or normalize_frontend_gallery_kind(kind) or "").lower()
+    not_in_filters = bool(metadata.get("not_in_gallery_filters") or entry.get("not_in_gallery_filters"))
+    if runtime_role in {"player", "companion"} or gallery_category == "hidden" or not_in_filters:
+        visible = False
     return {
         **entry,
         "campaign_id": str(entry.get("campaign_id") or campaign_id),
@@ -839,16 +1268,26 @@ def normalized_asset_entry(campaign_id: str, key: str, entry: dict[str, Any]) ->
         "key": str(entry.get("key") or key),
         "kind": kind,
         "role": role,
+        "runtime_role": runtime_role,
         "entity_key": entity_key,
         "display_name": display_name,
         "visible_in_gallery": bool(visible) and not debug_only,
+        "gallery_category": gallery_category,
+        "not_in_gallery_filters": not_in_filters,
+        "portrait_asset_kind": str(metadata.get("portrait_asset_kind") or kind),
+        "render_tier": str(metadata.get("render_tier") or ""),
         "debug_only": debug_only,
         "metadata": {
             **metadata,
             "role": metadata.get("role") or role,
+            "runtime_role": runtime_role or metadata.get("role") or role,
             "entity_key": entity_key,
             "display_name": metadata.get("display_name") or display_name,
             "visible_in_gallery": bool(visible) and not debug_only,
+            "gallery_category": gallery_category,
+            "not_in_gallery_filters": not_in_filters,
+            "portrait_asset_kind": metadata.get("portrait_asset_kind") or kind,
+            "render_tier": metadata.get("render_tier") or "",
             "debug_only": debug_only,
         },
     }
@@ -889,7 +1328,7 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
             "ok": True,
             "campaign_id": resolved,
             "module": "gallery",
-            "payload": {"filters": gallery.get("filters", []), "assets": page},
+            "payload": {"filters": gallery.get("filters", []), "taxonomy": gallery.get("taxonomy", {}), "assets": page},
             "next_cursor": str(offset + safe_limit) if offset + safe_limit < len(rows) else "",
         }
     if module_name == "map-panel":
@@ -967,12 +1406,14 @@ def lightweight_output_shell(output: dict[str, Any]) -> dict[str, Any]:
 def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
     recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
     scene = recent.get("current_scene", {}) if isinstance(recent.get("current_scene"), dict) else {}
+    setup = frontend_campaign_setup(campaign_id, state)
     profile = {
         "id": campaign_id,
         "title": state.get("title") or meta.get("name") or campaign_id,
         "asset_seed": campaign_asset_seed(campaign_id),
         "genre": state.get("genre", ""),
         "tone": state.get("tone", ""),
+        "template": setup["template"],
         "chapter": campaign_chapter(campaign_id),
         "status": meta.get("status", ""),
         "binding": {
@@ -983,7 +1424,8 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
     }
     gallery_payload_ref = f"/api/module/gallery?campaign_id={safe_segment(campaign_id)}&limit=60"
     story_log_payload_ref = f"/api/module/story-log?campaign_id={safe_segment(campaign_id)}&limit=20"
-    gallery = {"filters": gallery_filters_for_campaign(campaign_id, state), "assets": [], "payload_ref": gallery_payload_ref}
+    gallery_taxonomy = gallery_taxonomy_for_campaign(campaign_id, state)
+    gallery = {"filters": gallery_filters_from_taxonomy(gallery_taxonomy), "taxonomy": gallery_taxonomy, "assets": [], "payload_ref": gallery_payload_ref}
     story_progress_payload = frontend_story_progress_payload(campaign_id)
     map_panel = frontend_map_panel(campaign_id, scene, output, assets)
     visual_registry = build_visual_registry(campaign_id, state, assets)
@@ -1011,14 +1453,22 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
         "schema": "trpg_orchestrator.frontend_state.v1",
         "asset_seed": profile["asset_seed"],
         "campaign": profile,
+        "template": setup["template"],
+        "rules_config": setup["rules_config"],
+        "companion_config": setup["companion_config"],
+        "model_config_summary": setup["model_config_summary"],
+        "safety_lines": setup["safety_lines"],
+        "roll_actions": setup["roll_actions"],
         "last_player_action": last_player_action,
-        "character_card": frontend_character_card(campaign_id, state),
-        "companion_card": frontend_companion_card(campaign_id, state),
+        "character_card": frontend_character_card(campaign_id, state, setup["rules_config"]),
+        "companion_card": frontend_companion_card(campaign_id, state, setup["companion_config"]),
         "map_panel": map_panel,
         "quests": frontend_quests(state),
         "inventory": frontend_inventory(state),
         "gallery": gallery,
+        "gallery_taxonomy": gallery_taxonomy,
         "visual_registry": visual_registry,
+        "avatar_index": visual_registry.get("avatar_index", {}),
         "story_progress": story_progress_payload,
         "modules": modules,
         "story_log": {
@@ -1044,6 +1494,106 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
     }
 
 
+def frontend_campaign_setup(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    profile = read_json(root / "campaign_profile.json") if (root / "campaign_profile.json").exists() else {}
+    if not isinstance(profile, dict):
+        profile = {}
+    template = str(profile.get("template") or "custom").strip().lower()
+    if template not in {"custom", "coc", "dnd"}:
+        template = "custom"
+    rules_config = normalize_rules_config(profile.get("rules_config"))
+    raw_companion_config = profile.get("companion_config")
+    companion_config = normalize_companion_config(raw_companion_config)
+    if not isinstance(raw_companion_config, dict) and legacy_companion_available(state):
+        companion_config["companion_enabled"] = True
+        companion_config["companion_mode"] = "auto"
+    return {
+        "template": template,
+        "rules_config": rules_config,
+        "companion_config": companion_config,
+        "model_config_summary": summarize_model_config(profile.get("model_config")),
+        "safety_lines": list_payload(profile.get("safety_lines")),
+        "roll_actions": frontend_roll_actions(rules_config),
+    }
+
+
+def normalize_rules_config(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    stat_visibility = str(source.get("stat_visibility") or "narrative").strip()
+    if stat_visibility not in {"narrative", "hybrid", "numeric"}:
+        stat_visibility = "narrative"
+    rules_strictness = str(source.get("rules_strictness") or "light").strip()
+    if rules_strictness not in {"light", "standard", "strict"}:
+        rules_strictness = "light"
+    party_mode = str(source.get("party_mode") or "solo").strip()
+    if party_mode not in {"solo", "party", "ensemble"}:
+        party_mode = "solo"
+    dice_enabled = bool(source.get("dice_enabled"))
+    return {
+        "character_card_enabled": bool(source.get("character_card_enabled", True)),
+        "stat_visibility": stat_visibility,
+        "dice_enabled": dice_enabled,
+        "dice_type": str(source.get("dice_type") or "").strip() if dice_enabled else "",
+        "roll_mode": str(source.get("roll_mode") or "").strip() if dice_enabled else "",
+        "roll_attributes": list_payload(source.get("roll_attributes")) if dice_enabled else [],
+        "rules_strictness": rules_strictness,
+        "party_mode": party_mode,
+    }
+
+
+def normalize_companion_config(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    enabled = bool(source.get("companion_enabled"))
+    mode = str(source.get("companion_mode") or "auto").strip()
+    if mode not in {"auto", "manual"}:
+        mode = "auto"
+    return {
+        "companion_enabled": enabled,
+        "companion_mode": mode if enabled else "auto",
+        "companion_name": str(source.get("companion_name") or "").strip() if enabled else "",
+        "companion_role": str(source.get("companion_role") or "").strip() if enabled else "",
+        "companion_personality": str(source.get("companion_personality") or "").strip() if enabled else "",
+        "companion_card_visible": bool(source.get("companion_card_visible")) if enabled else False,
+    }
+
+
+def legacy_companion_available(state: dict[str, Any]) -> bool:
+    prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
+    player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
+    provided = first_dict(player.get("character_card"), prompt.get("character_card"))
+    identity = first_dict(provided.get("identity"), player.get("confirmed_identity"), prompt.get("confirmed_identity"))
+    source = first_dict(provided.get("companion"), prompt.get("companion_card"))
+    return bool(source.get("name") or identity.get("companion"))
+
+
+def summarize_model_config(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "model_mode": str(source.get("model_mode") or "").strip(),
+        "director_model": str(source.get("director_model") or "").strip(),
+        "actor_model": str(source.get("actor_model") or "").strip(),
+        "single_model": str(source.get("single_model") or "").strip(),
+        "custom_provider": str(source.get("custom_provider") or "").strip(),
+        "custom_base_url": str(source.get("custom_base_url") or "").strip(),
+        "custom_model_name": str(source.get("custom_model_name") or "").strip(),
+        "custom_role": str(source.get("custom_role") or "").strip(),
+        "has_custom_api_key_ref": bool(str(source.get("custom_api_key_ref") or "").strip()),
+    }
+
+
+def frontend_roll_actions(rules_config: dict[str, Any]) -> list[dict[str, str]]:
+    if not rules_config.get("dice_enabled"):
+        return []
+    dice_type = str(rules_config.get("dice_type") or "").strip()
+    roll_mode = str(rules_config.get("roll_mode") or "").strip()
+    rows = []
+    for label in list_payload(rules_config.get("roll_attributes")):
+        key = safe_segment(label.lower()) or f"roll_{len(rows) + 1}"
+        rows.append({"key": key, "label": label, "dice_type": dice_type, "roll_mode": roll_mode, "icon": "dice"})
+    return rows
+
+
 def campaign_chapter(campaign_id: str) -> str:
     root = CAMPAIGNS_DIR / safe_segment(campaign_id)
     profile = read_json(root / "campaign_profile.json") if (root / "campaign_profile.json").exists() else {}
@@ -1052,7 +1602,11 @@ def campaign_chapter(campaign_id: str) -> str:
     return profile.get("chapter", "") or scene.get("chapter", "") or recent.get("chapter", "") or scene.get("time", "")
 
 
-def frontend_character_card(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
+def frontend_character_card(campaign_id: str, state: dict[str, Any], rules_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    if rules_config is None:
+        rules_config = frontend_campaign_setup(campaign_id, state)["rules_config"]
+    if rules_config.get("character_card_enabled") is False:
+        return {"enabled": False, "stat_visibility": rules_config.get("stat_visibility", "narrative"), "reason": "character_card_disabled"}
     prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
     player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
     provided = first_dict(player.get("character_card"), prompt.get("character_card"))
@@ -1062,7 +1616,9 @@ def frontend_character_card(campaign_id: str, state: dict[str, Any]) -> dict[str
     fallback = character_fallback_profile(campaign_id, state, scene)
     name = str(identity.get("name") or inferred_player_name(player, prompt) or state.get("title") or "玩家角色")
     identity_text = " / ".join([str(x) for x in (identity.get("ancestry"), identity.get("class_or_role") or identity.get("role"), identity.get("level_or_stage")) if x]) or fallback["identity"]
-    return {
+    card = {
+        "enabled": True,
+        "stat_visibility": rules_config.get("stat_visibility", "narrative"),
         "name": name,
         "identity": identity_text,
         "portrait": {
@@ -1075,9 +1631,60 @@ def frontend_character_card(campaign_id: str, state: dict[str, Any]) -> dict[str
         "tags": normalize_frontend_tags(provided.get("conditions"), fallback["tags"]),
         "attributes": normalize_frontend_attributes(provided.get("attributes"), fallback["attributes"]),
     }
+    return apply_stat_visibility_to_card(card, str(rules_config.get("stat_visibility") or "narrative"))
 
 
-def frontend_companion_card(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
+def apply_stat_visibility_to_card(card: dict[str, Any], stat_visibility: str) -> dict[str, Any]:
+    if stat_visibility == "numeric":
+        return card
+    if stat_visibility == "hybrid":
+        card["core_stats"] = [hybrid_stat_row(row, index) for index, row in enumerate(card.get("core_stats") or [])]
+        card["attributes"] = [hybrid_attribute_row(row) for row in (card.get("attributes") or [])[:6]]
+        return card
+    card["progress"] = {"label": card.get("progress", {}).get("label", "状态"), "text": card.get("progress", {}).get("text") or "叙事记录", "percent": None}
+    card["core_stats"] = narrative_status_rows(card.get("tags") or [])
+    card["attributes"] = []
+    return card
+
+
+def narrative_status_rows(tags: list[Any]) -> list[dict[str, Any]]:
+    labels = [str(item).strip() for item in tags if str(item).strip()]
+    while len(labels) < 4:
+        labels.append(["稳定", "受压", "疲惫", "轻伤"][len(labels)])
+    return [{"key": f"narrative_{index}", "label": "状态", "text": label, "tone": ["green", "blue", "amber", "red"][index % 4]} for index, label in enumerate(labels[:4])]
+
+
+def hybrid_stat_row(row: dict[str, Any], index: int) -> dict[str, Any]:
+    current = row.get("current")
+    maximum = row.get("max") or row.get("maximum")
+    percent = row.get("percent")
+    if percent is None and isinstance(current, (int, float)) and isinstance(maximum, (int, float)) and maximum:
+        percent = round(max(0, min(100, current / maximum * 100)))
+    return {"key": row.get("key") or f"hybrid_{index}", "label": row.get("label") or "状态", "text": f"状态 {int(percent)}%" if isinstance(percent, (int, float)) else row.get("text", "状态记录"), "percent": percent, "tone": row.get("tone", "")}
+
+
+def hybrid_attribute_row(row: dict[str, Any]) -> dict[str, Any]:
+    percent = row.get("percent")
+    return {"label": row.get("label") or row.get("short") or row.get("key") or "项", "text": f"{int(percent)}%" if isinstance(percent, (int, float)) else row.get("rank") or row.get("text") or "记录", "percent": percent}
+
+
+def frontend_companion_card(campaign_id: str, state: dict[str, Any], companion_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    if companion_config is None:
+        companion_config = frontend_campaign_setup(campaign_id, state)["companion_config"]
+    if not companion_config.get("companion_enabled"):
+        return {"enabled": False, "reason": "companion_disabled"}
+    if companion_config.get("companion_mode") == "manual":
+        name = str(companion_config.get("companion_name") or "").strip()
+        if name:
+            return {
+                "enabled": True,
+                "pending": False,
+                "name": name,
+                "identity": str(companion_config.get("companion_role") or "长期伙伴"),
+                "archetype": "companion",
+                "portrait": {"asset_key": scoped_asset_key(campaign_id, "companion_portrait", f"companion:{name}"), "type": "companion_portrait_pixel"},
+                "meta": {"name": name, "role": companion_config.get("companion_role", ""), "personality": companion_config.get("companion_personality", ""), "source": "campaign_setup"},
+            }
     prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
     player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
     provided = first_dict(player.get("character_card"), prompt.get("character_card"))
@@ -1086,13 +1693,15 @@ def frontend_companion_card(campaign_id: str, state: dict[str, Any]) -> dict[str
     if not source and isinstance(identity.get("companion"), dict):
         source = identity.get("companion")
     if not source:
-        return {}
+        return {"enabled": True, "pending": True, "name": "伙伴待生成", "identity": "长期伙伴待生成", "archetype": "companion", "meta": {"mode": companion_config.get("companion_mode", "auto")}}
     name = str(source.get("name") or "").strip()
     if not name:
         return {}
     archetype = "companion"
     identity_text = str(source.get("identity") or source.get("class") or source.get("species") or source.get("kind") or "伙伴")
     return {
+        "enabled": True,
+        "pending": False,
         "name": name,
         "identity": identity_text,
         "archetype": archetype,
@@ -1111,34 +1720,61 @@ def build_visual_registry(campaign_id: str, state: dict[str, Any], assets: list[
     asset_key_index: dict[str, str] = {}
     role_index: dict[str, list[str]] = {}
     gallery_visibility: dict[str, bool] = {}
+    avatar_index: dict[str, dict[str, Any]] = {}
+    context = actor_identity_context_from_state(campaign_id, state)
 
-    def add_entity(entity_key: str, role: str, display_name: str, asset: dict[str, Any] | None = None, fallback_seed: str = "") -> None:
+    def add_entity(entity_key: str, role: str, display_name: str, asset: dict[str, Any] | None = None, fallback_seed: str = "", identity: dict[str, Any] | None = None) -> None:
         if not entity_key:
             return
+        identity = identity or _identity_template(role, entity_key, display_name)
         if role in ROLE_PRIORITY:
             prefix = entity_key.split(":", 1)[0].lower() if ":" in entity_key else ""
             if prefix != role:
                 entity_key = f"{role}:{stable_entity_name(display_name)}"
-        expected_kind = ROLE_ASSET_KIND.get(role, normalize_asset_kind(asset.get("kind") if asset else role))
+        expected_kind = identity.get("portrait_asset_kind") or ROLE_ASSET_KIND.get(role, normalize_asset_kind(asset.get("kind") if asset else role))
         asset_kind = normalize_asset_kind(asset.get("kind") if asset else "", asset.get("metadata") if asset else {}, asset.get("key", "") if asset else "") if asset else ""
         if asset and role in ACTOR_ROLES and asset_kind != expected_kind:
             asset = None
+        selected = select_best_avatar_asset(entity_key, expected_kind, assets) if role in ACTOR_ROLES else (asset or {})
+        if selected:
+            asset = selected
         kind = expected_kind
         row = {
             "entity_key": entity_key,
-            "role": role,
+            "runtime_role": identity.get("runtime_role") or role,
+            "role": identity.get("role") or role,
+            "companion_type": identity.get("companion_type", ""),
             "asset_kind": kind,
             "asset_key": asset.get("key", "") if asset else "",
             "url": asset.get("url", "") if asset else "",
+            "selected_avatar_key": asset.get("key", "") if asset else "",
+            "selected_avatar_url": asset.get("url", "") if asset else "",
             "display_name": display_name,
             "fallback_seed": fallback_seed or f"{campaign_id}:{entity_key}:{role}",
             "renderer": "item_icon" if role == "item" else "actor_portrait",
-            "visible_in_gallery": bool(asset.get("visible_in_gallery", True)) if asset else True,
+            "display_slot": identity.get("display_slot", ""),
+            "gallery_category": identity.get("gallery_category", ""),
+            "visible_in_gallery": bool(identity.get("visible_in_gallery", asset.get("visible_in_gallery", True) if asset else True)),
+            "portrait_asset_kind": identity.get("portrait_asset_kind") or kind,
+            "avatar_locked_by_vcg": bool(asset and is_vcg_avatar_asset(asset)),
         }
         bucket = objects if role in {"item", "scene", "map", "monster", "cg"} else actors
         existing = bucket.get(entity_key)
         if not existing or ROLE_PRIORITY.get(role, 99) <= ROLE_PRIORITY.get(existing.get("role"), 99):
             bucket[entity_key] = row
+            if role in ACTOR_ROLES:
+                avatar_index[entity_key] = {
+                    "entity_key": entity_key,
+                    "runtime_role": row["runtime_role"],
+                    "display_slot": row["display_slot"],
+                    "gallery_category": row["gallery_category"],
+                    "selected_avatar_key": row["selected_avatar_key"],
+                    "selected_avatar_url": row["selected_avatar_url"],
+                    "companion_type": row.get("companion_type", ""),
+                    "visible_in_gallery": row["visible_in_gallery"],
+                    "portrait_asset_kind": row["portrait_asset_kind"],
+                    "avatar_locked_by_vcg": row["avatar_locked_by_vcg"],
+                }
         if row["asset_key"]:
             asset_key_index[row["asset_key"]] = entity_key
         role_index.setdefault(role, [])
@@ -1150,31 +1786,37 @@ def build_visual_registry(campaign_id: str, state: dict[str, Any], assets: list[
     character = frontend_character_card(campaign_id, state)
     name_role_index: dict[str, tuple[str, str]] = {}
     if character.get("name"):
-        entity_key = f"player:{stable_entity_name(character['name'])}"
+        entity_key = context.get("player", {}).get("entity_key") or f"player:{stable_entity_name(character['name'])}"
         name_role_index[normalized_name(character["name"])] = ("player", entity_key)
-        add_entity(entity_key, "player", character["name"], None, campaign_id)
+        add_entity(entity_key, "player", character["name"], None, campaign_id, _identity_template("player", entity_key, character["name"]))
     companion = frontend_companion_card(campaign_id, state)
     if companion.get("name"):
         role = "companion"
-        entity_key = f"companion:{stable_entity_name(companion['name'])}"
+        entity_key = context.get("companion", {}).get("entity_key") or f"companion:{stable_entity_name(companion['name'])}"
         name_role_index[normalized_name(companion["name"])] = (role, entity_key)
-        add_entity(entity_key, role, companion["name"], None, campaign_id)
+        identity = _identity_template("companion", entity_key, companion["name"])
+        identity["companion_type"] = str(context.get("companion", {}).get("companion_type") or companion.get("archetype") or "generic")
+        identity["archetype"] = str(context.get("companion", {}).get("archetype") or companion.get("archetype") or "")
+        identity["species"] = str(context.get("companion", {}).get("species") or "")
+        add_entity(entity_key, role, companion["name"], None, campaign_id, identity)
     for asset in assets:
         if not isinstance(asset, dict):
             continue
         display = asset.get("display_name") or asset_display_name(asset) or readable_asset_name(asset.get("key", ""), asset.get("kind", ""))
-        role = asset.get("role") or infer_asset_role(asset)
-        entity_key = asset.get("entity_key") or entity_key_for_asset(asset)
+        identity = resolve_entity_role(asset, context, asset)
+        role = identity.get("runtime_role") or asset.get("role") or infer_asset_role(asset)
+        entity_key = identity.get("entity_key") or asset.get("entity_key") or entity_key_for_asset(asset)
         known = name_role_index.get(normalized_name(display))
         if known and role not in {"player", "master", "item", "scene", "map", "monster", "cg"}:
             role, entity_key = known
-        add_entity(entity_key, role or "item", display, asset, f"{campaign_id}:{entity_key}")
+        add_entity(entity_key, role or "item", display, asset, f"{campaign_id}:{entity_key}", identity)
     return {
         "actors": actors,
         "objects": objects,
         "asset_key_index": asset_key_index,
         "role_index": role_index,
         "gallery_visibility": gallery_visibility,
+        "avatar_index": avatar_index,
     }
 
 
@@ -1444,9 +2086,11 @@ def frontend_dossier(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
-    filters = gallery_filters_for_campaign(campaign_id, state)
+    taxonomy = gallery_taxonomy_for_campaign(campaign_id, state)
+    filters = gallery_filters_from_taxonomy(taxonomy)
     allowed_kinds = gallery_allowed_filter_ids(filters)
     rows = []
+    context = actor_identity_context_from_state(campaign_id, state)
     scene = state.get("recent", {}).get("current_scene", {}) if isinstance(state.get("recent"), dict) else {}
     protected = protected_actor_names(state)
     active_npc_names = [str(name) for name in scene.get("active_npcs", []) if str(name).strip()] if isinstance(scene.get("active_npcs"), list) else []
@@ -1463,19 +2107,6 @@ def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, 
         row = {"kind": "npc", "key": f"npc:{actor_id}", "title": name, "meta": "NPC", "detail": "当前场景角色"}
         npc_row_by_id[actor_id] = row
         rows.append(row)
-    companion = frontend_companion_card(campaign_id, state)
-    if companion.get("name"):
-        role = "companion"
-        rows.append({
-            "kind": "companion",
-            "key": f"companion:{stable_actor_entity_id(companion.get('name'))}",
-            "title": companion.get("name", ""),
-            "meta": "companion",
-            "detail": companion.get("identity", ""),
-            "role": role,
-            "entity_key": f"companion:{stable_entity_name(companion.get('name'))}",
-            "asset_kind": "companion_portrait",
-        })
     for item in inventory[:8]:
         rows.append({"kind": "item", "key": item["asset_key"], "title": item["short_name"], "meta": item["category"], "detail": item["detail"], "visual_prompt": item.get("visual_prompt", {})})
     pressure = output.get("pressure_pack", {}) if isinstance(output.get("pressure_pack"), dict) else {}
@@ -1531,25 +2162,33 @@ def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, 
                 row["visual_prompt"] = analysis["visual_prompt"]
         rows.append(row)
     for asset in assets:
-        kind = normalize_frontend_gallery_kind(asset.get("kind"))
-        kind = coerce_gallery_kind_to_allowed(kind, allowed_kinds)
-        if not kind:
+        identity = resolve_entity_role(asset, context, asset)
+        if identity.get("runtime_role") in {"player", "companion"}:
+            continue
+        if not is_gallery_visible_asset(asset):
             continue
         metadata = asset.get("metadata", {}) if isinstance(asset.get("metadata"), dict) else {}
-        if asset.get("debug_only") or asset.get("visible_in_gallery") is False or metadata.get("debug_only") or metadata.get("visible_in_gallery") is False:
+        kind = str(metadata.get("gallery_category") or asset.get("gallery_category") or identity.get("gallery_category") or normalize_frontend_gallery_kind(asset.get("kind")))
+        kind = coerce_gallery_kind_to_allowed(kind, allowed_kinds)
+        if not kind:
             continue
         title = asset.get("display_name") or metadata.get("display_name") or metadata.get("title") or readable_asset_name(asset.get("key", ""), kind)
         if not is_gallery_cache_asset(asset, protected, inventory_titles, inventory_ids, active_npc_ids, kind, title):
             continue
+        selected = select_best_avatar_asset(str(identity.get("entity_key") or asset.get("entity_key") or ""), str(identity.get("portrait_asset_kind") or asset.get("kind") or ""), assets)
+        selected_key = selected.get("key") or asset.get("key", "")
+        cached_url = selected.get("url") or asset.get("url", "")
         rows.append({
             "kind": kind,
-            "key": asset.get("key", ""),
+            "key": selected_key,
             "title": title,
             "meta": metadata.get("meta") or kind,
             "detail": metadata.get("detail") or "",
-            "cached_url": asset.get("url", ""),
-            "entity_key": asset.get("entity_key", ""),
-            "role": asset.get("role", ""),
+            "cached_url": cached_url,
+            "entity_key": identity.get("entity_key") or asset.get("entity_key", ""),
+            "role": identity.get("role") or asset.get("role", ""),
+            "runtime_role": identity.get("runtime_role", ""),
+            "gallery_category": kind,
             "asset_kind": asset.get("kind", ""),
             "visible_in_gallery": asset.get("visible_in_gallery", True),
             "visual_prompt": metadata.get("visual_prompt") or {},
@@ -1558,7 +2197,7 @@ def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, 
             "created_at": asset.get("created_at", ""),
             "archived": bool(metadata.get("archived") or metadata.get("superseded")),
         })
-    return {"filters": filters, "assets": mark_frontend_scene_archive_state(dedupe_frontend_assets(rows))[:120]}
+    return {"filters": filters, "taxonomy": taxonomy, "assets": mark_frontend_scene_archive_state(dedupe_frontend_assets(rows))[:120]}
 
 
 def normalize_visual_asset_prompt(asset: Any) -> dict[str, Any]:
@@ -1623,6 +2262,11 @@ def stable_actor_entity_id(name: Any) -> str:
     return safe_segment(normalized_name(text) or "actor")
 
 
+def stable_actor_entity_id(name: Any) -> str:
+    text = re.sub(r"\s+", "", str(name or ""))
+    return safe_segment(normalized_name(text) or "actor")
+
+
 def protected_actor_names(state: dict[str, Any]) -> set[str]:
     prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
     player = state.get("player", {}) if isinstance(state.get("player"), dict) else {}
@@ -1677,7 +2321,7 @@ def is_gallery_cache_asset(asset: dict[str, Any], protected: set[str], inventory
         if kind != "npc_portrait":
             return False
     if kind == "npc_portrait":
-        return normalized_kind == "npc"
+        return normalized_kind not in {"", "hidden", "cg", "item", "scene", "map"}
     if normalized_kind == "npc" and active_npc_ids is not None:
         actor_id = stable_actor_entity_id(title or metadata.get("title") or metadata.get("object_id") or key)
         if actor_id in active_npc_ids and normalized_name(title) not in {normalized_name("许守井"), normalized_name("陈航")}:
@@ -2082,6 +2726,146 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
     return ""
 
 
+def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    profile = read_json(root / "campaign_profile.json") if (root / "campaign_profile.json").exists() else {}
+    profile = profile if isinstance(profile, dict) else {}
+    taxonomy = profile.get("gallery_taxonomy") if isinstance(profile.get("gallery_taxonomy"), dict) else {}
+    core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
+    if not core:
+        core = [
+            {"id": "cg", "label": "CG", "locked": True},
+            {"id": "npc", "label": "NPC", "locked": True},
+            {"id": "scene", "label": "Scene", "locked": True},
+            {"id": "item", "label": "Item", "locked": True},
+        ]
+    campaign_rows = []
+    for row in taxonomy.get("campaign_categories", []) if isinstance(taxonomy.get("campaign_categories"), list) else []:
+        normalized = normalize_gallery_taxonomy_row(row, "campaign_profile")
+        if normalized:
+            campaign_rows.append(normalized)
+    for source_key, source_name in (
+        ("gallery_categories", "campaign_profile"),
+        ("campaign_categories", "campaign_profile"),
+    ):
+        for row in profile.get(source_key, []) if isinstance(profile.get(source_key), list) else []:
+            normalized = normalize_gallery_taxonomy_row(row, source_name)
+            if normalized:
+                campaign_rows.append(normalized)
+    rules = profile.get("rules_config") if isinstance(profile.get("rules_config"), dict) else {}
+    for row in rules.get("gallery_categories", []) if isinstance(rules.get("gallery_categories"), list) else []:
+        normalized = normalize_gallery_taxonomy_row(row, "rules_config")
+        if normalized:
+            campaign_rows.append(normalized)
+    template = str(profile.get("template") or state.get("template") or "").lower()
+    if template in {"coc", "call_of_cthulhu"}:
+        campaign_rows.extend([
+            {"id": "clue", "label": "Clue", "source": "template"},
+            {"id": "document", "label": "Document", "source": "template"},
+            {"id": "location", "label": "Location", "source": "template"},
+        ])
+    elif template in {"dnd", "dnd5e"}:
+        campaign_rows.extend([
+            {"id": "monster", "label": "Monster", "source": "template"},
+            {"id": "location", "label": "Location", "source": "template"},
+            {"id": "magic_item", "label": "Magic Item", "source": "template"},
+        ])
+    elif template in {"fate"}:
+        campaign_rows.extend([
+            {"id": "master", "label": "Master", "source": "template"},
+            {"id": "servant", "label": "Servant", "source": "template"},
+        ])
+    campaign_rows = dedupe_taxonomy_rows(campaign_rows, {row.get("id") for row in core if isinstance(row, dict)})
+    return {
+        "core_categories": dedupe_taxonomy_rows([normalize_gallery_taxonomy_row(row, "system") for row in core], set()),
+        "campaign_categories": campaign_rows,
+        "hidden_runtime_roles": ["player", "companion"],
+        "rules": {
+            "exclude_current_player_from_gallery": True,
+            "exclude_current_companion_from_gallery": True,
+            "dedupe_by_entity_key": True,
+        },
+    }
+
+
+def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[str, Any]:
+    if isinstance(row, str):
+        category_id = safe_segment(row.lower())
+        label = row
+    elif isinstance(row, dict):
+        category_id = safe_segment(str(row.get("id") or row.get("key") or row.get("name") or "").lower())
+        label = str(row.get("label") or row.get("title") or category_id).strip()
+    else:
+        return {}
+    if not category_id or category_id in {"all", "hidden", "player", "companion", "companion_portrait"}:
+        return {}
+    result = {"id": category_id, "label": label or category_id, "source": source}
+    if isinstance(row, dict) and row.get("locked") is not None:
+        result["locked"] = bool(row.get("locked"))
+    return result
+
+
+def dedupe_taxonomy_rows(rows: list[dict[str, Any]], blocked: set[str]) -> list[dict[str, Any]]:
+    seen = {str(item or "") for item in blocked}
+    output = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        category_id = str(row.get("id") or "")
+        if not category_id or category_id in seen:
+            continue
+        seen.add(category_id)
+        output.append(row)
+    return output
+
+
+def gallery_filters_from_taxonomy(taxonomy: dict[str, Any]) -> list[dict[str, str]]:
+    filters = [{"key": "all", "label": "All"}]
+    core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
+    campaign = taxonomy.get("campaign_categories") if isinstance(taxonomy.get("campaign_categories"), list) else []
+    for row in core + campaign:
+        if not isinstance(row, dict):
+            continue
+        category_id = str(row.get("id") or "").strip()
+        if category_id and category_id not in {"hidden", "player", "companion"}:
+            filters.append({"key": category_id, "label": str(row.get("label") or category_id)})
+    return filters
+
+
+def gallery_filters_for_campaign(campaign_id: str, state: dict[str, Any]) -> list[dict[str, str]]:
+    return gallery_filters_from_taxonomy(gallery_taxonomy_for_campaign(campaign_id, state))
+
+
+def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
+    raw = str(kind or "").lower()
+    if raw in {"hidden", "companion", "companion_portrait"}:
+        return ""
+    if "gallery_npc" in raw:
+        return ""
+    if any(token in raw for token in ("generated_cg", "gallery_image", "formal_cg", "cg_image")):
+        return "cg" if "cg" in allowed else ""
+    if raw in allowed:
+        return raw
+    value = normalize_frontend_gallery_kind(kind)
+    if value in {"hidden", "companion"}:
+        return ""
+    aliases = {
+        "location": "scene",
+        "map": "scene",
+        "ecology": "monster",
+        "weapon": "item",
+        "supply": "item",
+        "material": "item",
+        "ritual_tool": "item",
+    }
+    value = aliases.get(value, value)
+    if value in allowed:
+        return value
+    if value == "character" and "npc" in allowed:
+        return "npc"
+    return ""
+
+
 def readable_asset_name(key: str, kind: str) -> str:
     text = re.sub(r"^[^:]+:", "", str(key or kind or "asset"))
     text = re.sub(r":v\d+$", "", text).replace("_", " ").strip()
@@ -2093,7 +2877,9 @@ def dedupe_frontend_assets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_key: dict[str, dict[str, Any]] = {}
     output = []
     for row in rows:
-        if row.get("kind") == "scene":
+        if row.get("entity_key"):
+            key = str(row.get("entity_key"))
+        elif row.get("kind") == "scene":
             key = str(row.get("key") or f"scene:{normalized_name(row.get('title'))}:{row.get('created_at')}")
         else:
             key = f"{row.get('kind')}:{normalized_name(row.get('title'))}" if row.get("title") else str(row.get("key") or row.get("kind"))
@@ -2422,7 +3208,7 @@ def normalize_model_mode(value: Any) -> str:
 def normalize_new_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
     template = str(payload.get("template") or "custom").strip().lower()
     if template not in CAMPAIGN_TEMPLATE_DEFAULTS:
-        raise RuntimeError("template must be custom, coc, or dnd")
+        template = "custom"
     defaults = CAMPAIGN_TEMPLATE_DEFAULTS[template]
     name = str(payload.get("name") or defaults.get("name") or "").strip()
     user_prompt = str(payload.get("user_prompt") or defaults.get("user_prompt") or "").strip()
@@ -2436,6 +3222,7 @@ def normalize_new_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
     custom_role = str(payload.get("custom_role") or "single").strip()
     custom_base_url = str(payload.get("custom_base_url") or "").strip()
     custom_model_name = str(payload.get("custom_model_name") or "").strip()
+    custom_api_key_received = bool(str(payload.get("custom_api_key") or "").strip())
     if model_mode == "custom_model":
         if provider_type not in {"openai_compatible", "deepseek_compatible", "custom_http"}:
             raise RuntimeError("provider_type is required")
@@ -2503,7 +3290,7 @@ def normalize_new_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "custom_provider": provider_type,
         "custom_base_url": custom_base_url,
         "custom_model_name": custom_model_name,
-        "custom_api_key_ref": "local_custom_api_key" if model_mode == "custom_model" else "",
+        "custom_api_key_ref": "local_custom_api_key" if custom_api_key_received else "",
         "custom_role": custom_role,
     }
     if model_mode == "custom_model":
@@ -2532,7 +3319,7 @@ def normalize_new_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "companion_config": companion_config,
         "safety_lines": list_payload(payload.get("safety_lines")),
         "custom_rules": str(payload.get("custom_rules") or "").strip(),
-        "custom_api_key_received": bool(str(payload.get("custom_api_key") or "").strip()),
+        "custom_api_key_received": custom_api_key_received,
     }
 
 def create_campaign_smart_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2910,6 +3697,9 @@ def init_campaign_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_campaign_template(root: Path, name: str, template: str) -> None:
+    template = str(template or "custom").strip().lower()
+    if template not in CAMPAIGN_TEMPLATE_DEFAULTS:
+        template = "custom"
     if template == "custom":
         return
     profile_path = root / "campaign_profile.json"
@@ -3395,9 +4185,14 @@ def campaign_state(campaign_id: str) -> dict[str, Any]:
     profile = maybe("campaign_profile.json")
     return {
         "title": profile.get("title") or campaign_id,
+        "template": profile.get("template", "custom"),
         "genre": profile.get("genre", ""),
         "tone": profile.get("tone", ""),
         "mechanics": profile.get("mechanics", {}),
+        "rules_config": profile.get("rules_config", {}),
+        "companion_config": profile.get("companion_config", {}),
+        "model_config": summarize_model_config(profile.get("model_config", {})),
+        "safety_lines": list_payload(profile.get("safety_lines")),
         "player": maybe("player_state.json"),
         "character_prompt": maybe("character_prompt.json"),
         "recent": maybe("recent_context.json"),

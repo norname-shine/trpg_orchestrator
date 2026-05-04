@@ -15,7 +15,8 @@
     memory: false,
   },
   galleryFilter: "all",
-  galleryFilterIds: ["all", "cg", "monster", "npc", "scene", "item"],
+  galleryFilterIds: ["all"],
+  galleryTaxonomy: {},
   renderedMapKey: "",
   canvasRules: "",
   galleryAssets: [],
@@ -779,15 +780,17 @@ function renderFrontendState(frontendState, campaignState) {
   const fs = frontendState || {};
   const modules = fs.modules || {};
   state.lastCampaignState = campaignState;
+  state.galleryTaxonomy = fs.gallery_taxonomy || fs.gallery?.taxonomy || {};
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
+  renderRollActions(fs.roll_actions || []);
   renderStoryProgressDropdown(fs);
   ["story_progress", "map_panel", "gallery", "inventory", "dossier", "character_card", "canvas_jobs"].forEach((name) => {
     renderModule(name, modules[name], fs, campaignState);
   });
   renderSidePanel(campaignState, fs);
   renderMemoryPanel(campaignState);
-  renderGalleryFilters(fs.gallery?.filters || []);
+  renderGalleryFilters(fs.gallery?.filters || [], state.galleryTaxonomy);
   if (!modules.gallery || modules.gallery.mode !== "no_update") {
     renderGallery(campaignState, fs.gallery || {}, modules.gallery);
   }
@@ -813,7 +816,8 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
             pressure_pack: state.currentPressurePack || {},
           });
         } else if (name === "gallery") {
-          renderGalleryFilters(data.payload.filters || frontendState.gallery?.filters || []);
+          state.galleryTaxonomy = data.payload.taxonomy || frontendState.gallery_taxonomy || frontendState.gallery?.taxonomy || state.galleryTaxonomy || {};
+          renderGalleryFilters(data.payload.filters || frontendState.gallery?.filters || [], state.galleryTaxonomy);
           renderGallery(campaignState, data.payload || {}, { ...moduleState, payload: data.payload });
         } else if (name === "map_panel") {
           updateMapModule(data.payload || {}, campaignState);
@@ -885,7 +889,9 @@ function updateDossierModule(moduleState = {}) {
 
 function updateCharacterCardModule(moduleState = {}, campaignState = {}) {
   if (moduleState.mode !== "update" || moduleState.update_requested !== true || !moduleState.payload) return;
-  renderCharacterCard(protocolCharacterCard(moduleState.payload, campaignState));
+  const rules = state.frontendState?.rules_config || {};
+  if (rules.character_card_enabled === false) return;
+  renderCharacterCard(protocolCharacterCard({ ...moduleState.payload, stat_visibility: rules.stat_visibility || moduleState.payload.stat_visibility }, campaignState));
 }
 
 function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState = {}) {
@@ -1002,13 +1008,29 @@ function clampPercent(value) {
 }
 
 function protocolCharacterCard(card = {}, campaignState = {}) {
+  if (card?.enabled === false) {
+    return {
+      enabled: false,
+      mode: "disabled",
+      statVisibility: card.stat_visibility || "narrative",
+      name: "角色卡未启用",
+      meta: "本团不显示明文角色卡数值",
+      progression: { label: "状态", value: "叙事记录", percent: null },
+      vitals: [],
+      conditions: ["角色卡未启用"],
+      attributes: [],
+    };
+  }
   if (!card || !card.name) {
     const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
     const scene = campaignState.recent?.current_scene || {};
     return buildCharacterCard(campaignState, title, scene);
   }
+  const statVisibility = card.stat_visibility || "narrative";
   return {
+    enabled: true,
     mode: "narrative_status",
+    statVisibility,
     name: card.name,
     meta: card.identity || "身份待确认",
     portrait: card.portrait || {},
@@ -1020,23 +1042,29 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
     vitals: (card.core_stats || []).map((stat, index) => {
       const current = Number(stat.current);
       const max = Number(stat.max) || 100;
+      const explicitPercent = Number(stat.percent);
+      const hasNumeric = statVisibility === "numeric" && Number.isFinite(current);
+      const percent = Number.isFinite(explicitPercent)
+        ? explicitPercent
+        : (hasNumeric ? Math.max(0, Math.min(100, (current / max) * 100)) : null);
       return {
         key: stat.key || `core_${index}`,
         label: stat.label || "状态",
-        state: stat.text || (Number.isFinite(current) ? `${current} / ${max}` : ""),
-        percent: Number.isFinite(current) ? Math.max(0, Math.min(100, (current / max) * 100)) : 0,
+        state: stat.text || (hasNumeric ? `${current} / ${max}` : "叙事状态"),
+        percent,
         tone: stat.tone || ["red", "blue", "green"][index % 3],
-        current,
-        max,
+        current: hasNumeric ? current : undefined,
+        max: hasNumeric ? max : undefined,
       };
     }),
     conditions: Array.isArray(card.tags) ? card.tags : [],
-    attributes: Array.isArray(card.attributes) ? card.attributes : [],
+    attributes: statVisibility === "narrative" ? [] : (Array.isArray(card.attributes) ? card.attributes : []),
     companion: protocolCompanionCard(state.frontendState?.companion_card, campaignState),
   };
 }
 
 function protocolCompanionCard(companion = {}, campaignState = {}) {
+  if (companion?.enabled === false) return null;
   if (companion && companion.name) {
     const raw = companion.meta || companion;
     return {
@@ -1046,11 +1074,10 @@ function protocolCompanionCard(companion = {}, campaignState = {}) {
       archetype: companion.archetype || "companion",
       portrait: companion.portrait || {},
       raw,
+      pending: Boolean(companion.pending),
     };
   }
-  const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
-  const scene = campaignState.recent?.current_scene || {};
-  return buildCharacterCard(campaignState, title, scene).companion;
+  return null;
 }
 
 function renderQuickActions(actions) {
@@ -1080,6 +1107,41 @@ function renderQuickActions(actions) {
     if (input) { input.value = ""; input.focus(); }
   });
   bar.appendChild(clearBtn);
+}
+
+function renderRollActions(actions) {
+  const composer = document.querySelector(".composer");
+  if (!composer) return;
+  let bar = composer.querySelector(".rollActionBar");
+  if (!Array.isArray(actions) || !actions.length) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "rollActionBar";
+    const input = composer.querySelector(".inputWrap");
+    composer.insertBefore(bar, input || composer.firstChild);
+  }
+  bar.innerHTML = "";
+  actions.forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `🎲 ROLL ${action.label || "检定"}`;
+    button.addEventListener("click", () => insertRollAction(action));
+    bar.appendChild(button);
+  });
+}
+
+function insertRollAction(action = {}) {
+  const input = $("actionInput");
+  const label = String(action.label || "").trim();
+  if (!input || !label) return;
+  const mode = String(action.roll_mode || "");
+  const suffix = mode === "d20_attribute" ? "属性检定" : mode === "percentile" ? "百分骰检定" : "检定";
+  const text = `进行【${label}】${suffix}`;
+  input.value = text;
+  input.focus();
 }
 
 function applyQuickAction(action) {
@@ -1222,16 +1284,27 @@ function normalizeAttributes(attributes, mode, fallback = {}) {
 }
 
 function renderCharacterCard(card) {
+  const panel = document.querySelector(".characterPanel");
+  panel?.classList.toggle("character-disabled", card.enabled === false);
   setText("characterName", card.name);
   setText("characterMeta", card.meta);
-  setText("characterCardMode", card.mode === "strict_stats" ? "数值卡" : "叙事卡");
+  const visibility = card.statVisibility || "narrative";
+  setText("characterCardMode", card.enabled === false ? "未启用" : visibility === "numeric" ? "数值卡" : visibility === "hybrid" ? "半数值卡" : "叙事卡");
   setText("progressLabel", card.progression.label);
   setText("progressValue", card.progression.value);
   const progressBar = $("progressBar");
-  if (progressBar) progressBar.style.width = `${Math.max(4, Math.min(100, card.progression.percent))}%`;
-  renderVitals(card.vitals);
+  if (progressBar) {
+    const percent = Number(card.progression.percent);
+    progressBar.style.width = Number.isFinite(percent) ? `${Math.max(4, Math.min(100, percent))}%` : "0%";
+    progressBar.parentElement?.classList.toggle("noNumericTrack", !Number.isFinite(percent));
+  }
+  renderVitals(card.vitals, visibility);
   renderConditionBadges(card.conditions);
-  renderAttributes(card.attributes, card.name);
+  renderAttributes(card.attributes, card.name, visibility);
+  if (card.enabled === false) {
+    clearImageElement("avatarImage");
+    return;
+  }
   renderCharacterPortrait(card);
 }
 
@@ -1250,33 +1323,66 @@ function renderCompanionCard(companion) {
   panel?.classList.remove("no-companion");
   setText("companionName", companion.name);
   setText("companionMeta", companion.meta);
+  if (companion.pending) {
+    clearImageElement("companionImage");
+    return;
+  }
   const resolved = resolveVisualAsset({ ...companion, type: "companion", role: "companion", portrait: companion.portrait || {} });
   if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
     showAvatarImage("companionImage", resolved.url, resolved.asset_key || "");
     return;
   }
+  const visualProfile = buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
   drawPixelCompanionPortrait(resolved.fallback_seed || companion.seed || companion.name, {
     cache: true,
     objectId: slugify(resolved.entity_key || companion.name || "companion"),
     seedText: scopedSeed(resolved.fallback_seed || companion.seed || companion.name || "companion"),
-    archetype: "companion",
+    archetype: visualProfile.companion_type_preset || "custom",
+    visualProfile,
     kind: "companion_portrait",
     metadata: {
       title: resolved.display_name || companion.name,
       display_name: resolved.display_name || companion.name,
       role: "companion",
-      entity_key: makeEntityKey("companion", companion.name),
-      visible_in_gallery: true,
+      runtime_role: "companion",
+      companion_type: visualProfile.companion_type_raw,
+      companion_type_raw: visualProfile.companion_type_raw,
+      companion_type_preset: visualProfile.companion_type_preset,
+      archetype: companion.meta?.archetype || companion.archetype || companion.meta?.kind || "",
+      species: companion.meta?.species || "",
+      visual_profile: visualProfile,
+      entity_key: resolved.entity_key || makeEntityKey("companion", companion.name),
+      avatar_key: resolved.entity_key || makeEntityKey("companion", companion.name),
+      portrait_asset_kind: "companion_portrait",
+      gallery_category: "hidden",
+      visible_in_gallery: false,
+      not_in_gallery_filters: true,
+      display_slot: "companion_card",
+      detail_slot: "companion_detail",
+      render_tier: "companion",
+      source_size: 512,
+      detail_level: "high",
       visual_spec: "secondary_full_body_story_context",
       background_context: currentStoryVisualContext(),
     },
   });
 }
 
-function renderVitals(vitals) {
+function renderVitals(vitals, statVisibility = "narrative") {
   const holder = $("vitalList");
   if (!holder) return;
   holder.innerHTML = "";
+  if (!Array.isArray(vitals) || !vitals.length) {
+    const row = document.createElement("div");
+    row.className = "vitalRow narrative";
+    const label = document.createElement("span");
+    label.textContent = "状态";
+    const value = document.createElement("b");
+    value.textContent = "角色卡未启用";
+    row.append(label, value);
+    holder.appendChild(row);
+    return;
+  }
   vitals.slice(0, 4).forEach((vital) => {
     const row = document.createElement("div");
     row.className = `vitalRow ${vital.tone || ""}`;
@@ -1284,12 +1390,16 @@ function renderVitals(vitals) {
     label.textContent = vital.label;
     const value = document.createElement("b");
     value.textContent = vital.state;
-    const track = document.createElement("em");
-    track.className = "statTrack";
-    const bar = document.createElement("i");
-    bar.style.width = `${Math.max(4, Math.min(100, vital.percent || 0))}%`;
-    track.appendChild(bar);
-    row.append(label, value, track);
+    row.append(label, value);
+    const percent = Number(vital.percent);
+    if (statVisibility !== "narrative" && Number.isFinite(percent)) {
+      const track = document.createElement("em");
+      track.className = "statTrack";
+      const bar = document.createElement("i");
+      bar.style.width = `${Math.max(4, Math.min(100, percent))}%`;
+      track.appendChild(bar);
+      row.appendChild(track);
+    }
     holder.appendChild(row);
   });
 }
@@ -1305,7 +1415,10 @@ function renderConditionBadges(labels) {
   });
 }
 
-function renderAttributes(attributes, characterName = "player") {
+function renderAttributes(attributes, characterName = "player", statVisibility = "narrative") {
+  const wrap = $("attributeStar");
+  if (wrap) wrap.hidden = statVisibility === "narrative" || !Array.isArray(attributes) || !attributes.length;
+  if (statVisibility === "narrative" || !Array.isArray(attributes) || !attributes.length) return;
   renderAttributeStar(attributes, characterName);
 }
 
@@ -1706,8 +1819,18 @@ function renderCharacterPortrait(card) {
       title: resolved.display_name || card?.name || "player",
       display_name: resolved.display_name || card?.name || "player",
       role: "player",
+      runtime_role: "player",
       entity_key: resolved.entity_key,
+      avatar_key: resolved.entity_key,
+      portrait_asset_kind: "player_portrait",
+      gallery_category: "hidden",
       visible_in_gallery: false,
+      not_in_gallery_filters: true,
+      display_slot: "main_character_card",
+      detail_slot: "main_character_detail",
+      render_tier: "player",
+      source_size: 512,
+      detail_level: "high",
       visual_spec: "primary_full_body_story_context",
       background_context: currentStoryVisualContext(),
     },
@@ -1754,37 +1877,126 @@ function showAvatarImage(id, url, assetKey = "") {
 }
 
 function resolveVisualAsset(entityLike = {}, frontendState = state.frontendState || {}, cachedAssets = state.cachedAssets || []) {
-  const registry = frontendState.visual_registry || {};
-  const rawName = entityLike.display_name || entityLike.name || entityLike.title || entityLike.speaker || entityLike.actor_id || entityLike.key || "";
-  const requestedRole = normalizeVisualRole(entityLike.role || entityLike.actor_kind || entityLike.kind || entityLike.type || inferRoleFromEntity(entityLike));
-  const portraitKey = entityLike.portrait?.asset_key || entityLike.asset_key || entityLike.avatar_key || "";
-  const registryMatch = findVisualRegistryEntity(entityLike, registry);
-  const role = normalizeVisualRole(registryMatch?.role || roleFromEntityKey(entityLike.entity_key || entityLike.entityKey || "") || requestedRole);
-  const entityKey = registryMatch?.entity_key || entityLike.entity_key || entityLike.entityKey || makeEntityKey(role, rawName);
-  const directUrl = entityLike.portrait?.url || entityLike.url || entityLike.cachedUrl || entityLike.cached_url || "";
-  const registered = registryMatch || (registry.actors || {})[entityKey] || (registry.objects || {})[entityKey] || (portraitKey ? registry.asset_key_index?.[portraitKey] && ((registry.actors || {})[registry.asset_key_index[portraitKey]] || (registry.objects || {})[registry.asset_key_index[portraitKey]]) : null);
-  const assetKind = registered?.asset_kind || assetKindForRole(role);
-  const byKey = portraitKey ? findCurrentCampaignAsset((asset) => asset.exists && asset.url && asset.key === portraitKey) : null;
-  const byEntity = findCurrentCampaignAsset((asset) => asset.exists && asset.url && (asset.entity_key === entityKey || asset.metadata?.entity_key === entityKey) && normalizeVisualRole(asset.role || asset.metadata?.role || role) === role);
-  const byKindName = findCurrentCampaignAsset((asset) => {
-    if (!asset.exists || !asset.url) return false;
-    if (String(asset.kind || "") !== assetKind) return false;
-    const metaName = normalizeActorName(asset.display_name || asset.metadata?.display_name || asset.metadata?.title || asset.metadata?.object_id || "");
-    return metaName && metaName === normalizeActorName(rawName);
-  });
-  const picked = byKey || byEntity || byKindName;
-  const url = isUrlForCurrentCampaign(directUrl, portraitKey) ? directUrl : registered?.url || picked?.url || "";
+  return resolveActorAvatar(entityLike, frontendState, cachedAssets);
+}
+
+function normalizeAssetIdentity(asset = {}, campaignState = state.frontendState || {}) {
+  const metadata = asset.metadata || {};
+  const rawRole = metadata.runtime_role || metadata.role || asset.runtime_role || asset.role || roleFromEntityKey(metadata.entity_key || asset.entity_key || "") || asset.kind || "";
+  const runtimeRole = normalizeRuntimeRole(rawRole);
+  const galleryCategory = String(metadata.gallery_category || asset.gallery_category || normalizeGalleryKind(asset.kind) || "").toLowerCase();
+  const entityKey = metadata.entity_key || asset.entity_key || makeEntityKey(runtimeRole, asset.display_name || metadata.display_name || metadata.title || asset.title || asset.key || runtimeRole);
+  const portraitAssetKind = metadata.portrait_asset_kind || asset.portrait_asset_kind || asset.kind || assetKindForRole(runtimeRole);
   return {
     entity_key: entityKey,
-    role,
-    asset_kind: assetKind,
-    asset_key: registered?.asset_key || picked?.key || portraitKey || "",
-    url: url && isUrlForCurrentCampaign(url, registered?.asset_key || picked?.key || portraitKey || "") ? url : "",
-    display_name: registered?.display_name || rawName || entityKey,
-    fallback_seed: registered?.fallback_seed || `${state.activeCampaign}:${entityKey}:${role}`,
-    renderer: role === "item" ? "item_icon" : "actor_portrait",
-    visible_in_gallery: registered?.visible_in_gallery ?? !["player"].includes(role),
+    runtime_role: runtimeRole,
+    role: metadata.role || asset.role || runtimeRole,
+    companion_type: metadata.companion_type || asset.companion_type || "",
+    archetype: metadata.archetype || asset.archetype || "",
+    species: metadata.species || asset.species || "",
+    asset_kind: asset.kind || portraitAssetKind,
+    portrait_asset_kind: portraitAssetKind,
+    display_slot: metadata.display_slot || asset.display_slot || "",
+    detail_slot: metadata.detail_slot || asset.detail_slot || "",
+    gallery_category: runtimeRole === "player" || runtimeRole === "companion" ? "hidden" : galleryCategory,
+    visible_in_gallery: runtimeRole !== "player" && runtimeRole !== "companion" && asset.visible_in_gallery !== false && metadata.visible_in_gallery !== false && galleryCategory !== "hidden",
+    not_in_gallery_filters: Boolean(metadata.not_in_gallery_filters || asset.not_in_gallery_filters || runtimeRole === "player" || runtimeRole === "companion"),
+    avatar_key: metadata.avatar_key || asset.avatar_key || entityKey,
+    render_tier: metadata.render_tier || asset.render_tier || runtimeRole,
+    avatar_locked_by_vcg: Boolean(metadata.avatar_locked_by_vcg || isVcgAvatarAsset(asset)),
   };
+}
+
+function resolveActorIdentity(source = {}, campaignState = state.frontendState || {}, assets = state.cachedAssets || []) {
+  const registry = campaignState.visual_registry || {};
+  const avatarIndex = campaignState.avatar_index || registry.avatar_index || {};
+  const rawName = source.display_name || source.name || source.title || source.speaker || source.actor_id || source.key || "";
+  const explicitKey = source.entity_key || source.entityKey || source.metadata?.entity_key || "";
+  if (explicitKey && avatarIndex[explicitKey]) return { ...avatarIndex[explicitKey], display_name: rawName || explicitKey };
+  const registryMatch = findVisualRegistryEntity(source, registry);
+  if (registryMatch?.entity_key) return { ...normalizeAssetIdentity(registryMatch, campaignState), ...registryMatch, display_name: registryMatch.display_name || rawName };
+  const role = normalizeRuntimeRole(roleFromEntityKey(explicitKey) || source.actor_kind || source.role || source.kind || source.type || inferRoleFromEntity(source));
+  const entityKey = explicitKey || makeEntityKey(role, rawName || role);
+  if (avatarIndex[entityKey]) return { ...avatarIndex[entityKey], display_name: rawName || entityKey };
+  const byAsset = assets.find((asset) => {
+    const id = normalizeAssetIdentity(asset, campaignState);
+    return id.entity_key === entityKey;
+  });
+  if (byAsset) return normalizeAssetIdentity(byAsset, campaignState);
+  return {
+    entity_key: entityKey,
+    runtime_role: role,
+    role,
+    asset_kind: assetKindForRole(role),
+    portrait_asset_kind: assetKindForRole(role),
+    display_name: rawName || entityKey,
+    gallery_category: role === "player" || role === "companion" ? "hidden" : normalizeGalleryKind(source.kind) || role,
+    visible_in_gallery: !["player", "companion"].includes(role),
+    not_in_gallery_filters: ["player", "companion"].includes(role),
+    fallback_seed: `${state.activeCampaign}:${entityKey}:${role}`,
+  };
+}
+
+function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.cachedAssets || []) {
+  const matches = (Array.isArray(assets) ? assets : []).filter((asset) => {
+    if (!asset?.exists || !asset.url) return false;
+    const id = normalizeAssetIdentity(asset);
+    return id.entity_key === entityKey && (id.portrait_asset_kind === portraitAssetKind || asset.kind === portraitAssetKind);
+  });
+  matches.sort((a, b) => avatarPriority(b) - avatarPriority(a));
+  return matches[0] || null;
+}
+
+function resolveActorAvatar(source = {}, campaignState = state.frontendState || {}, assets = state.cachedAssets || []) {
+  const identity = resolveActorIdentity(source, campaignState, assets);
+  const portraitKey = source.portrait?.asset_key || source.asset_key || source.avatar_key || identity.selected_avatar_key || "";
+  const byKey = portraitKey ? findCurrentCampaignAsset((asset) => asset.exists && asset.url && asset.key === portraitKey) : null;
+  const best = selectBestAvatarAsset(identity.entity_key, identity.portrait_asset_kind || identity.asset_kind || assetKindForRole(identity.runtime_role), assets);
+  const directUrl = source.portrait?.url || source.url || source.cachedUrl || source.cached_url || "";
+  const selected = best || byKey || null;
+  const selectedKey = identity.selected_avatar_key || selected?.key || portraitKey || "";
+  const selectedUrl = identity.selected_avatar_url || selected?.url || "";
+  const directOk = isUrlForCurrentCampaign(directUrl, portraitKey);
+  return {
+    ...identity,
+    role: normalizeRuntimeRole(identity.runtime_role || identity.role),
+    asset_kind: identity.portrait_asset_kind || identity.asset_kind || assetKindForRole(identity.runtime_role),
+    asset_key: selectedKey,
+    url: selectedUrl && isUrlForCurrentCampaign(selectedUrl, selectedKey) ? selectedUrl : (directOk ? directUrl : ""),
+    display_name: identity.display_name || source.display_name || source.name || source.title || identity.entity_key,
+    fallback_seed: identity.fallback_seed || `${state.activeCampaign}:${identity.entity_key}:${identity.runtime_role || identity.role}`,
+    renderer: identity.runtime_role === "item" ? "item_icon" : "actor_portrait",
+    visible_in_gallery: Boolean(identity.visible_in_gallery),
+  };
+}
+
+function normalizeRuntimeRole(value = "") {
+  const raw = normalizeActorName(value);
+  if (raw.includes("companion") || raw.includes("伙伴")) return "companion";
+  if (raw.includes("player") || raw.includes("main_character")) return "player";
+  if (raw.includes("item") || raw.includes("weapon") || raw.includes("supply") || raw.includes("ritual") || raw.includes("device") || raw.includes("document")) return "item";
+  if (raw.includes("scene") || raw.includes("map") || raw.includes("location")) return "scene";
+  if (raw.includes("monster") || raw.includes("ecology")) return "monster";
+  if (raw.includes("cg")) return "cg";
+  if (raw.includes("master") || raw.includes("servant") || raw.includes("npc")) return "npc";
+  return "npc";
+}
+
+function isVcgAvatarAsset(asset = {}) {
+  const metadata = asset.metadata || {};
+  const text = [asset.key, asset.path, asset.filename, metadata.avatar_source, metadata.source, metadata.generator_version].join(" ").toLowerCase();
+  return String(asset.key || "").toLowerCase().includes(":vcg") || text.includes("_vcg") || metadata.avatar_source === "VCG" || ["formal_cg_crop", "cg_feedback", "manual_import_cg_crop", "vcg"].includes(String(metadata.source || "").toLowerCase()) || String(metadata.generator_version || "").toUpperCase() === "VCG";
+}
+
+function avatarPriority(asset = {}) {
+  const metadata = asset.metadata || {};
+  const source = String(metadata.source || metadata.avatar_source || "").toLowerCase();
+  const version = Number(asset.generator_version || 0);
+  if (isVcgAvatarAsset(asset)) return 500000 + version;
+  if (["manual_import_cg_crop", "formal_cg_crop", "cg_feedback"].includes(source)) return 400000 + version;
+  if (version >= ASSET_GENERATOR_VERSION) return 300000 + version;
+  if (asset.placeholder || metadata.placeholder) return 0;
+  return 200000 + version;
 }
 
 function canonicalEntityKeyForBlock(block = {}) {
@@ -1837,10 +2049,13 @@ function findVisualRegistryEntity(entityLike = {}, registry = state.frontendStat
       entity_key: key,
       role: "companion",
       asset_kind: "companion_portrait",
+      portrait_asset_kind: "companion_portrait",
       display_name: companion.name,
       fallback_seed: `${state.activeCampaign}:${key}:companion`,
       renderer: "actor_portrait",
-      visible_in_gallery: true,
+      visible_in_gallery: false,
+      gallery_category: "hidden",
+      not_in_gallery_filters: true,
     };
   }
   for (const candidate of candidates) {
@@ -2686,7 +2901,14 @@ function setGalleryFilter(filter) {
   });
   let visibleCount = 0;
   document.querySelectorAll("#galleryGrid article").forEach((card) => {
-    const visible = galleryAssetMatchesFilter({ kind: card.dataset.kind }, state.galleryFilter);
+    const visible = galleryAssetMatchesFilter({
+      kind: card.dataset.kind,
+      runtime_role: card.dataset.runtimeRole,
+      role: card.dataset.runtimeRole,
+      gallery_category: card.dataset.galleryCategory,
+      visible_in_gallery: card.dataset.visibleInGallery !== "false",
+      not_in_gallery_filters: card.dataset.notInGalleryFilters === "true",
+    }, state.galleryFilter);
     card.classList.toggle("hidden", !visible);
     card.hidden = !visible;
     if (visible) visibleCount += 1;
@@ -2839,6 +3061,10 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
     const card = document.createElement("article");
     card.dataset.kind = asset.kind;
     card.dataset.key = asset.key;
+    card.dataset.runtimeRole = asset.runtime_role || asset.role || "";
+    card.dataset.galleryCategory = asset.gallery_category || asset.kind || "";
+    card.dataset.notInGalleryFilters = asset.not_in_gallery_filters ? "true" : "false";
+    card.dataset.visibleInGallery = asset.visible_in_gallery === false ? "false" : "true";
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `查看资料：${asset.title}`);
@@ -2869,14 +3095,16 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   setGalleryFilter(state.galleryFilter);
 }
 
-function renderGalleryFilters(filters) {
+function renderGalleryFilters(filters, taxonomy = state.galleryTaxonomy || {}) {
   const holder = $("galleryFilters");
-  if (!holder || !Array.isArray(filters) || !filters.length) return;
-  state.galleryFilterIds = filters.map((filter) => filter.key).filter(Boolean);
-  const current = filters.some((filter) => filter.key === state.galleryFilter) ? state.galleryFilter : "all";
+  if (!holder) return;
+  const resolvedFilters = Array.isArray(filters) && filters.length ? filters : galleryFiltersFromTaxonomy(taxonomy);
+  if (!resolvedFilters.length) return;
+  state.galleryFilterIds = resolvedFilters.map((filter) => filter.key).filter(Boolean);
+  const current = resolvedFilters.some((filter) => filter.key === state.galleryFilter) ? state.galleryFilter : "all";
   state.galleryFilter = current;
   holder.innerHTML = "";
-  filters.forEach((filter) => {
+  resolvedFilters.forEach((filter) => {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.filter = filter.key;
@@ -2887,10 +3115,26 @@ function renderGalleryFilters(filters) {
   });
 }
 
+function galleryFiltersFromTaxonomy(taxonomy = {}) {
+  const rows = [{ key: "all", label: "All" }];
+  const categories = [
+    ...(Array.isArray(taxonomy.core_categories) ? taxonomy.core_categories : []),
+    ...(Array.isArray(taxonomy.campaign_categories) ? taxonomy.campaign_categories : []),
+  ];
+  categories.forEach((row) => {
+    const key = String(row?.id || row?.key || "").trim();
+    if (!key || ["all", "hidden", "player", "companion"].includes(key)) return;
+    if (rows.some((item) => item.key === key)) return;
+    rows.push({ key, label: row.label || key });
+  });
+  if (rows.length === 1) rows.push({ key: "cg", label: "CG" }, { key: "npc", label: "NPC" }, { key: "scene", label: "Scene" }, { key: "item", label: "Item" });
+  return rows;
+}
+
 function protocolGalleryAsset(asset) {
   const role = normalizeVisualRole(asset.role || asset.entity_role || asset.asset_kind || asset.kind || "");
+  if (role === "companion" || role === "player" || asset.not_in_gallery_filters === true || asset.visible_in_gallery === false) return null;
   let kind = fixedGalleryKind(asset.kind);
-  if (role === "companion") kind = "companion";
   if (role === "item") kind = "item";
   if (!kind) return null;
   const detail = asset.detail || "";
@@ -2913,6 +3157,9 @@ function protocolGalleryAsset(asset) {
     campaign_id: asset.campaign_id || state.activeCampaign,
     asset_seed: asset.asset_seed || state.assetSeed,
     role: role || asset.role || "",
+    runtime_role: asset.runtime_role || asset.metadata?.runtime_role || role || "",
+    gallery_category: asset.gallery_category || asset.metadata?.gallery_category || kind,
+    not_in_gallery_filters: Boolean(asset.not_in_gallery_filters || asset.metadata?.not_in_gallery_filters),
     entity_key: entityKey,
     assetKind: asset.asset_kind || asset.assetKind || "",
     visible_in_gallery: asset.visible_in_gallery !== false,
@@ -2986,18 +3233,13 @@ function filteredGalleryAssets() {
 }
 
 function galleryAssetMatchesFilter(asset, filter) {
+  const identity = normalizeAssetIdentity(asset || {});
+  if (identity.runtime_role === "player" || identity.runtime_role === "companion") return false;
+  if (identity.visible_in_gallery === false || identity.not_in_gallery_filters) return false;
   const value = filter || "all";
+  const category = identity.gallery_category && identity.gallery_category !== "hidden" ? identity.gallery_category : asset.kind;
   if (value === "all") return true;
-  if (value === "cg") return asset.kind === "cg";
-  if (value === "monster") return asset.kind === "monster" || asset.kind === "ecology";
-  if (value === "scene") return asset.kind === "scene" || asset.kind === "location";
-  if (value === "item") return ["item", "weapon", "supply", "material", "ritual_tool"].includes(asset.kind) || asset.role === "item" || asset.assetKind === "item_icon";
-  if (value === "clue") return ["clue", "document", "ritual_tool"].includes(asset.kind);
-  if (value === "character") return ["character", "npc", "companion"].includes(asset.kind);
-  if (value === "companion") return asset.kind === "companion" || asset.role === "companion" || asset.assetKind === "companion_portrait";
-  if (value === "master") return asset.kind === "master" || asset.role === "master";
-  if (value === "npc") return asset.kind === "npc" && !["player", "master", "companion"].includes(asset.role);
-  return asset.kind === value;
+  return category === value || asset.kind === value;
 }
 
 function renderGalleryDialog() {
@@ -3325,6 +3567,8 @@ function cachedGalleryAssets() {
     if (!isAssetForCurrentCampaign(entry)) return false;
     const kind = String(entry.kind || "");
     const metadata = entry.metadata || {};
+    const runtimeRole = String(metadata.runtime_role || entry.runtime_role || metadata.role || entry.role || "").toLowerCase();
+    if (runtimeRole === "player" || runtimeRole === "companion" || metadata.not_in_gallery_filters || entry.not_in_gallery_filters) return false;
     if (entry.debug_only || entry.visible_in_gallery === false || metadata.debug_only || metadata.visible_in_gallery === false) return false;
     const reusableKind = ["npc_portrait", "companion_portrait", "master_portrait", "item_icon", "scene_image", "map_image", "monster_image", "cg_image", "gallery_image"].includes(kind);
     if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_") || reusableKind)) return false;
@@ -3353,6 +3597,9 @@ function cachedGalleryAssets() {
       campaign_id: entry.campaign_id || state.activeCampaign,
       asset_seed: entry.asset_seed || state.assetSeed,
       role: entry.role || metadata.role || "",
+      runtime_role: metadata.runtime_role || entry.runtime_role || entry.role || metadata.role || "",
+      gallery_category: metadata.gallery_category || entry.gallery_category || normalizedKind,
+      not_in_gallery_filters: Boolean(metadata.not_in_gallery_filters || entry.not_in_gallery_filters),
       entity_key: entry.entity_key || metadata.entity_key || "",
       assetKind: entry.kind || "",
       visible_in_gallery: entry.visible_in_gallery !== false,
@@ -3387,6 +3634,96 @@ function currentCompanion() {
     campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色",
     state.lastCampaignState?.recent?.current_scene || {},
   ).companion;
+}
+
+function buildCompanionVisualProfile(companion = {}, campaignState = state.lastCampaignState || {}, styleProfile = {}, imageProfile = {}) {
+  const existing = companion.visual_profile || companion.meta?.visual_profile;
+  if (existing && typeof existing === "object") return existing;
+  const meta = companion.meta || {};
+  const rawType = String(meta.companion_type_raw || meta.companion_type || meta.kind || meta.type || companion.companion_type_raw || companion.kind || companion.archetype || "").trim();
+  const speciesText = [meta.species, meta.race, companion.species].filter(Boolean).join(" ");
+  const archetypeText = [meta.archetype, meta.class, companion.archetype].filter(Boolean).join(" ");
+  const equipmentText = normalizeProfileList(meta.equipment || meta.gear || meta.weapon || companion.equipment).join(" ");
+  const temperament = normalizeProfileList(meta.personality || meta.temperament || companion.personality || companion.meta);
+  const campaignStyle = normalizeProfileList([
+    campaignState.template,
+    campaignState.genre,
+    campaignState.tone,
+    campaignState.recent?.current_scene?.mood,
+    styleProfile.style,
+    imageProfile.style_preset,
+  ].filter(Boolean).join(" / "));
+  const profileText = normalizeActorName([rawType, speciesText, archetypeText, equipmentText, temperament.join(" ")].join(" "));
+  const preset = companionVisualPreset(profileText);
+  const profile = {
+    source: "resolved_from_campaign_memory",
+    companion_type_raw: rawType,
+    companion_type_preset: preset || "custom",
+    body_form: rawType || archetypeText || "custom distinct companion",
+    body_structure: ["distinct companion silhouette", "not the player body template"],
+    species_or_origin: normalizeProfileList(speciesText || archetypeText),
+    material_traits: ["campaign-appropriate material markers"],
+    costume_or_equipment: normalizeProfileList(equipmentText),
+    temperament,
+    campaign_style_markers: campaignStyle,
+    scale: meta.scale || "companion scale",
+    silhouette_rules: ["must differ from the main player silhouette", "support non-human forms when implied"],
+    face_rules: ["do not reuse player face template", "do not draw as ordinary NPC unless confirmed"],
+    pose_rules: ["clear role silhouette", "companion-focused posture"],
+    color_rules: ["separate from the player palette", "use campaign mood accents"],
+    avoid: ["do_not_reuse_player_face_template", "do_not_draw_as_ordinary_npc_unless_confirmed", "do_not_ignore_non_human_structure"],
+    certainty: rawType || speciesText || archetypeText ? "confirmed" : "fallback",
+  };
+  applyCompanionVisualPreset(profile, preset, profileText);
+  return profile;
+}
+
+function normalizeProfileList(value) {
+  if (Array.isArray(value)) return value.map((item) => typeof item === "object" ? (item.label || item.name || item.title || item.type || "") : item).map(String).map((item) => item.trim()).filter(Boolean);
+  return String(value || "").split(/[,\n/|；;、]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function companionVisualPreset(text = "") {
+  if (/palico|felyne|cat|feline|猫|艾露/.test(text)) return "palico";
+  if (/servant|assassin|caster|saber|knight|rider|lancer|archer|从者|英灵|骑士|术士|暗杀/.test(text)) return "servant";
+  if (/familiar|spirit|ghost|wisp|summon|灵|魔宠|使魔|召唤/.test(text)) return "familiar";
+  if (/mechanical|construct|robot|drone|ai|android|mecha|机械|构装|无人机|机器人/.test(text)) return "mechanical";
+  if (/ship|vehicle|bike|car|mount|载具|船|车|坐骑/.test(text)) return "vehicle";
+  return "custom";
+}
+
+function applyCompanionVisualPreset(profile, preset, text = "") {
+  if (preset === "palico") {
+    profile.body_form = "small feline companion";
+    profile.body_structure.push("large ears", "tail marker", "compact hunter-support body");
+    profile.material_traits.push("fur", "cloth or leather support gear");
+    profile.face_rules.push("cat nose", "whisker marks", "non-human muzzle");
+    profile.costume_or_equipment.push("support gear marker");
+  } else if (preset === "servant") {
+    profile.body_form = "class-readable high-spec humanoid companion";
+    profile.body_structure.push("ceremonial posture", "sharp class silhouette");
+    profile.material_traits.push("ritual cloth", "metal or shadow accents");
+    profile.face_rules.push("mask or stylized face option");
+  } else if (preset === "familiar") {
+    profile.body_form = "spiritual or magical familiar";
+    profile.body_structure.push("floating or compact magical body", "non-ordinary companion outline");
+    profile.material_traits.push("glow", "mist", "soft magical edges");
+    profile.face_rules.push("symbolic face");
+  } else if (preset === "mechanical") {
+    profile.body_form = "mechanical companion";
+    profile.body_structure.push("segmented chassis", "visible joints", "device-like head");
+    profile.material_traits.push("metal", "glass", "indicator lights");
+    profile.face_rules.push("sensor face", "no human skin template");
+  } else if (preset === "vehicle") {
+    profile.body_form = "vehicle or mount companion";
+    profile.body_structure.push("vehicle silhouette", "front marker", "utility attachments");
+    profile.material_traits.push("painted shell", "metal", "worn utility surfaces");
+    profile.face_rules.push("no human face");
+  } else if (/shadow|暗影|影/.test(text)) {
+    profile.body_form = "shadow-like custom companion";
+    profile.material_traits.push("shadow", "soft edge glow");
+    profile.body_structure.push("non-player silhouette");
+  }
 }
 
 function displaySpeaker(block) {
@@ -3523,13 +3860,13 @@ function galleryDedupeKeys(asset = {}) {
 function normalizeGalleryKind(kind) {
   const value = String(kind || "").toLowerCase();
   if (["cg_image", "gallery_image"].includes(value)) return "cg";
-  if (value === "companion_portrait") return "companion";
+  if (value === "companion_portrait") return "hidden";
   if (value === "master_portrait") return "master";
   if (value === "npc_portrait") return "npc";
   if (["scene_image", "map_image"].includes(value)) return "scene";
   if (value === "item_icon") return "item";
   if (value === "monster_image") return "monster";
-  if (value.includes("companion")) return "companion";
+  if (value.includes("companion")) return "hidden";
   if (["cg", "generated_cg", "gallery_image", "formal_cg", "剧情图", "生图"].some((token) => value.includes(token))) return "cg";
   if (value.includes("master") || value.includes("御主")) return "master";
   if (value.includes("document") || value.includes("文献")) return "document";
@@ -3546,13 +3883,16 @@ function normalizeGalleryKind(kind) {
 
 function fixedGalleryKind(kind) {
   const raw = String(kind || "").toLowerCase();
+  if (["hidden", "companion", "companion_portrait"].includes(raw)) return "";
   if (raw.includes("gallery_npc")) return "";
   if (["generated_cg", "gallery_image", "formal_cg", "cg_image"].some((token) => raw.includes(token))) {
     return (state.galleryFilterIds || []).includes("cg") ? "cg" : "";
   }
   const allowed = new Set((state.galleryFilterIds || []).filter((key) => key && key !== "all"));
   if (!allowed.size) return normalizeGalleryKind(kind);
+  if (allowed.has(raw)) return raw;
   let value = normalizeGalleryKind(kind);
+  if (["hidden", "companion"].includes(value)) return "";
   const aliases = {
     location: "scene",
     map: "scene",
@@ -3569,9 +3909,12 @@ function fixedGalleryKind(kind) {
 }
 
 function normalizeGalleryAssetForFixedFilters(asset) {
+  const identity = normalizeAssetIdentity(asset || {});
+  if (identity.runtime_role === "player" || identity.runtime_role === "companion") return null;
+  if (identity.visible_in_gallery === false || identity.not_in_gallery_filters) return null;
   const kind = fixedGalleryKind(asset?.kind);
   if (!kind) return null;
-  return { ...asset, kind };
+  return { ...asset, kind: identity.gallery_category && identity.gallery_category !== "hidden" ? fixedGalleryKind(identity.gallery_category) || kind : kind };
 }
 
 function readableAssetTitle(key, kind) {
@@ -3859,9 +4202,10 @@ function drawBlockAvatar(targetImage, block, role) {
   let kind, draw;
   if (canonicalRole === "companion") {
     const companion = visibleCompanion();
+    const visualProfile = buildCompanionVisualProfile(companion || { name: actorKey }, state.lastCampaignState || {}, {}, {});
     const companionSeed = scopedSeed(resolved.fallback_seed || companion?.seed || companion?.name || actorKey);
     kind = "companion_portrait";
-    draw = () => drawCompanionToCanvas(canvas, companionSeed, "companion");
+    draw = () => drawCompanionToCanvas(canvas, companionSeed, visualProfile.companion_type_preset || "custom", visualProfile);
     if (state.activeCampaign) {
       cacheCanvasAsset({
         canvas,
@@ -3874,8 +4218,24 @@ function drawBlockAvatar(targetImage, block, role) {
           title: companion?.name || resolved.display_name || actorKey,
           display_name: companion?.name || resolved.display_name || actorKey,
           role: "companion",
+          runtime_role: "companion",
+          companion_type: visualProfile.companion_type_raw,
+          companion_type_raw: visualProfile.companion_type_raw,
+          companion_type_preset: visualProfile.companion_type_preset,
+          archetype: companion?.meta?.archetype || companion?.archetype || companion?.meta?.kind || "",
+          species: companion?.meta?.species || "",
+          visual_profile: visualProfile,
           entity_key: resolved.entity_key || makeEntityKey("companion", companion?.name || actorKey),
-          visible_in_gallery: true,
+          avatar_key: resolved.entity_key || makeEntityKey("companion", companion?.name || actorKey),
+          portrait_asset_kind: "companion_portrait",
+          gallery_category: "hidden",
+          visible_in_gallery: false,
+          not_in_gallery_filters: true,
+          display_slot: "companion_card",
+          detail_slot: "companion_detail",
+          render_tier: "companion",
+          source_size: 512,
+          detail_level: "high",
         },
         draw,
       });
@@ -3901,7 +4261,15 @@ function drawBlockAvatar(targetImage, block, role) {
         title: resolved.display_name || actorKey,
         display_name: resolved.display_name || actorKey,
         role: resolved.role,
+        runtime_role: resolved.role,
         entity_key: resolved.entity_key,
+        avatar_key: resolved.entity_key,
+        portrait_asset_kind: kind,
+        gallery_category: resolved.role === "player" ? "hidden" : "npc",
+        not_in_gallery_filters: resolved.role === "player",
+        render_tier: resolved.role === "player" ? "player" : "npc",
+        source_size: resolved.role === "player" ? 512 : 256,
+        detail_level: resolved.role === "player" ? "high" : "standard",
         visible_in_gallery: resolved.visible_in_gallery,
       },
       draw,
@@ -4039,8 +4407,18 @@ function drawPixelActorPortrait(seedText, options = {}) {
         title: String(seedText || role),
         display_name: String(seedText || role),
         role,
+        runtime_role: role,
         entity_key: makeEntityKey(role, seedText),
-        visible_in_gallery: role !== "player",
+        avatar_key: makeEntityKey(role, seedText),
+        portrait_asset_kind: kind,
+        gallery_category: role === "player" || role === "companion" ? "hidden" : "npc",
+        visible_in_gallery: role !== "player" && role !== "companion",
+        not_in_gallery_filters: role === "player" || role === "companion",
+        display_slot: role === "player" ? "main_character_card" : role === "companion" ? "companion_card" : "dossier_gallery",
+        detail_slot: role === "player" ? "main_character_detail" : role === "companion" ? "companion_detail" : "dossier_detail",
+        render_tier: role === "player" ? "player" : role === "companion" ? "companion" : "npc",
+        source_size: role === "player" || role === "companion" ? 512 : 256,
+        detail_level: role === "player" || role === "companion" ? "high" : "standard",
       },
       draw: () => drawPixelActorPortrait(effectiveSeed, { cache: false, role, canvas, targetImage: null }),
     });
@@ -4245,9 +4623,10 @@ function drawStoryContextBackdrop(canvas, seedText, baseColor = "#d8c7a8", cells
 }
 
 function drawCompanionAvatar(seedText, options = {}) {
-  const canvas = options.canvas || createAssetCanvas(160, 160);
+  const canvas = options.canvas || createAssetCanvas(192, 192);
   const targetImage = options.targetImage === undefined ? $("companionImage") : options.targetImage;
   const effectiveSeed = options.seedText || seedText;
+  const visualProfile = options.visualProfile || buildCompanionVisualProfile({ name: seedText, meta: options.metadata || {}, archetype: options.archetype }, state.lastCampaignState || {}, {}, {});
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -4259,36 +4638,161 @@ function drawCompanionAvatar(seedText, options = {}) {
       metadata: options.metadata || {
         title: String(seedText || "companion"),
         display_name: String(seedText || "companion"),
-        role: normalizeVisualRole(options.archetype || "companion"),
-        entity_key: makeEntityKey(options.archetype || "companion", seedText),
-        visible_in_gallery: true,
+        role: "companion",
+        runtime_role: "companion",
+        companion_type: visualProfile.companion_type_raw,
+        companion_type_raw: visualProfile.companion_type_raw,
+        companion_type_preset: visualProfile.companion_type_preset,
+        archetype: options.archetype || "",
+        species: options.species || "",
+        visual_profile: visualProfile,
+        entity_key: makeEntityKey("companion", seedText),
+        avatar_key: makeEntityKey("companion", seedText),
+        portrait_asset_kind: "companion_portrait",
+        gallery_category: "hidden",
+        visible_in_gallery: false,
+        not_in_gallery_filters: true,
+        display_slot: "companion_card",
+        detail_slot: "companion_detail",
+        render_tier: "companion",
+        source_size: 512,
+        detail_level: "high",
       },
-      draw: () => drawCompanionToCanvas(canvas, effectiveSeed, options.archetype),
+      draw: () => drawCompanionToCanvas(canvas, effectiveSeed, options.archetype, visualProfile),
     });
     return;
   }
-  drawCompanionToCanvas(canvas, effectiveSeed, options.archetype);
+  drawCompanionToCanvas(canvas, effectiveSeed, options.archetype, visualProfile);
   if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
 }
 
-function drawCompanionToCanvas(canvas, seedText, archetype = "") {
-  drawHighSpecCompanionToCanvas(canvas, seedText, "companion");
+function drawCompanionToCanvas(canvas, seedText, archetype = "", visualProfile = {}) {
+  drawHighSpecCompanionToCanvas(canvas, seedText, archetype || visualProfile.companion_type_preset || "custom", visualProfile);
 }
 
-function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "") {
-  drawPlayerFullBodyToCanvas(canvas, seedText);
+function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "", visualProfile = {}) {
   const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`${seedText}:${JSON.stringify(visualProfile || {})}`);
   const cell = canvas.width / 32;
   const px = (x, y, w, h, color) => {
     ctx.fillStyle = color;
     ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
   };
-  const type = normalizeActorName(archetype);
-  if (type.includes("drone")) {
-    px(6, 8, 20, 10, "#5b6f7d");
-    px(8, 10, 16, 6, "#8fb0bf");
-    px(13, 12, 6, 2, "#d8edf2");
+  const palette = companionPalette(seed, visualProfile);
+  drawCompanionBackdrop(ctx, canvas.width, canvas.height, palette);
+  const text = normalizeActorName([
+    archetype,
+    visualProfile.companion_type_preset,
+    visualProfile.companion_type_raw,
+    visualProfile.body_form,
+    ...(visualProfile.body_structure || []),
+    ...(visualProfile.species_or_origin || []),
+    ...(visualProfile.material_traits || []),
+  ].join(" "));
+  if (/palico|felyne|cat|feline|猫|艾露/.test(text)) {
+    drawFelineCompanion(px, palette);
+  } else if (/mechanical|construct|robot|drone|ai|android|mecha|机械|构装|无人机|机器人|metal|sensor/.test(text)) {
+    drawMechanicalCompanion(px, palette);
+  } else if (/vehicle|ship|bike|car|mount|载具|船|车|坐骑/.test(text)) {
+    drawVehicleCompanion(px, palette);
+  } else if (/familiar|spirit|ghost|wisp|summon|灵|魔宠|使魔|召唤|shadow|mist|glow/.test(text)) {
+    drawSpiritCompanion(px, palette, seed);
+  } else if (/quadruped|animal|deer|wolf|hound|bird|beast|动物|兽|鹿|狼|鸟/.test(text)) {
+    drawAnimalCompanion(px, palette);
+  } else {
+    drawCustomHumanoidCompanion(px, palette, seed, visualProfile);
   }
+  drawCompanionProfileMarks(px, visualProfile, palette);
+}
+
+function companionPalette(seed, visualProfile = {}) {
+  const presets = [
+    ["#2d3242", "#c9b37e", "#6f8f9c", "#f1e6c8"],
+    ["#2f2838", "#9c7ec9", "#c2d58a", "#f4e9f2"],
+    ["#243536", "#80b59c", "#d8c07a", "#edf4df"],
+    ["#342b25", "#c6845a", "#6d7e9c", "#f4dfc5"],
+  ];
+  const row = presets[seed % presets.length];
+  if (String(visualProfile.body_form || "").toLowerCase().includes("mechanical")) return ["#27323a", "#8fb0bf", "#d8edf2", "#f0c86a"];
+  return row;
+}
+
+function drawCompanionBackdrop(ctx, w, h, palette) {
+  ctx.clearRect(0, 0, w, h);
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, palette[0]);
+  grad.addColorStop(1, shadeColor(palette[0], 22));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(255,255,255,.08)";
+  ctx.fillRect(w * .12, h * .12, w * .76, h * .08);
+  ctx.fillRect(w * .2, h * .82, w * .6, h * .05);
+}
+
+function drawFelineCompanion(px, p) {
+  px(11, 7, 4, 6, p[1]); px(17, 7, 4, 6, p[1]);
+  px(12, 9, 2, 3, "#e9b7a3"); px(18, 9, 2, 3, "#e9b7a3");
+  px(9, 12, 14, 12, p[3]);
+  px(8, 20, 16, 8, p[1]);
+  px(12, 16, 2, 2, "#1f2024"); px(18, 16, 2, 2, "#1f2024");
+  px(15, 18, 2, 1, "#5d3c3c");
+  px(7, 18, 5, 1, p[2]); px(20, 18, 5, 1, p[2]);
+  px(6, 23, 5, 3, p[2]); px(21, 23, 5, 3, p[2]);
+  px(22, 25, 5, 2, p[3]);
+}
+
+function drawMechanicalCompanion(px, p) {
+  px(8, 10, 16, 12, p[1]);
+  px(10, 12, 12, 8, "#5b6f7d");
+  px(13, 14, 3, 2, p[2]); px(18, 14, 3, 2, p[3]);
+  px(6, 22, 20, 5, "#42515b");
+  px(7, 27, 4, 3, p[1]); px(21, 27, 4, 3, p[1]);
+  px(5, 14, 3, 2, p[3]); px(24, 14, 3, 2, p[3]);
+}
+
+function drawVehicleCompanion(px, p) {
+  px(5, 17, 22, 8, p[1]);
+  px(9, 13, 12, 5, p[2]);
+  px(7, 24, 5, 5, "#22262b"); px(20, 24, 5, 5, "#22262b");
+  px(8, 25, 3, 3, p[3]); px(21, 25, 3, 3, p[3]);
+  px(23, 15, 4, 2, p[3]);
+}
+
+function drawSpiritCompanion(px, p, seed) {
+  px(12, 8, 8, 3, "rgba(255,255,255,.22)");
+  px(9, 11, 14, 13, p[2]);
+  px(11, 14, 10, 11, shadeColor(p[2], 34));
+  px(13, 16, 2, 2, p[0]); px(18, 16, 2, 2, p[0]);
+  px(10, 25, 12, 2, "rgba(255,255,255,.22)");
+  for (let i = 0; i < 5; i += 1) px((seed >>> (i * 3)) % 26 + 3, 6 + i * 4, 1, 1, p[3]);
+}
+
+function drawAnimalCompanion(px, p) {
+  px(8, 16, 15, 8, p[1]);
+  px(19, 12, 7, 7, p[3]);
+  px(21, 9, 2, 4, p[3]); px(24, 9, 2, 4, p[3]);
+  px(23, 15, 1, 1, "#1d1e22");
+  px(9, 24, 3, 5, p[0]); px(18, 24, 3, 5, p[0]);
+  px(5, 17, 5, 2, p[2]);
+}
+
+function drawCustomHumanoidCompanion(px, p, seed, visualProfile = {}) {
+  const hood = /assassin|shadow|mask|暗|影/.test(normalizeActorName(JSON.stringify(visualProfile)));
+  px(11, 7, 10, 6, hood ? p[0] : p[2]);
+  px(10, 12, 12, 9, hood ? "#2b2b34" : p[3]);
+  px(13, 15, 2, 2, hood ? p[3] : p[0]); px(18, 15, 2, 2, hood ? p[3] : p[0]);
+  px(8, 21, 16, 9, p[1]);
+  px(7, 18, 3, 10, p[2]); px(22, 18, 3, 10, p[2]);
+  if (seed % 2) px(24, 12, 2, 14, p[3]); else px(6, 12, 2, 14, p[3]);
+}
+
+function drawCompanionProfileMarks(px, visualProfile = {}, p) {
+  const gear = normalizeProfileList(visualProfile.costume_or_equipment || "").join(" ").toLowerCase();
+  if (/blade|sword|knife|bow|枪|剑|刀|弓/.test(gear)) px(25, 8, 2, 17, p[3]);
+  if (/goggle|visor|护目|面罩|mask/.test(gear + " " + (visualProfile.face_rules || []).join(" "))) {
+    px(11, 14, 10, 2, "rgba(20,25,30,.75)");
+  }
+  px(4, 28, 24, 2, "rgba(0,0,0,.22)");
 }
 
 function drawPixelMap(seedText, options = {}) {
@@ -5702,24 +6206,17 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
 
 function lockedAvatarAsset(kind, safeId, metadata = {}) {
   if (!["portrait", "npc_portrait", "companion", "companion_portrait", "monster_portrait"].includes(String(kind))) return null;
-  const requestedNames = new Set([
-    safeId,
-    metadata.title,
-    metadata.object_id,
-    metadata.actor_id,
-  ].map(normalizeActorName).filter(Boolean));
+  const entityKey = metadata.entity_key || metadata.avatar_key || "";
+  const portraitKind = metadata.portrait_asset_kind || kind;
+  if (entityKey) {
+    const locked = selectBestAvatarAsset(entityKey, portraitKind, state.cachedAssets || []);
+    if (locked && isVcgAvatarAsset(locked)) return locked;
+  }
   return (state.cachedAssets || []).find((asset) => {
     if (!isAssetForCurrentCampaign(asset)) return false;
     if (!asset?.exists || !asset.url || String(asset.kind || "") !== String(kind)) return false;
     if (assetVersionTag(asset) !== "VCG") return false;
-    const assetMeta = asset.metadata || {};
-    const assetNames = [
-      assetMeta.title,
-      assetMeta.object_id,
-      assetMeta.actor_id,
-      asset.key,
-    ].map(normalizeActorName).filter(Boolean);
-    return assetNames.some((name) => requestedNames.has(name));
+    return Boolean(entityKey && (asset.entity_key === entityKey || asset.metadata?.entity_key === entityKey));
   }) || null;
 }
 

@@ -340,30 +340,93 @@ def build_frontend_story_progress(blueprint: dict[str, Any], progress: dict[str,
     chapter_progress = int(calculated.get("chapter") if calculated.get("chapter") is not None else calculate_chapter_progress(blueprint, progress))
     overall = int(calculated.get("overall") if calculated.get("overall") is not None else calculate_overall_progress(blueprint, progress))
     total_node_count = sum(len(_nodes(chapter_item)) for chapter_item in _chapters(blueprint))
+    completed_node_ids = progress.get("completed_node_ids") if isinstance(progress.get("completed_node_ids"), list) else []
     current_chapter_name = _public_name(chapter, "当前章节")
     current_node_name = _public_name(node, "当前节点")
+    chapter_nodes = _nodes(chapter) if chapter else []
+    beat_status = progress.get("beat_status", {}) if isinstance(progress.get("beat_status"), dict) else {}
+    node_beats = _frontend_beat_checklist(node, beat_status)
+    next_nodes = _frontend_next_nodes(blueprint, node)
     return {
         "enabled": True,
         "story_length": blueprint.get("story_length", "medium"),
         "current_chapter": {
             "id": str(chapter.get("chapter_id") if chapter else ""),
             "name": current_chapter_name,
+            "summary": str((chapter or {}).get("summary") or (chapter or {}).get("goal") or (chapter or {}).get("description") or ""),
             "progress": chapter_progress,
+            "node_count": len(chapter_nodes),
+            "completed_node_count": len([
+                node_id for node_id in completed_node_ids
+                if any(str(item.get("node_id") or "") == str(node_id) for item in chapter_nodes)
+            ]),
         },
         "current_node": {
             "id": str(node.get("node_id") if node else ""),
             "name": current_node_name,
+            "goal": str((node or {}).get("goal") or (node or {}).get("summary") or (node or {}).get("description") or ""),
+            "target_chars": _safe_int((node or {}).get("target_chars")),
+            "turns_in_node": _safe_int(progress.get("turns_in_node")),
+            "chars_in_node": _safe_int(progress.get("chars_in_node")),
+            "beat_checklist": node_beats,
+            "next_nodes": next_nodes,
             "progress": node_progress,
         },
         "overall_progress": overall,
         "chapter_progress": chapter_progress,
         "node_progress": node_progress,
+        "node_count": len(chapter_nodes),
+        "beat_checklist": node_beats,
+        "next_nodes": next_nodes,
         "pace_command": progress.get("pace_command", "normal"),
         "progress_label": f"{current_chapter_name} / {current_node_name}" if node or chapter else "",
         "status_text": _status_text(progress.get("pace_command", "normal")),
-        "completed_node_count": len(progress.get("completed_node_ids") if isinstance(progress.get("completed_node_ids"), list) else []),
+        "completed_node_count": len(completed_node_ids),
         "total_node_count": total_node_count,
     }
+
+
+def _frontend_beat_checklist(node: dict[str, Any] | None, beat_status: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    raw_beats = node.get("beat_checklist") if isinstance(node, dict) else []
+    if not isinstance(raw_beats, list):
+        return rows
+    for index, beat in enumerate(raw_beats, start=1):
+        if isinstance(beat, dict):
+            beat_id = str(beat.get("beat_id") or beat.get("id") or f"beat_{index}")
+            text = str(beat.get("label") or beat.get("title") or beat.get("text") or beat.get("description") or beat_id)
+        else:
+            beat_id = f"beat_{index}"
+            text = str(beat or "").strip()
+        if not text:
+            continue
+        rows.append({
+            "id": beat_id,
+            "text": text,
+            "status": str(beat_status.get(beat_id) or "pending"),
+        })
+    return rows
+
+
+def _frontend_next_nodes(blueprint: dict[str, Any], node: dict[str, Any] | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    raw_next = node.get("next_nodes") if isinstance(node, dict) else []
+    if not isinstance(raw_next, list):
+        return rows
+    for item in raw_next:
+        node_id = str(item or "").strip()
+        if not node_id:
+            continue
+        next_node = find_node(blueprint, node_id)
+        rows.append({"id": node_id, "name": _public_name(next_node, node_id) if next_node else node_id})
+    return rows
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _calculated(blueprint: dict[str, Any], progress: dict[str, Any]) -> dict[str, Any]:
@@ -547,7 +610,7 @@ def _dedupe_tail(items: list[Any], limit: int = 50) -> list[Any]:
 def _public_name(item: dict[str, Any] | None, fallback: str) -> str:
     if not item:
         return ""
-    return str(item.get("public_name") or item.get("name") or fallback)
+    return str(item.get("public_name") or item.get("name") or item.get("title") or fallback)
 
 
 def _status_text(pace_command: str) -> str:

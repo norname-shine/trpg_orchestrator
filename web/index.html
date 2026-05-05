@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TRPG 跑团控制台</title>
-  <link rel="stylesheet" href="/app.css?v=17">
+  <link rel="stylesheet" href="/app.css?v=20">
 </head>
 <body>
   <canvas id="rainCanvas" aria-hidden="true"></canvas>
@@ -44,6 +44,7 @@
               <div><span>当前节点</span><b id="storyProgressNodeName">-</b><strong id="storyProgressNodePercent">0%</strong></div>
               <div><span>节奏</span><b id="storyProgressPace">normal</b><strong></strong></div>
             </div>
+            <div class="storyProgressDetails" id="storyProgressDetails"></div>
             <p id="storyProgressStatusText">未启用结构化故事进度</p>
           </div>
         </div>
@@ -72,6 +73,9 @@
             <div>
               <h3 id="characterName">未命名角色</h3>
               <p id="characterMeta">身份待确认</p>
+              <div class="characterBackground" id="characterBackground">背景待确认</div>
+              <button class="characterProfileToggle" id="characterProfileToggle" type="button" aria-expanded="false">主角资料 · 展开</button>
+              <div class="characterProfileDetails" id="characterProfileDetails" hidden></div>
               <div class="progressLine">
                 <span id="progressLabel">成长</span>
                 <b id="progressValue">待记录</b>
@@ -80,6 +84,7 @@
             </div>
           </div>
           <div class="statList" id="vitalList"></div>
+          <div class="threeAttributeSlot" id="threeAttributeSlot"></div>
           <div class="conditionTitle">条件与状态</div>
           <div class="badges" id="characterBadges">
             <span>谨慎</span><span>斩斧</span><span>生态调查</span><span>新人猎人</span>
@@ -344,7 +349,7 @@
       </div>
     </div>
   </div>
-  <script src="/app.js?v=17"></script>
+  <script src="/app.js?v=20"></script>
 </body>
 </html>
 

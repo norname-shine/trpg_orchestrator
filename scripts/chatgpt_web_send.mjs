@@ -20,6 +20,8 @@ const userDataDir = process.env.TRPG_BROWSER_USER_DATA_DIR;
 const cdpUrl = process.env.TRPG_BROWSER_CDP_URL || "http://127.0.0.1:9222";
 const keepBrowserOpen = process.env.TRPG_BROWSER_KEEP_OPEN !== "0";
 const manualWaitMs = Number(process.env.TRPG_BROWSER_MANUAL_WAIT_MS || 10 * 60 * 1000);
+const streamVisibleReply = process.env.TRPG_STREAM_VISIBLE_REPLY === "1";
+const directNewChat = process.env.TRPG_CHATGPT_DIRECT_NEW_CHAT !== "0";
 
 const M = {
   body: "\u3010\u6b63\u6587\u3011",
@@ -41,8 +43,12 @@ try {
   const page = await chatgptPage(browser);
 
   await safetyCheck(page);
-  await openProject(page, projectName);
-  await openConversation(page, conversationName, createIfMissing);
+  if (directNewChat && !captureOnly) {
+    await openNewChat(page);
+  } else {
+    await openProject(page, projectName);
+    await openConversation(page, conversationName, createIfMissing);
+  }
   await safetyCheck(page);
 
   if (captureOnly) {
@@ -346,6 +352,45 @@ async function ensureSidebarOpen(page) {
   }
 }
 
+async function openNewChat(page) {
+  await ensureSidebarOpen(page);
+  const candidates = [
+    page.getByText("New chat", { exact: true }),
+    page.getByText("新聊天", { exact: true }),
+    page.locator('a[href="/"]').filter({ hasText: /New chat|新聊天/i }),
+    page.locator('button[aria-label*="New chat"]'),
+    page.locator('button[aria-label*="新聊天"]'),
+    page.locator("button").filter({ hasText: /New chat|新聊天/i }),
+  ];
+
+  for (const candidate of candidates) {
+    const first = candidate.first();
+
+    if (await first.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await first.click({ force: true });
+      await page.waitForTimeout(1200);
+      await waitForComposerReady(page);
+      return;
+    }
+  }
+
+  await page.goto("https://chatgpt.com/", {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await waitForComposerReady(page);
+}
+
+async function waitForComposerReady(page) {
+  const start = Date.now();
+  while (Date.now() - start < 30_000) {
+    await safetyCheck(page);
+    if (await isComposerVisible(page)) return;
+    await page.waitForTimeout(500);
+  }
+  fail("New chat composer not found.");
+}
+
 async function openNewChatInCurrentProject(page) {
   const candidates = [
     page.getByText("新聊天", { exact: true }),
@@ -474,11 +519,16 @@ async function clickSend(page) {
 async function waitForAssistantCompletion(page) {
   let stableCount = 0;
   let lastText = "";
+  let lastStreamedText = "";
 
   for (let i = 0; i < 240; i += 1) {
     await safetyCheck(page);
 
     const text = await latestAssistantText(page);
+    if (streamVisibleReply && text && text !== lastStreamedText) {
+      emitVisibleReplySnapshot(text);
+      lastStreamedText = text;
+    }
     const stopVisible = await page
       .locator('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="停止"]')
       .first()
@@ -500,6 +550,18 @@ async function waitForAssistantCompletion(page) {
   }
 
   return lastText;
+}
+
+function emitVisibleReplySnapshot(text) {
+  const body = Buffer.from(publicStreamPreview(text), "utf8").toString("base64");
+  console.log(`TRPG_STREAM_SNAPSHOT ${body}`);
+}
+
+function publicStreamPreview(text) {
+  let value = String(text || "");
+  const writebackIndex = value.indexOf(M.writebackBegin);
+  if (writebackIndex >= 0) value = value.slice(0, writebackIndex).trimEnd();
+  return value;
 }
 
 async function waitForImageCompletion(page, artifactPath) {

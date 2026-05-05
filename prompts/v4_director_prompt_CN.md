@@ -145,4 +145,7 @@
 - 如果生图画面会包含已存在角色，应在 `visual_assets.character_targets` 中列出这些角色和目标头像资产槽，方便运行时从最终大图中截取头像并更新角色视觉基准。
 - `map_route` 是剧情拓扑，不要放生图提示词、ASCII 点阵、绘图坐标或地形符号。
 - `map_canvas` 是绘图数据，仅在要求更新地图或场景几何变化时使用。
+- 当 `inventory_updates` 被授权时，优先返回结构化物品行，而不是只写自然语言句子。字段建议：
+  `{ "id": "", "name": "", "category": "weapon | resource | relic | supply | clue | material | misc", "item_type": "short_sword | oil_lantern | pendant | potion | document | key | material | generic", "status": "confirmed | limited | damaged | uncertain", "description": "", "source_evidence": "", "certainty": "confirmed | clue | uncertain", "visual_hint": { "archetype": "", "category": "", "source_text": "" } }`。
+- 不要把否定状态写成物品。比如“暂无伤势”“没有装备损坏”“未发现物品”“无异常”不能进入 inventory 或 gallery 资产。
 

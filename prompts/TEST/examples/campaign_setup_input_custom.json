@@ -1,0 +1,30 @@
+{
+  "name": "未知的故事",
+  "template": "custom",
+  "story_length": "medium",
+  "user_prompt": "默认",
+  "model_mode": "dual_director_actor",
+  "protagonist_name": "LEE",
+  "protagonist_role": "默认",
+  "protagonist_background": "AI定",
+  "protagonist_motivation": "",
+  "protagonist_personality": "自动生成",
+  "attribute_theme": "generic",
+  "companion_config": {
+    "companion_enabled": true,
+    "companion_mode": "auto",
+    "companion_name": "",
+    "companion_role": "",
+    "companion_personality": ""
+  },
+  "rules_strictness": "light",
+  "safety_lines": ["不出现露骨血腥", "不出现真实儿童伤害"],
+  "custom_rules": [
+    {
+      "enabled": true,
+      "title": "都市神秘",
+      "target_layer": "both",
+      "content": "故事应保持现代都市神秘感，不要过早解释超自然来源。"
+    }
+  ]
+}

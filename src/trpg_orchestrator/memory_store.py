@@ -27,21 +27,42 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
                 "director_model": "deepseek_v4",
                 "actor_model": "chatgpt",
                 "single_model": "",
-                "custom_provider": "",
-                "custom_base_url": "",
-                "custom_model_name": "",
-                "custom_api_key_ref": "",
-                "custom_role": "",
+                "model_slots": {
+                    "director": {"enabled": False, "provider_type": "", "base_url": "", "model_name": "", "api_key_ref": ""},
+                    "actor": {"enabled": False, "provider_type": "", "base_url": "", "model_name": "", "api_key_ref": ""},
+                    "single": {"enabled": False, "provider_type": "", "base_url": "", "model_name": "", "api_key_ref": ""},
+                },
+            },
+            "story_config": {
+                "story_length": "medium",
+                "target_total_chars": 80000,
+                "target_chapters": 6,
+                "target_nodes": 24,
             },
             "rules_config": {
                 "character_card_enabled": True,
                 "stat_visibility": "narrative",
+                "attribute_config": {
+                    "enabled": True,
+                    "visible": True,
+                    "theme": "generic",
+                    "cap": 20,
+                    "float_ratio": 1.2,
+                    "three_enabled": True,
+                    "six_enabled": True,
+                    "six_source": "",
+                },
+                "attribute_roll_config": {
+                    "enabled": True,
+                    "method": "balanced_random",
+                    "min": 6,
+                    "max": 18,
+                },
                 "dice_enabled": False,
                 "dice_type": "",
                 "roll_mode": "",
                 "roll_attributes": [],
                 "rules_strictness": "light",
-                "party_mode": "solo",
             },
             "companion_config": {
                 "companion_enabled": False,
@@ -129,7 +150,7 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "image_generation_rules": [],
             "do_not_generate": [],
         },
-        "player_state.json": base_memory(campaign_id, "player"),
+        "player_state.json": player_memory(campaign_id),
         "npc_memory.json": base_memory(campaign_id, "npcs"),
         "world_state.json": base_memory(campaign_id, "world"),
         "location_history.json": base_memory(campaign_id, "locations"),
@@ -174,6 +195,8 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "schema": "trpg_orchestrator.story_blueprint.v1",
             "story_length": "medium",
             "target_total_chars": 80000,
+            "target_chapters": 6,
+            "target_nodes": 24,
             "chapters": [],
             "notes": [],
         },
@@ -240,6 +263,47 @@ def base_memory(campaign_id: str, scope: str) -> dict[str, Any]:
         "uncertain_or_unconfirmed": [],
         "notes": [],
     }
+
+
+def player_memory(campaign_id: str) -> dict[str, Any]:
+    data = base_memory(campaign_id, "player")
+    data["character_card"] = {
+        "enabled": True,
+        "mode": "narrative",
+        "identity": {
+            "name": "",
+            "role": "",
+            "title": "",
+            "summary": "",
+        },
+        "profile": {
+            "background": "",
+            "motivation": "",
+            "personality": "",
+            "notes": [],
+        },
+        "vitals": [],
+        "attributes": {
+            "enabled": False,
+            "visible": False,
+            "cap": 20,
+            "float_ratio": 1.2,
+            "float_cap": 24,
+            "theme": "generic",
+            "three": {
+                "template": "three",
+                "source": "generic",
+                "items": [],
+            },
+            "six": {
+                "template": "six",
+                "source": "",
+                "items": [],
+            },
+        },
+        "badges": [],
+    }
+    return data
 
 
 class MemoryStore:

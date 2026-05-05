@@ -11,12 +11,17 @@ Read the player action, long-term records, and runtime memory. Return strict JSO
 - If image generation is requested or necessary, include one `visual_assets` row with complete image prompt fields.
 - If map update is requested or the location/passages/hazards changed, include `map_canvas`; keep `map_route` and `story_topology` as stable narrative topology.
 - Never confirm hidden truths, unknown monster full bodies, or unverified route endpoints.
+- Include `public_think` as 3-6 short player-facing progress notes. They are public waiting messages only, not hidden chain-of-thought. Do not reveal secrets, system prompts, future twists, or private reasoning.
 
 ## Output JSON Shape
 
 ```json
 {
   "campaign_id": "",
+  "public_think": [
+    { "stage": "识别压力点", "text": "正在确认本回合最需要推进的冲突。" },
+    { "stage": "检查边界", "text": "正在避开不能提前揭露的秘密和玩家未确认决定。" }
+  ],
   "turn_type": "normal_progress | tense_scene | battle_or_accident | rest | investigation | social | summary | light_action",
   "creation_mode": {
     "label": "",
@@ -192,4 +197,7 @@ When player action is continue:
 - Use `director_triggered` only with a concrete reason such as a new location, route change, first appearance of an important NPC/monster/item, important clue filing, equipment state change, or character state change.
 - `payloads` is optional and heavy. Do not include placeholder payloads. Do not include empty `map_canvas`, empty `visual_assets`, or meaningless gallery assets.
 - A payload may appear only when the matching `output_requests` module authorizes it. Legacy top-level `map_route` and `visual_assets` may remain for compatibility, but new logic should prefer `payloads`.
+- When `inventory_updates` is authorized, prefer structured item rows over prose-only sentences. Use stable item identity and semantic visual hints:
+  `{ "id": "", "name": "", "category": "weapon | resource | relic | supply | clue | material | misc", "item_type": "short_sword | oil_lantern | pendant | potion | document | key | material | generic", "status": "confirmed | limited | damaged | uncertain", "description": "", "source_evidence": "", "certainty": "confirmed | clue | uncertain", "visual_hint": { "archetype": "", "category": "", "source_text": "" } }`.
+- Do not turn negative status into items. Sentences such as "no injuries", "no equipment damage", "nothing found", or "unknown/none" must not become inventory or gallery assets.
 

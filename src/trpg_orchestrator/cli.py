@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import re
 import shutil
 import sys
@@ -241,6 +242,15 @@ def anchor_progress_control(pressure_pack: dict, memory: dict) -> dict:
     return pressure_pack
 
 
+def emit_public_job_status(stage: str, label: str, percent: int | None = None, public_think: list | None = None) -> None:
+    payload = {"stage": stage, "label": label}
+    if percent is not None:
+        payload["percent"] = percent
+    if public_think:
+        payload["public_think"] = public_think
+    print("TRPG_WORKER_STATUS " + json.dumps(payload, ensure_ascii=False), flush=True)
+
+
 def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: bool = False) -> int:
     store = MemoryStore()
     resolved = store.resolve_campaign_id(campaign_id)
@@ -251,6 +261,7 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
     write_json(outbox_dir / "capability_plan.json", capability_plan)
     director_user_prompt = build_director_user_prompt(resolved, action, memory, capability_plan)
     write_text_utf8(outbox_dir / "v4_director_input.md", director_user_prompt)
+    emit_public_job_status("director_turn", "导演层正在判断本回合局势", 18)
     if offline_pressure_pack:
         core_pressure_pack = _offline_pressure_pack(resolved, action, memory)
     else:
@@ -259,6 +270,12 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
             read_prompt("v4_director_prompt.md"),
             director_user_prompt,
         ))
+    emit_public_job_status(
+        "director_turn",
+        str(core_pressure_pack.get("human_readable_note") or "导演层已生成本回合压力包"),
+        30,
+        core_pressure_pack.get("public_think") if isinstance(core_pressure_pack.get("public_think"), list) else None,
+    )
     core_pressure_pack = normalize_pressure_pack_compat(core_pressure_pack)
     anchor_progress_control(core_pressure_pack, memory)
     validate_pressure_pack(core_pressure_pack, resolved, require_payloads=False)
@@ -297,6 +314,7 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
         outbox_dir / "chatgpt_input.md",
         build_chatgpt_input(resolved, action, memory, pressure_pack, capability_plan),
     )
+    emit_public_job_status("actor_waiting", "演员层正在生成正文", 42)
     mirror_to_global_outbox(outbox_dir, ["last_player_action.txt", "capability_plan.json", "selected_prompt_modules.json", "selected_director_memory.json", "selected_actor_memory.json", "v4_director_input.md", "pressure_pack_core.json", "missing_capabilities.json", "payload_fulfillment_input.md", "payload_patch.json", "pressure_pack.json", "pressure_pack_normalized.json", "chatgpt_input.md"])
     print(f"wrote {outbox_dir / 'pressure_pack.json'} and {outbox_dir / 'chatgpt_input.md'}")
     return 0
@@ -392,7 +410,9 @@ def web_client(campaign_id: str | None = None) -> ChatGPTWebClient:
 def cmd_send(campaign_id: str | None) -> int:
     resolved = MemoryStore().resolve_campaign_id(campaign_id)
     outbox_dir = campaign_outbox_dir(resolved)
+    emit_public_job_status("actor_waiting", "等待 ChatGPT 常驻浏览器返回", 48)
     web_client(resolved).send_and_capture(outbox_dir / "chatgpt_input.md", outbox_dir / "chatgpt_raw_output.md")
+    emit_public_job_status("parsing", "正文已返回，正在解析结构化输出", 72)
     mirror_to_global_outbox(outbox_dir, ["chatgpt_input.md", "chatgpt_raw_output.md"])
     print(f"sent {outbox_dir / 'chatgpt_input.md'} and captured {outbox_dir / 'chatgpt_raw_output.md'}")
     return 0
@@ -715,6 +735,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     if not raw_path.exists():
         raise FileNotFoundError(f"missing {outbox_dir / 'chatgpt_raw_output.md'}")
     raw_output = read_runtime_text(raw_path)
+    emit_public_job_status("parsing", "正在解析正文与状态回写", 76)
     gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
     parsed = gate["parsed"]
     flavor_report = gate["flavor_report"]
@@ -741,6 +762,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     if skip_v4_audit:
         audit_result = {"decision": "accept", "reason": "skip-v4-audit enabled", "approved_writeback": parsed.writeback, "memory_files_to_update": [], "warnings": ["audit skipped"]}
     else:
+        emit_public_job_status("writeback", "V4 正在审核状态写回", 84)
         audit_result = extract_json_object(DeepSeekClient().complete_json(
             read_prompt("v4_audit_prompt.md"),
             build_audit_user_prompt(resolved, memory, pressure_pack, parsed.writeback, capability_plan),
@@ -777,6 +799,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     updates["run_records.json"] = run_records
     touched = list(updates.keys())
     if touched:
+        emit_public_job_status("writeback", "正在写回长期记忆", 92)
         store.backup_files(resolved, touched)
         store.write_memory_updates(resolved, updates)
     log_path = store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, updates, outbox_dir, story_progress_before, story_progress_after, capability_plan))

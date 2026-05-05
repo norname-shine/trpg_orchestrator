@@ -6,424 +6,265 @@
   <title>新建跑团</title>
   <link rel="stylesheet" href="/app.css?v=17">
   <style>
-    html,
-    body {
-      overflow: hidden;
-    }
-    body.dragScrolling {
-      cursor: grabbing;
-      user-select: none;
-    }
-    body.dragScrolling * {
-      cursor: grabbing !important;
-    }
-    .createShell {
-      position: fixed;
-      inset: 0;
-      width: 100%;
-      height: 100dvh;
-      margin: 0;
-      padding: 22px 14px;
-      overflow: auto;
-      cursor: grab;
-    }
-    .createLayout {
-      width: min(1180px, 100%);
-      margin: 0 auto;
-      min-height: calc(100dvh - 44px);
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 360px;
-      gap: 16px;
-    }
-    .createMain,
-    .rulesSide {
-      min-height: 0;
-      padding: 20px;
-    }
-    .createHeader {
-      display: flex;
-      justify-content: space-between;
-      gap: 14px;
-      align-items: flex-start;
-      margin-bottom: 18px;
-    }
-    .createHeader h1 {
-      margin: 0;
-      font-size: 28px;
-      line-height: 1.2;
-    }
-    .createHeader p,
-    .hintLine,
-    .checkText small {
-      margin: 6px 0 0;
-      color: var(--muted);
-      line-height: 1.6;
-      font-size: 13px;
-    }
-    .createForm {
-      display: grid;
-      gap: 14px;
-    }
-    .formGrid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-    }
-    .formSection {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: rgba(255,255,255,.52);
-      padding: 14px;
-      display: grid;
-      gap: 12px;
-    }
-    .formSection h2 {
-      margin: 0;
-      font-size: 16px;
-    }
-    .createForm label {
-      display: grid;
-      gap: 7px;
-      color: #6b563b;
-      font-weight: 700;
-    }
-    .createForm input,
-    .createForm select,
-    .createForm textarea {
-      width: 100%;
-      min-height: 42px;
-      border: 1px solid var(--line-strong);
-      border-radius: 10px;
-      padding: 0 11px;
-      background: rgba(255,255,255,.78);
-      color: var(--ink);
-      font: inherit;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.78);
-      cursor: auto;
-    }
-    .createForm textarea {
-      min-height: 150px;
-      resize: vertical;
-      padding-top: 10px;
-      line-height: 1.65;
-    }
-    .compactTextarea { min-height: 92px; }
-    .checkLabel {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      font-weight: 700;
-      color: #5c472e;
-    }
-    .checkLabel input {
-      width: auto;
-      min-height: 0;
-      margin-top: 4px;
-    }
-    .checkText {
-      display: grid;
-      gap: 2px;
-    }
-    .conditional {
-      display: grid;
-      gap: 12px;
-      padding: 12px;
-      border-radius: 10px;
-      background: rgba(248, 242, 232, .72);
-      border: 1px dashed rgba(138, 102, 55, .26);
-    }
-    .conditional.hidden { display: none; }
-    .createActions {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-      padding-top: 4px;
-    }
-    .buttonRow {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    .createActions button,
-    .ruleToggle,
-    .secondaryBtn {
-      min-height: 40px;
-      border-radius: 10px;
-      padding: 0 14px;
-      font-weight: 800;
-    }
-    .primaryCreate {
-      color: white;
-      border-color: rgba(120, 80, 32, .42);
-      background: linear-gradient(180deg, #b98237, #8b5b22);
-      box-shadow: 0 10px 20px rgba(129, 86, 36, .2);
-    }
-    .notice {
-      min-height: 24px;
-      color: #7c5526;
-      font-weight: 700;
-      line-height: 1.55;
-    }
-    .rulesSide {
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      gap: 12px;
-    }
-    .rulesSideHeader h2,
-    .rulesSideHeader p {
-      margin: 0;
-    }
-    .rulesSideHeader p {
-      margin-top: 5px;
-      color: var(--muted);
-      line-height: 1.55;
-      font-size: 13px;
-    }
-    .defaultRules {
-      min-height: 0;
-      overflow-y: auto;
-      display: grid;
-      align-content: start;
-      gap: 9px;
-    }
-    .ruleCard {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: rgba(255,255,255,.62);
-      overflow: hidden;
-    }
-    .ruleToggle {
-      width: 100%;
-      justify-content: space-between;
-      border: 0;
-      border-radius: 0;
-      box-shadow: none;
-      background: rgba(255,255,255,.52);
-    }
-    .ruleCard pre {
-      max-height: 220px;
-      overflow: auto;
-      padding: 12px;
-      border-top: 1px solid var(--line);
-      font-size: 12px;
-      cursor: auto;
-    }
-    .ruleFiles {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
-      padding: 0 12px 10px;
-      overflow-wrap: anywhere;
-    }
+    html, body { overflow: hidden; }
+    body.dragScrolling { cursor: grabbing; user-select: none; }
+    body.dragScrolling * { cursor: grabbing !important; }
+    .createShell { position: fixed; inset: 0; width: 100%; height: 100dvh; padding: 22px 14px; overflow: auto; cursor: grab; }
+    .createLayout { width: min(1200px, 100%); margin: 0 auto; min-height: calc(100dvh - 44px); display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 16px; }
+    .createMain, .rulesSide { min-height: 0; padding: 20px; }
+    .createHeader { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+    .createHeader h1 { margin: 0; font-size: 28px; line-height: 1.2; }
+    .createHeader p, .sectionHint, .hintLine, .checkText small { margin: 6px 0 0; color: var(--muted); line-height: 1.6; font-size: 13px; }
+    .createForm { display: grid; gap: 14px; }
+    .formSection { border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.56); padding: 14px; display: grid; gap: 12px; }
+    .formSection h2 { margin: 0; font-size: 16px; }
+    .formGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .createForm label { display: grid; gap: 7px; color: #6b563b; font-weight: 700; }
+    .createForm input, .createForm select, .createForm textarea { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 0 11px; background: rgba(255,255,255,.78); color: var(--ink); font: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.78); cursor: auto; }
+    .createForm textarea { min-height: 132px; resize: vertical; padding-top: 10px; line-height: 1.65; }
+    .compactTextarea { min-height: 78px; }
+    .checkLabel { display: flex !important; align-items: flex-start; gap: 10px; }
+    .checkLabel input { width: auto; min-height: 0; margin-top: 4px; }
+    .checkText { display: grid; gap: 2px; }
+    .conditional { display: grid; gap: 12px; padding: 12px; border-radius: 10px; background: rgba(248,242,232,.72); border: 1px dashed rgba(138,102,55,.26); }
+    .hidden, .conditional.hidden { display: none !important; }
+    .choiceCards, .modeCards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .choiceCard, .modeCard { border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.66); padding: 12px; display: grid; gap: 6px; cursor: pointer; color: #5c472e; }
+    .choiceCard input, .modeCard input { position: absolute; opacity: 0; pointer-events: none; }
+    .choiceCard b, .modeCard b { font-size: 15px; }
+    .choiceCard span, .modeCard span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .choiceCard:has(input:checked), .modeCard:has(input:checked) { border-color: #b98237; background: #fff6e8; box-shadow: 0 8px 18px rgba(129,86,36,.12); }
+    .aiPromptPanel { display: grid; gap: 8px; }
+    .aiPromptText { min-height: 190px; font-size: 13px; white-space: pre-wrap; }
+    .subPanel { border: 1px solid rgba(126,95,58,.18); border-radius: 10px; padding: 12px; background: rgba(255,255,255,.5); display: grid; gap: 10px; }
+    .subPanelHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .subPanelHeader h3 { margin: 0; color: #6b563b; font-size: 14px; }
+    .attributeTheme { padding: 10px; border-radius: 10px; background: rgba(238,246,241,.72); color: #526948; font-size: 13px; line-height: 1.55; }
+    .attributeToolbar { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    .attributePreview { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .previewBlock h3 { margin: 0 0 8px; color: #6b563b; font-size: 14px; }
+    .previewList { display: grid; gap: 7px; }
+    .attrRow { display: grid; grid-template-columns: 58px 1fr 42px; gap: 8px; align-items: center; color: #6b563b; font-size: 12px; }
+    .attrRow em { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(134,101,58,.16); }
+    .attrRow i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6f8f65, #d0a24d); }
+    .attrDesc { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: -2px; }
+    .createActions { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 4px; }
+    .buttonRow { display: flex; gap: 10px; flex-wrap: wrap; }
+    .createActions button, .secondaryBtn, .ruleToggle, .langBtn, .rollBtn { min-height: 40px; border-radius: 10px; padding: 0 14px; font-weight: 800; }
+    .backBtn { flex: 0 0 auto; min-width: 118px; min-height: 42px; padding: 0 18px; white-space: nowrap; word-break: keep-all; line-height: 1; border-radius: 12px; }
+    .primaryCreate { color: white; border-color: rgba(120,80,32,.42); background: linear-gradient(180deg, #b98237, #8b5b22); box-shadow: 0 10px 20px rgba(129,86,36,.2); }
+    .notice { min-height: 24px; color: #7c5526; font-weight: 700; line-height: 1.55; }
+    .setupOverlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(42,31,20,.28); backdrop-filter: blur(5px); }
+    .setupDialog { width: min(440px, 100%); border: 1px solid rgba(126,95,58,.24); border-radius: 16px; background: rgba(255,250,242,.96); box-shadow: 0 24px 70px rgba(58,38,18,.28); padding: 22px; display: grid; gap: 14px; }
+    .setupDialog h2 { margin: 0; font-size: 22px; color: #3f3020; }
+    .setupDialog p { margin: 0; color: #75644d; line-height: 1.6; }
+    .setupProgressTrack { height: 12px; border-radius: 999px; overflow: hidden; background: rgba(126,95,58,.14); border: 1px solid rgba(126,95,58,.16); }
+    .setupProgressBar { width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7fa36a, #d2a44d); transition: width .36s ease; }
+    .setupProgressMeta { display: flex; justify-content: space-between; gap: 12px; color: #7a5a2e; font-weight: 800; }
+    .setupThinkList { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; color: #5b4933; font-size: 13px; line-height: 1.55; }
+    .setupThinkList:empty { display: none; }
+    .setupThinkList li { border-left: 3px solid rgba(185,134,52,.45); padding: 6px 8px; background: rgba(255,247,232,.72); border-radius: 8px; }
+    .setupThinkList b { display: block; color: #7d5a28; font-size: 12px; }
+    .setupError { color: #9a3328 !important; font-weight: 800; }
+    .setupActions { display: none; gap: 10px; justify-content: flex-end; }
+    .setupOverlay.failed .setupActions { display: flex; }
+    .setupCloseBtn { min-height: 38px; border-radius: 10px; font-weight: 800; }
+    .rulesSide { position: sticky; top: 14px; max-height: calc(100dvh - 28px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px; }
+    .rulesSideHeader { display: grid; gap: 8px; }
+    .rulesSideHeader h2, .rulesSideHeader p { margin: 0; }
+    .langSwitch { display: flex; gap: 8px; }
+    .langBtn.active { background: #fff6e8; border-color: #b98237; color: #7c5526; }
+    .defaultRules { min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 10px; padding-right: 2px; }
+    .ruleCard { min-height: 76px; border: 1px solid rgba(126,95,58,.22); border-radius: 12px; background: rgba(255,255,255,.7); overflow: hidden; box-shadow: 0 8px 18px rgba(76,48,20,.05); }
+    .ruleToggle { width: 100%; height: auto; min-height: 76px; padding: 12px 13px !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; text-align: left; display: grid !important; gap: 6px; align-items: start; justify-items: stretch; white-space: normal; line-height: 1.38; color: #4b3925; transform: none; }
+    .ruleToggle:hover, .ruleToggle:focus-visible { background: rgba(255,246,232,.82); }
+    .ruleToggle strong { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; min-width: 0; color: #4b3925; }
+    .ruleToggle strong b { overflow-wrap: anywhere; }
+    .ruleToggle strong i { flex: 0 0 auto; color: #9b6a2c; font-style: normal; }
+    .ruleToggle span { display: block; min-height: 18px; color: #7a6a54; font-size: 12px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+    .ruleDetails { display: none; border-top: 1px solid rgba(126,95,58,.16); padding: 11px 13px 12px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; background: rgba(255,250,242,.58); }
+    .ruleCard.expanded .ruleDetails { display: grid; gap: 9px; }
+    .ruleDetails b { display: block; margin-bottom: 3px; color: #5c472e; font-size: 12px; }
+    .ruleDetails p { margin: 0; max-height: 130px; overflow: auto; white-space: pre-wrap; }
+    .ruleFiles { color: #7a6a54; }
+    .customRules { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 9px; }
+    .customRuleRow { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: rgba(255,255,255,.56); display: grid; gap: 8px; transition: opacity .16s ease, background .16s ease; }
+    .customRuleRow.disabled { opacity: .64; background: rgba(255,255,255,.34); }
+    .customRuleTop { display: grid; grid-template-columns: auto 1fr 110px; gap: 8px; align-items: center; }
+    .customRuleTop input[type="checkbox"] { width: auto; min-height: 0; }
+    .customRuleRow input, .customRuleRow select, .customRuleRow textarea { min-height: 34px; font-size: 12px; }
+    .customRuleRow input:disabled, .customRuleRow select:disabled, .customRuleRow textarea:disabled { cursor: not-allowed; background: rgba(238,232,220,.45); color: rgba(74,57,38,.55); }
+    .customRuleRow textarea { min-height: 62px; }
     @media (max-width: 920px) {
-      .createLayout { grid-template-columns: 1fr; }
-      .formGrid { grid-template-columns: 1fr; }
+      .createLayout, .formGrid, .attributePreview, .choiceCards, .modeCards { grid-template-columns: 1fr; }
       .createHeader { display: grid; }
+      .rulesSide { position: static; max-height: none; }
     }
   </style>
 </head>
 <body>
   <canvas id="rainCanvas" aria-hidden="true"></canvas>
+  <div class="setupOverlay hidden" id="setupOverlay" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+    <div class="setupDialog">
+      <h2 id="setupTitle">开始初始化故事</h2>
+      <p id="setupMessage">正在准备创团资料。</p>
+      <div class="setupProgressTrack"><div class="setupProgressBar" id="setupProgressBar"></div></div>
+      <div class="setupProgressMeta"><span id="setupStage">等待开始</span><span id="setupPercent">0%</span></div>
+      <ul class="setupThinkList" id="setupThinkList"></ul>
+      <p class="setupError hidden" id="setupError"></p>
+      <div class="setupActions">
+        <button class="setupCloseBtn" id="setupCloseBtn" type="button">关闭</button>
+        <button class="setupCloseBtn" type="button" onclick="window.location.href='/'">返回控制台</button>
+      </div>
+    </div>
+  </div>
   <main class="createShell" id="createScroller">
     <section class="createLayout">
       <div class="panel createMain">
         <div class="createHeader">
           <div>
             <h1>新建跑团</h1>
-            <p>先确定故事模板、模型接入、规则显示和安全边界。这里只写初始化记忆，不触发正文生成。</p>
+            <p>初始化模型接入、故事篇幅、角色资料、属性、伙伴和当前跑团临时规则。这里只写入初始记忆，不触发正文生成。</p>
           </div>
-          <button type="button" onclick="window.location.href='/'">返回控制台</button>
+          <button class="backBtn" type="button" onclick="window.location.href='/'">返回控制台</button>
         </div>
 
         <form class="createForm" id="createForm">
           <section class="formSection">
             <h2>故事模板</h2>
+            <p class="sectionHint">选择故事基础类型。模板会影响默认规则、属性命名和初始化记忆，但不会限制后续剧情。</p>
             <div class="formGrid">
-              <label>
-                模板
+              <label>模板
                 <select id="template" name="template">
                   <option value="custom">自定义</option>
                   <option value="coc">COC</option>
                   <option value="dnd">DND</option>
                 </select>
               </label>
-              <label>
-                故事名称
-                <input id="name" name="name" autocomplete="off" placeholder="给这个跑团取一个名字">
+              <label>故事名称
+                <input id="name" name="name" autocomplete="off" placeholder="给这次跑团取一个名字">
               </label>
             </div>
             <button class="secondaryBtn" id="restoreTemplateBtn" type="button">恢复模板默认值</button>
           </section>
 
           <section class="formSection">
-            <h2>模型调用模式</h2>
-            <label>
-              模式
-              <select id="model_mode" name="model_mode">
-                <option value="dual_director_actor">V4 导演 + GPT 演员</option>
-                <option value="deepseek_v4_only">DeepSeek V4 全流程</option>
-                <option value="chatgpt_only">ChatGPT 全流程</option>
-                <option value="custom_model">自定义模型接入</option>
-              </select>
-            </label>
-            <div class="conditional hidden" id="customModelSection">
-              <div class="formGrid">
-                <label>
-                  Provider
-                  <select id="provider_type" name="provider_type">
-                    <option value="openai_compatible">OpenAI Compatible</option>
-                    <option value="deepseek_compatible">DeepSeek Compatible</option>
-                    <option value="custom_http">Custom HTTP</option>
-                  </select>
-                </label>
-                <label>
-                  用途
-                  <select id="custom_role" name="custom_role">
-                    <option value="single">单模型全流程</option>
-                    <option value="director">只做导演</option>
-                    <option value="actor">只做演员</option>
-                  </select>
-                </label>
-              </div>
-              <label>
-                Base URL
-                <input id="custom_base_url" name="custom_base_url" placeholder="https://api.example.com/v1">
-              </label>
-              <label>
-                模型名
-                <input id="custom_model_name" name="custom_model_name" placeholder="deepseek-chat / qwen-plus / gpt-4o-mini">
-              </label>
-              <label>
-                API Key
-                <input id="custom_api_key" name="custom_api_key" type="password" autocomplete="new-password" placeholder="可留空，稍后在本地配置">
-              </label>
-              <p class="hintLine">真实 API Key 不写入 campaign_profile.json；后端只保存 custom_api_key_ref。</p>
+            <h2>故事篇幅</h2>
+            <p class="sectionHint">决定故事大致长度和进度规划。短篇更集中，中篇适合完整主线，长篇适合多章节展开。可以使用 AI 问答来补全故事设定；你回答得越具体，后续故事脉络越清晰。</p>
+            <div class="choiceCards" id="storyLengthCards">
+              <label class="choiceCard"><input type="radio" name="story_length" value="short"><b>短篇</b><span>集中、快节奏，适合 3 章左右。</span></label>
+              <label class="choiceCard"><input type="radio" name="story_length" value="medium" checked><b>中篇</b><span>完整主线，适合 6 章左右。</span></label>
+              <label class="choiceCard"><input type="radio" name="story_length" value="long"><b>长篇</b><span>多章节展开，适合长期跑团。</span></label>
+            </div>
+            <div class="buttonRow">
+              <button class="secondaryBtn" id="showAiPromptBtn" type="button">AI 问我答生成设定</button>
+              <button class="secondaryBtn hidden" id="copyAiPromptBtn" type="button">复制 Prompt</button>
+            </div>
+            <div class="aiPromptPanel hidden" id="aiPromptPanel">
+              <textarea class="aiPromptText" id="aiPromptText" readonly></textarea>
             </div>
           </section>
 
           <section class="formSection">
+            <h2>模型模式</h2>
+            <p class="sectionHint">选择后台如何分工生成跑团内容。默认模式使用导演层规划剧情，演员层负责正文输出。</p>
+            <div class="modeCards">
+              <label class="modeCard"><input type="radio" name="model_mode_choice" value="dual_director_actor" checked><b>V4 导演 + GPT 演员</b><span>默认双层分工，不需要自定义 API。</span></label>
+              <label class="modeCard"><input type="radio" name="model_mode_choice" value="single_model"><b>单模型全流程</b><span>一个模型同时负责导演和正文。</span></label>
+              <label class="modeCard"><input type="radio" name="model_mode_choice" value="custom_dual"><b>自定义双层接入</b><span>分别配置导演层和正文/演员层 API。</span></label>
+            </div>
+            <input id="model_mode" type="hidden" value="dual_director_actor">
+            <div class="conditional hidden" id="singleModelSection"></div>
+            <div class="conditional hidden" id="customDualSection"></div>
+            <p class="hintLine">API Key 明文不会写入 campaign_profile.json；后端只保存 api_key_ref 或空字符串。</p>
+          </section>
+
+          <section class="formSection">
             <h2>故事设定 / 开场 Prompt</h2>
-            <label>
-              用户 Prompt
-              <textarea id="user_prompt" name="user_prompt" placeholder="请描述世界观、主角处境、开局钩子、故事基调和不想出现的内容。"></textarea>
+            <p class="sectionHint">写下世界观、主角处境、开场钩子和不要过早揭露的内容。越具体，初始化记忆越稳定。</p>
+            <label>用户 Prompt
+              <textarea id="user_prompt" name="user_prompt" placeholder="描述世界观、主角处境、开局钩子、故事基调和不想出现的内容。"></textarea>
             </label>
           </section>
 
           <section class="formSection">
+            <h2>角色卡 / 属性与背景</h2>
+            <p class="sectionHint">记录主角的基础资料、背景动机和初始属性。属性由 ROLL 按钮生成，三维和六维会同时存在。</p>
+            <label class="checkLabel">
+              <input id="character_card_enabled" name="character_card_enabled" type="checkbox" checked>
+              <span class="checkText">启用角色卡<small>角色资料会写入 player.character_card。</small></span>
+            </label>
+            <div class="conditional" id="characterCardSection">
+              <div class="subPanel">
+                <div class="subPanelHeader"><h3>主角资料</h3></div>
+                <div class="formGrid">
+                  <label>主角名称<input id="protagonist_name" name="protagonist_name" placeholder="可留空"></label>
+                  <label>主角身份 / 职业<input id="protagonist_role" name="protagonist_role" placeholder="调查员 / 战士 / 学生 / 自定义"></label>
+                </div>
+                <label>主角背景介绍<textarea class="compactTextarea" id="protagonist_background" name="protagonist_background"></textarea></label>
+                <div class="formGrid">
+                  <label>主角动机<input id="protagonist_motivation" name="protagonist_motivation"></label>
+                  <label>主角性格关键词<input id="protagonist_personality" name="protagonist_personality"></label>
+                </div>
+              </div>
+              <div class="subPanel">
+                <div class="subPanelHeader">
+                  <div>
+                    <h3>属性值</h3>
+                    <p class="sectionHint">三维用于快速判断角色倾向，六维用于更细的行动差异。两者并行存在，不互相替代。</p>
+                  </div>
+                  <button class="rollBtn" id="rollAttributesBtn" type="button">ROLL 属性</button>
+                </div>
+                <label class="checkLabel"><input id="attribute_enabled" name="attribute_enabled" type="checkbox" checked><span class="checkText">启用属性显示<small>关闭时仍生成属性，但主页不显示属性区域。</small></span></label>
+                <p class="hintLine">根据本团属性规则生成初始数值。可重掷，创建后会写入角色卡。</p>
+                <div class="attributeTheme" id="attributeThemeInfo"></div>
+                <div class="attributePreview">
+                  <div class="previewBlock"><h3>三维属性预览</h3><div class="previewList" id="threePreview"></div></div>
+                  <div class="previewBlock"><h3>六维属性预览</h3><div class="previewList" id="sixPreview"></div></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="formSection">
             <h2>伙伴 / 副角色</h2>
+            <p class="sectionHint">启用后会自动建立伙伴资料和伙伴卡。伙伴可以是队友、从者、艾露猫、向导或其他随团角色。</p>
             <label class="checkLabel">
               <input id="companion_enabled" name="companion_enabled" type="checkbox">
-              <span class="checkText">启用伙伴 / 副角色<small>不勾选时不会生成伙伴卡，也不会默认生成任何伙伴类型。</small></span>
+              <span class="checkText">启用伙伴 / 副角色<small>启用后自动显示伙伴卡，不再单独询问。</small></span>
             </label>
             <div class="conditional hidden" id="companionSection">
               <div class="formGrid">
-                <label>
-                  生成方式
+                <label>生成方式
                   <select id="companion_mode" name="companion_mode">
                     <option value="auto">AI 自动生成</option>
                     <option value="manual">手动填写</option>
                   </select>
                 </label>
-                <label>
-                  名称
-                  <input id="companion_name" name="companion_name" placeholder="手动模式下建议填写">
-                </label>
+                <label>名称<input id="companion_name" name="companion_name"></label>
               </div>
-              <label>
-                定位
-                <input id="companion_role" name="companion_role" placeholder="例如：向导、队友、守护者、联系人">
-              </label>
-              <label>
-                性格
-                <textarea class="compactTextarea" id="companion_personality" name="companion_personality"></textarea>
-              </label>
-              <label class="checkLabel">
-                <input id="companion_card_visible" name="companion_card_visible" type="checkbox" checked>
-                <span class="checkText">显示伙伴卡</span>
-              </label>
+              <label>定位<input id="companion_role" name="companion_role" placeholder="向导 / 队友 / 守护者 / 联系人"></label>
+              <label>性格<textarea class="compactTextarea" id="companion_personality" name="companion_personality"></textarea></label>
             </div>
           </section>
 
           <section class="formSection">
-            <h2>角色卡</h2>
-            <label class="checkLabel">
-              <input id="character_card_enabled" name="character_card_enabled" type="checkbox" checked>
-              <span class="checkText">启用角色卡<small>关闭后，正文仍可描述状态，但初始化不要求明文角色卡。</small></span>
+            <h2>规则强度</h2>
+            <p class="sectionHint">决定规则介入正文的程度。轻规则更偏叙事，严格规则更偏数值与检定。</p>
+            <label>规则强度
+              <select id="rules_strictness" name="rules_strictness">
+                <option value="light">轻规则</option>
+                <option value="standard">标准</option>
+                <option value="strict">严格</option>
+              </select>
             </label>
-            <div class="conditional" id="characterCardSection">
-              <label>
-                状态显示
-                <select id="stat_visibility" name="stat_visibility">
-                  <option value="narrative">叙事状态</option>
-                  <option value="hybrid">半数值</option>
-                  <option value="numeric">完整数值</option>
-                </select>
-              </label>
-            </div>
           </section>
 
           <section class="formSection">
-            <h2>骰子 / 检定</h2>
-            <label class="checkLabel">
-              <input id="dice_enabled" name="dice_enabled" type="checkbox">
-              <span class="checkText">启用骰子 / 检定<small>骰子和角色卡互相独立，可单独开启或关闭。</small></span>
-            </label>
-            <div class="conditional hidden" id="diceSection">
-              <div class="formGrid">
-                <label>
-                  骰子类型
-                  <select id="dice_type" name="dice_type">
-                    <option value="d100">d100</option>
-                    <option value="d20">d20</option>
-                    <option value="custom">custom</option>
-                  </select>
-                </label>
-                <label>
-                  检定模式
-                  <select id="roll_mode" name="roll_mode">
-                    <option value="percentile">percentile</option>
-                    <option value="d20_attribute">d20_attribute</option>
-                    <option value="narrative_check">narrative_check</option>
-                    <option value="custom">custom</option>
-                  </select>
-                </label>
-              </div>
-              <label>
-                检定属性
-                <textarea class="compactTextarea" id="roll_attributes" name="roll_attributes" placeholder="每行一个属性"></textarea>
-              </label>
-            </div>
-          </section>
-
-          <section class="formSection">
-            <h2>规则强度与主角模式</h2>
-            <div class="formGrid">
-              <label>
-                规则强度
-                <select id="rules_strictness" name="rules_strictness">
-                  <option value="light">轻规则</option>
-                  <option value="standard">标准</option>
-                  <option value="strict">严格</option>
-                </select>
-              </label>
-              <label>
-                主角模式
-                <select id="party_mode" name="party_mode">
-                  <option value="solo">单主角</option>
-                  <option value="party">小队</option>
-                  <option value="ensemble">群像</option>
-                </select>
-              </label>
-            </div>
-          </section>
-
-          <section class="formSection">
-            <h2>安全边界 / 禁止内容</h2>
-            <label>
-              安全边界
-              <textarea class="compactTextarea" id="safety_lines" name="safety_lines" placeholder="写下不想出现的内容、需要淡化的描写、禁止主题或玩家边界。"></textarea>
+            <h2>安全边界</h2>
+            <p class="sectionHint">填写不想出现、需要淡化或需要避免的内容。后台会写入跑团初始化规则。</p>
+            <label>安全边界
+              <textarea class="compactTextarea" id="safety_lines" name="safety_lines" placeholder="每行一条不想出现的内容、需要淡化的描写或玩家边界。"></textarea>
             </label>
           </section>
 
@@ -439,10 +280,23 @@
 
       <aside class="panel rulesSide">
         <div class="rulesSideHeader">
-          <h2>内置规则</h2>
-          <p>这些规则会由后端按跑团配置写入初始化记忆。新建页面不会触发正文生成。</p>
+          <div>
+            <h2>规则栏</h2>
+            <p class="sectionHint">这里展示当前跑团会使用的主要规则分类。你也可以为当前跑团临时注入最多 3 条客制规则。</p>
+          </div>
+          <div class="langSwitch">
+            <button class="langBtn active" data-lang="zh" type="button">中文</button>
+            <button class="langBtn" data-lang="en" type="button">English</button>
+          </div>
         </div>
         <div class="defaultRules" id="defaultRules"></div>
+        <div class="customRules">
+          <div>
+            <h2>临时客制规则</h2>
+            <p class="sectionHint">临时客制规则只对当前主机和当前跑团生效。创建后会全量注入对应模型层，不会影响其他跑团。</p>
+          </div>
+          <div id="customRulesList"></div>
+        </div>
       </aside>
     </section>
   </main>
@@ -451,46 +305,93 @@
     const $ = (id) => document.getElementById(id);
     const canvas = $("rainCanvas");
     const ctx = canvas.getContext("2d");
+    const CAP = 20;
+    const FLOAT_RATIO = 1.2;
+    const FLOAT_CAP = 24;
+    const ROLL_MIN = 6;
+    const ROLL_MAX = 18;
+    const AI_SETUP_PROMPT = `你是文字 TRPG 创团助手。请通过问答方式帮我补全一个跑团故事设定。
 
-    const TEMPLATE_DEFAULTS = {
-      custom: {
-        name: "",
-        user_prompt: "",
-        character_card_enabled: true,
-        stat_visibility: "narrative",
-        dice_enabled: false,
-        dice_type: "",
-        roll_mode: "",
-        roll_attributes: [],
-        rules_strictness: "light",
-        party_mode: "solo",
-      },
+要求：
+1. 一次只问 3 到 5 个关键问题。
+2. 每轮问题要围绕故事核心，不要问太碎。
+3. 优先确认：世界观类型、主角身份、主要冲突、故事开场、重要 NPC / 伙伴、禁忌内容、篇幅节奏。
+4. 我回答后，你继续追问缺失信息。
+5. 当信息足够时，整理成一份可直接放入“故事设定 / 开场 Prompt”的文本。
+6. 输出文本要包含：故事背景、主角处境、开场场景、主要矛盾、已知边界、不要过早揭露的秘密。
+7. 不要替我写死未确认设定，未确认的内容用“待确认”标出。`;
+    const ATTRIBUTE_THEMES = {
       coc: {
-        name: "雾港调查档案",
-        user_prompt: "一组调查员收到一份异常委托，前往一座被旧案、失踪者和地方传闻笼罩的城镇。希望强调线索调查、人物关系、理智压力、资料档案、隐秘真相和逐步升级的异常感。不要过早揭露真相。",
-        character_card_enabled: true,
-        stat_visibility: "numeric",
-        dice_enabled: true,
-        dice_type: "d100",
-        roll_mode: "percentile",
-        roll_attributes: ["侦查", "聆听", "图书馆使用", "心理学", "闪避", "理智"],
-        rules_strictness: "standard",
-        party_mode: "party",
+        title: "COC 属性主题",
+        summary: "适用：调查、克苏鲁、恐怖、悬疑、旧案、失踪、精神压力、理智消耗类故事。",
+        hint: "COC 团使用调查与理智压力取向的三维与六维属性。",
+        three: [
+          { key: "BODY", label: "体能", description: "代表身体承受、逃跑、攀爬、负伤后的行动能力。" },
+          { key: "OBSERVE", label: "观察", description: "代表寻找线索、注意异常、发现痕迹、判断现场细节的能力。" },
+          { key: "SANITY", label: "心智", description: "代表精神稳定、恐惧承受、异常事件下保持判断的能力。" },
+        ],
+        six: [
+          { key: "BODY", label: "体能", description: "身体力量、耐力、基础行动能力。" },
+          { key: "DEX", label: "敏捷", description: "反应速度、闪避、潜行、手部动作和快速行动。" },
+          { key: "MIND", label: "心智", description: "理解力、知识调用、推理、记忆和判断。" },
+          { key: "POW", label: "意志", description: "精神抵抗、执念、抗压、面对未知时维持自我的能力。" },
+          { key: "LUCK", label: "幸运", description: "偶然性、危险边缘的转机、关键时刻的运气。" },
+          { key: "SAN", label: "理智", description: "面对恐惧、怪异、禁忌知识时的精神稳定程度。" },
+        ],
       },
       dnd: {
-        name: "边境地城远征",
-        user_prompt: "一支初出茅庐的冒险队抵达边境城镇，第一份委托与失踪商队、地下遗迹和附近怪物活动有关。希望强调队伍协作、职业能力、探索、资源消耗、战斗风险和逐步展开的冒险主线。",
-        character_card_enabled: true,
-        stat_visibility: "numeric",
-        dice_enabled: true,
-        dice_type: "d20",
-        roll_mode: "d20_attribute",
-        roll_attributes: ["力量", "敏捷", "体质", "智力", "感知", "魅力"],
-        rules_strictness: "standard",
-        party_mode: "party",
+        title: "DND 属性主题",
+        summary: "适用：奇幻、冒险、地城、职业、法术、等级、队伍探索、战斗成长类故事。",
+        hint: "DND 团使用职业冒险与战斗探索取向的三维与六维属性。",
+        three: [
+          { key: "BODY", label: "体魄", description: "代表力量、体质、负重、近身冲突和身体承受能力。" },
+          { key: "SKILL", label: "技艺", description: "代表敏捷、技巧、武器操作、潜行、开锁、闪避等行动能力。" },
+          { key: "MIND", label: "心智", description: "代表知识、感知、判断、意志、魅力和施法相关倾向。" },
+        ],
+        six: [
+          { key: "STR", label: "力量", description: "近战力量、负重、破坏、推拉、攀爬和身体压制。" },
+          { key: "DEX", label: "敏捷", description: "闪避、先手、潜行、远程攻击、精细动作。" },
+          { key: "CON", label: "体质", description: "生命力、耐力、抗毒、抗病、受伤后的承受能力。" },
+          { key: "INT", label: "智力", description: "知识、调查、奥术理解、逻辑推理和记忆。" },
+          { key: "WIS", label: "感知", description: "直觉、观察、洞察、野外生存和精神警觉。" },
+          { key: "CHA", label: "魅力", description: "说服、威慑、表演、领导力和人格影响力。" },
+        ],
+      },
+      generic: {
+        title: "通用团属性主题",
+        summary: "适用：自定义世界观、FATE、怪猎、现代都市、校园、轻小说、原创奇幻、原创悬疑等不想绑定固定规则体系的跑团。",
+        hint: "自定义团不建议过早写死专属属性名。默认使用通用三维与六维，让 AI 在后续剧情中根据角色定位和玩法重心判断属性用途。",
+        three: [
+          { key: "BODY", label: "体能", description: "代表身体基础、负重、抗伤、长时间行动和直接身体压力。" },
+          { key: "ACTION", label: "行动", description: "代表反应、执行、移动、战斗动作、操作工具和临场应变。" },
+          { key: "MIND", label: "心智", description: "代表判断、理解、意志、记忆、抗压和复杂局面下的选择能力。" },
+        ],
+        six: [
+          { key: "BODY", label: "体能", description: "基础身体素质、耐力、力量、伤势承受。" },
+          { key: "REFLEX", label: "反应", description: "速度、闪避、先手、快速判断和危险来临时的身体反射。" },
+          { key: "ENDURE", label: "耐受", description: "长时间压力、伤痛、疲劳、恐惧、环境恶劣时的承受力。" },
+          { key: "MIND", label: "心智", description: "理解、推理、学习、计划、精神稳定和意志判断。" },
+          { key: "SENSE", label: "感知", description: "观察、直觉、危险预感、线索捕捉和环境阅读。" },
+          { key: "SOCIAL", label: "社交", description: "交涉、说服、伪装、共情、威慑、组织关系和人际影响力。" },
+        ],
       },
     };
+    const TEMPLATE_DEFAULTS = {
+      custom: { name: "", user_prompt: "", rules_strictness: "light" },
+      coc: { name: "雾港调查档案", user_prompt: "一名调查员收到一份异常委托，前往一座被旧案、失踪者和地方传闻笼罩的城镇。希望强调线索调查、人物关系、理智压力、资料档案、隐秘真相和逐步升级的异常感。不要过早揭露真相。", rules_strictness: "standard" },
+      dnd: { name: "边境地城远征", user_prompt: "一名初出茅庐的冒险者抵达边境城镇，第一份委托与失踪商队、地下遗迹和附近怪物活动有关。希望强调职业能力、探索、资源消耗、战斗风险和逐步展开的冒险主线。", rules_strictness: "standard" },
+    };
+    const FALLBACK_RULE_CATEGORIES = [
+      { rule_id: "story_progress_rules", title_zh: "故事与进度规则", title_en: "Story and Progress Rules", desc_zh: "控制故事篇幅、章节节奏、当前节点推进和不要过早揭露的信息。", desc_en: "Controls story length, chapter pacing, node progress, and unrevealed information.", files: ["story_progress_rules.md"] },
+      { rule_id: "character_attribute_rules", title_zh: "角色卡与属性规则", title_en: "Character Card and Attribute Rules", desc_zh: "控制主角资料、属性值、角色卡显示和状态写回。", desc_en: "Controls protagonist profile, attributes, card display, and state writeback.", files: ["character_card_json_rules.md", "dice_check_rules_CN.md"] },
+      { rule_id: "style_rules", title_zh: "正文风格规则", title_en: "Prose Style Rules", desc_zh: "控制叙事口吻、对白风格、画面感和避免 AI 味的写法。", desc_en: "Controls prose tone, dialogue style, vivid writing, and anti-AI-flavor constraints.", files: ["chatgpt_style_rules.md"] },
+      { rule_id: "npc_monster_rules", title_zh: "NPC / 怪物规则", title_en: "NPC and Monster Rules", desc_zh: "控制 NPC 行为、怪物生态、阵营关系和长期资料一致性。", desc_en: "Controls NPC behavior, monster ecology, factions, and long-term consistency.", files: ["chatgpt_npc_voice_rules.md", "chatgpt_monster_rules.md"] },
+      { rule_id: "image_gallery_rules", title_zh: "图像与资料规则", title_en: "Image and Gallery Rules", desc_zh: "控制地图、头像、CG、资料夹条目和可视化资产的生成与展示。", desc_en: "Controls maps, portraits, CGs, dossiers, and visual asset display.", files: ["chatgpt_image_rules.md", "gallery_asset_rules.md"] },
+      { rule_id: "safety_rules", title_zh: "安全边界规则", title_en: "Safety Boundary Rules", desc_zh: "控制禁忌内容、淡化内容、玩家边界和不可越过的叙事限制。", desc_en: "Controls forbidden content, softened content, player boundaries, and hard narrative limits.", files: ["forbidden_changes.json"] },
+      { rule_id: "memory_writeback_rules", title_zh: "记忆与写回规则", title_en: "Memory and Writeback Rules", desc_zh: "控制哪些事实可以长期记忆，以及回合结束后的状态写入。", desc_en: "Controls durable facts and end-of-turn state writeback.", files: ["state_writeback_schema.md"] },
+    ];
     const dirty = { name: false, user_prompt: false };
+    const state = { ruleLang: "zh", attributeRoll: null, rules: [] };
 
     function resize() {
       const dpr = window.devicePixelRatio || 1;
@@ -500,7 +401,6 @@
       canvas.style.height = `${window.innerHeight}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-
     function frame() {
       ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       ctx.strokeStyle = "rgba(120, 92, 55, .06)";
@@ -511,7 +411,6 @@
       }
       requestAnimationFrame(frame);
     }
-
     function initDragScroll() {
       const dragState = { active: false, pointerId: 0, x: 0, y: 0, scrollX: 0, scrollY: 0 };
       const interactiveSelector = "button, input, select, textarea, a, pre, [data-rule-index]";
@@ -524,201 +423,406 @@
         dragState.scrollX = window.scrollX;
         dragState.scrollY = window.scrollY;
         document.body.classList.add("dragScrolling");
-        document.body.setPointerCapture?.(event.pointerId);
       });
       document.addEventListener("pointermove", (event) => {
         if (!dragState.active || event.pointerId !== dragState.pointerId) return;
         event.preventDefault();
-        window.scrollTo({
-          left: dragState.scrollX + dragState.x - event.clientX,
-          top: dragState.scrollY + dragState.y - event.clientY,
-          behavior: "auto",
-        });
+        window.scrollTo({ left: dragState.scrollX + dragState.x - event.clientX, top: dragState.scrollY + dragState.y - event.clientY, behavior: "auto" });
       }, { passive: false });
-      const stopDrag = (event) => {
-        if (!dragState.active || event.pointerId !== dragState.pointerId) return;
-        dragState.active = false;
-        document.body.classList.remove("dragScrolling");
-        document.body.releasePointerCapture?.(event.pointerId);
-      };
-      document.addEventListener("pointerup", stopDrag);
-      document.addEventListener("pointercancel", stopDrag);
+      document.addEventListener("pointerup", () => { dragState.active = false; document.body.classList.remove("dragScrolling"); });
+      document.addEventListener("pointercancel", () => { dragState.active = false; document.body.classList.remove("dragScrolling"); });
     }
-
     async function api(path, options = {}) {
-      const res = await fetch(path, {
-        headers: { "content-type": "application/json" },
-        ...options,
-      });
+      const res = await fetch(path, { headers: { "content-type": "application/json" }, ...options });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
       return data;
     }
-
-    function notice(text) {
-      $("notice").textContent = text || "";
+    function notice(text) { $("notice").textContent = text || ""; }
+    function escapeHtml(text) { return String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch])); }
+    function splitLines(value) { return String(value || "").split(/[\n,，、]+/).map((line) => line.trim()).filter(Boolean); }
+    function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+    function setSetupProgress(percent, title, message = "") {
+      const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+      $("setupOverlay").classList.remove("hidden");
+      $("setupOverlay").classList.remove("failed");
+      $("setupTitle").textContent = title || "开始初始化故事";
+      $("setupMessage").textContent = message || title || "";
+      $("setupStage").textContent = title || "";
+      $("setupPercent").textContent = `${safePercent}%`;
+      $("setupProgressBar").style.width = `${safePercent}%`;
     }
-
-    function escapeHtml(text) {
-      return String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    function renderSetupThink(rows = []) {
+      const list = $("setupThinkList");
+      if (!list) return;
+      const safeRows = Array.isArray(rows) ? rows.filter(Boolean).slice(-8) : [];
+      list.innerHTML = safeRows.map((row) => {
+        const stage = escapeHtml(row.stage || "导演处理");
+        const text = escapeHtml(row.text || String(row || ""));
+        return text ? `<li><b>${stage}</b><span>${text}</span></li>` : "";
+      }).join("");
     }
-
-    function setChecked(id, value) {
-      $(id).checked = Boolean(value);
+    function showSetupError(message) {
+      $("setupOverlay").classList.remove("hidden");
+      $("setupOverlay").classList.add("failed");
+      $("setupTitle").textContent = "初始化失败";
+      $("setupMessage").textContent = "创团没有完成，未进入控制台。";
+      $("setupError").textContent = message || "未知错误";
+      $("setupError").classList.remove("hidden");
     }
-
-    function setValue(id, value) {
-      $(id).value = Array.isArray(value) ? value.join("\n") : (value || "");
+    function closeSetupDialog() {
+      if (!$("setupOverlay").classList.contains("failed")) return;
+      $("setupOverlay").classList.add("hidden");
+      $("setupOverlay").classList.remove("failed");
     }
-
-    function applyTemplateDefaults(forceText = false) {
-      const template = $("template").value;
-      const defaults = TEMPLATE_DEFAULTS[template] || TEMPLATE_DEFAULTS.custom;
-      const shouldFillEmptyName = template !== "custom" && !$("name").value.trim();
-      const shouldFillEmptyPrompt = template !== "custom" && !$("user_prompt").value.trim();
-      if (forceText || !dirty.name || shouldFillEmptyName) setValue("name", defaults.name);
-      if (forceText || !dirty.user_prompt || shouldFillEmptyPrompt) setValue("user_prompt", defaults.user_prompt);
-      setChecked("character_card_enabled", defaults.character_card_enabled);
-      setValue("stat_visibility", defaults.stat_visibility);
-      setChecked("dice_enabled", defaults.dice_enabled);
-      setValue("dice_type", defaults.dice_type);
-      setValue("roll_mode", defaults.roll_mode);
-      setValue("roll_attributes", defaults.roll_attributes);
-      setValue("rules_strictness", defaults.rules_strictness);
-      setValue("party_mode", defaults.party_mode);
-      if (forceText) {
-        dirty.name = false;
-        dirty.user_prompt = false;
+    function resetSetupDialog() {
+      $("setupOverlay").classList.remove("failed");
+      $("setupError").textContent = "";
+      $("setupError").classList.add("hidden");
+      setSetupProgress(0, "开始初始化故事", "正在准备创团资料。");
+    }
+    function currentStoryLength() { return document.querySelector('input[name="story_length"]:checked')?.value || "medium"; }
+    function currentThemeKey() { return $("template").value === "coc" ? "coc" : $("template").value === "dnd" ? "dnd" : "generic"; }
+    function theme() { return ATTRIBUTE_THEMES[currentThemeKey()] || ATTRIBUTE_THEMES.generic; }
+    function apiBlock(slot, title) {
+      return `<div class="apiBlock" data-slot="${slot}">
+        <h3>${title}</h3>
+        <div class="formGrid">
+          <label>Provider
+            <select id="${slot}_provider_type">
+              <option value="openai_compatible">OpenAI Compatible</option>
+              <option value="deepseek_compatible">DeepSeek Compatible</option>
+              <option value="custom_http">Custom HTTP</option>
+            </select>
+          </label>
+          <label>模型名<input id="${slot}_model_name" placeholder="gpt-4o-mini / deepseek-chat / qwen-plus"></label>
+        </div>
+        <label>Base URL<input id="${slot}_base_url" placeholder="https://api.example.com/v1"></label>
+        <label>API Key<input id="${slot}_api_key" type="password" autocomplete="new-password"></label>
+      </div>`;
+    }
+    function syncModelSections() {
+      const mode = document.querySelector('input[name="model_mode_choice"]:checked')?.value || "dual_director_actor";
+      $("model_mode").value = mode;
+      $("singleModelSection").classList.toggle("hidden", mode !== "single_model");
+      $("customDualSection").classList.toggle("hidden", mode !== "custom_dual");
+      if (syncModelSections.renderedMode === mode) return;
+      syncModelSections.renderedMode = mode;
+      $("singleModelSection").innerHTML = mode === "single_model" ? apiBlock("single", "单模型 API") : "";
+      $("customDualSection").innerHTML = mode === "custom_dual" ? `${apiBlock("director", "导演层 API")}${apiBlock("actor", "正文/演员层 API")}` : "";
+    }
+    function rollValues(count) {
+      const base = Array.from({ length: count }, () => ROLL_MAX);
+      let remaining = CAP * count - base.reduce((sum, value) => sum + value, 0);
+      while (remaining > 0 && base.some((value) => value < FLOAT_CAP)) {
+        const candidates = base.map((value, index) => value < FLOAT_CAP ? index : -1).filter((index) => index >= 0);
+        const index = candidates[Math.floor(Math.random() * candidates.length)];
+        base[index] += 1;
+        remaining -= 1;
       }
-      syncConditionalSections();
+      return base;
     }
-
+    function buildRollResult() {
+      const selected = theme();
+      const threeValues = rollValues(3);
+      const sixValues = rollValues(6);
+      return {
+        theme: currentThemeKey(),
+        cap: CAP,
+        float_ratio: FLOAT_RATIO,
+        float_cap: FLOAT_CAP,
+        three: { items: selected.three.map((item, index) => ({ key: item.key, label: item.label, value: threeValues[index] })) },
+        six: { items: selected.six.map((item, index) => ({ key: item.key, label: item.label, value: sixValues[index] })) },
+      };
+    }
+    function ensureRoll() {
+      if (!state.attributeRoll || state.attributeRoll.theme !== currentThemeKey()) {
+        state.attributeRoll = buildRollResult();
+      }
+    }
+    function renderAttributePreview() {
+      ensureRoll();
+      const selected = theme();
+      $("attributeThemeInfo").innerHTML = `<b>${escapeHtml(selected.title)}</b><br>${escapeHtml(selected.summary)}<br>${escapeHtml(selected.hint)}`;
+      renderAttributeList("threePreview", selected.three, state.attributeRoll.three.items);
+      renderAttributeList("sixPreview", selected.six, state.attributeRoll.six.items);
+    }
+    function renderAttributeList(holderId, definitions, rolled) {
+      const valueByKey = Object.fromEntries((rolled || []).map((item) => [item.key, item.value]));
+      $(holderId).innerHTML = definitions.map((item) => {
+        const value = Number(valueByKey[item.key] || 0);
+        const width = Math.max(4, Math.min(100, value / FLOAT_CAP * 100));
+        return `<div>
+          <div class="attrRow"><b>${escapeHtml(item.label)}</b><em><i style="width:${width}%"></i></em><strong>${value || "-"}</strong></div>
+          <div class="attrDesc">${escapeHtml(item.key)} · ${escapeHtml(item.description)}</div>
+        </div>`;
+      }).join("");
+    }
+    function rerollAttributes() {
+      state.attributeRoll = buildRollResult();
+      renderAttributePreview();
+      notice("属性已 ROLL，可继续重掷。");
+    }
+    function applyTemplateDefaults(forceText = false) {
+      const defaults = TEMPLATE_DEFAULTS[$("template").value] || TEMPLATE_DEFAULTS.custom;
+      if (forceText || !dirty.name) $("name").value = defaults.name;
+      if (forceText || !dirty.user_prompt) $("user_prompt").value = defaults.user_prompt;
+      $("rules_strictness").value = defaults.rules_strictness;
+      if (forceText) dirty.name = dirty.user_prompt = false;
+      state.attributeRoll = null;
+      renderAttributePreview();
+    }
     function syncConditionalSections() {
-      $("customModelSection").classList.toggle("hidden", $("model_mode").value !== "custom_model");
       $("companionSection").classList.toggle("hidden", !$("companion_enabled").checked);
       $("characterCardSection").classList.toggle("hidden", !$("character_card_enabled").checked);
-      $("diceSection").classList.toggle("hidden", !$("dice_enabled").checked);
+      syncModelSections();
     }
-
-    function splitLines(value) {
-      return String(value || "").split(/[\n,，、]+/).map((line) => line.trim()).filter(Boolean);
+    function validateSlot(slot, label, errors) {
+      if (!$(`${slot}_base_url`)?.value.trim()) errors.push(`${label} Base URL 必填。`);
+      if (!$(`${slot}_model_name`)?.value.trim()) errors.push(`${label} 模型名必填。`);
     }
-
     function validateForm() {
       const errors = [];
-      const warnings = [];
       if (!$("name").value.trim()) errors.push("故事名称必填。");
       if (!$("user_prompt").value.trim()) errors.push("用户 Prompt 必填。");
-      if (!$("model_mode").value) errors.push("模型调用模式必填。");
-      if ($("model_mode").value === "custom_model") {
-        if (!$("custom_base_url").value.trim()) errors.push("自定义模型 Base URL 必填。");
-        if (!$("custom_model_name").value.trim()) errors.push("自定义模型名必填。");
-        if (!$("custom_role").value) errors.push("自定义模型用途必填。");
-        if (!$("custom_api_key").value.trim()) warnings.push("API Key 留空，将使用本地已有密钥或稍后配置。");
+      if (!["short", "medium", "long"].includes(currentStoryLength())) errors.push("故事篇幅必填。");
+      const mode = $("model_mode").value;
+      if (mode === "single_model") validateSlot("single", "单模型 API", errors);
+      if (mode === "custom_dual") {
+        validateSlot("director", "导演层 API", errors);
+        validateSlot("actor", "正文/演员层 API", errors);
       }
       if ($("companion_enabled").checked && $("companion_mode").value === "manual" && !$("companion_name").value.trim()) {
-        errors.push("手动伙伴模式建议填写伙伴名称。");
+        errors.push("手动伙伴模式需要填写伙伴名称。");
       }
-      if ($("dice_enabled").checked) {
-        if (!$("dice_type").value) errors.push("骰子类型必填。");
-        if (!$("roll_mode").value) errors.push("检定模式必填。");
-        if (!splitLines($("roll_attributes").value).length) errors.push("检定属性至少填写一个。");
-      }
-      return { errors, warnings };
+      readCustomRules().forEach((rule, index) => {
+        if (rule.enabled && rule.content && !rule.title) errors.push(`第 ${index + 1} 条客制规则需要标题。`);
+      });
+      return { errors };
     }
-
+    function slotPayload(slot, enabled) {
+      return {
+        enabled,
+        provider_type: enabled ? $(`${slot}_provider_type`).value : "",
+        base_url: enabled ? $(`${slot}_base_url`).value.trim() : "",
+        model_name: enabled ? $(`${slot}_model_name`).value.trim() : "",
+        api_key: enabled ? $(`${slot}_api_key`).value : "",
+      };
+    }
+    function readCustomRules() {
+      return [1, 2, 3].map((index) => ({
+        enabled: $(`custom_rule_${index}_enabled`).checked,
+        title: $(`custom_rule_${index}_title`).value.trim(),
+        target_layer: $(`custom_rule_${index}_target`).value,
+        content: $(`custom_rule_${index}_content`).value.trim(),
+      })).filter((rule) => rule.enabled && (rule.title || rule.content));
+    }
     function payloadFromForm() {
+      ensureRoll();
+      const mode = $("model_mode").value;
       return {
         template: $("template").value,
         name: $("name").value.trim(),
-        model_mode: $("model_mode").value,
-        provider_type: $("provider_type").value,
-        custom_base_url: $("custom_base_url").value.trim(),
-        custom_model_name: $("custom_model_name").value.trim(),
-        custom_api_key: $("custom_api_key").value,
-        custom_role: $("custom_role").value,
         user_prompt: $("user_prompt").value.trim(),
+        story_length: currentStoryLength(),
+        model_mode: mode,
+        model_slots: {
+          director: slotPayload("director", mode === "custom_dual"),
+          actor: slotPayload("actor", mode === "custom_dual"),
+          single: slotPayload("single", mode === "single_model"),
+        },
+        character_card_enabled: $("character_card_enabled").checked,
+        protagonist_name: $("protagonist_name").value.trim(),
+        protagonist_role: $("protagonist_role").value.trim(),
+        protagonist_background: $("protagonist_background").value.trim(),
+        protagonist_motivation: $("protagonist_motivation").value.trim(),
+        protagonist_personality: $("protagonist_personality").value.trim(),
+        attribute_enabled: $("attribute_enabled").checked,
+        attribute_roll_requested: Boolean(state.attributeRoll),
+        attribute_roll_result: state.attributeRoll,
         companion_enabled: $("companion_enabled").checked,
         companion_mode: $("companion_mode").value,
         companion_name: $("companion_name").value.trim(),
         companion_role: $("companion_role").value.trim(),
         companion_personality: $("companion_personality").value.trim(),
-        companion_card_visible: $("companion_card_visible").checked,
-        character_card_enabled: $("character_card_enabled").checked,
-        stat_visibility: $("stat_visibility").value,
-        dice_enabled: $("dice_enabled").checked,
-        dice_type: $("dice_type").value,
-        roll_mode: $("roll_mode").value,
-        roll_attributes: splitLines($("roll_attributes").value),
         rules_strictness: $("rules_strictness").value,
-        party_mode: $("party_mode").value,
         safety_lines: splitLines($("safety_lines").value),
+        custom_rules: readCustomRules(),
       };
     }
-
+    function renderCustomRuleEditors() {
+      $("customRulesList").innerHTML = [1, 2, 3].map((index) => `
+        <div class="customRuleRow disabled" data-custom-rule-row="${index}">
+          <div class="customRuleTop">
+            <input id="custom_rule_${index}_enabled" type="checkbox" aria-label="启用第 ${index} 条规则">
+            <input id="custom_rule_${index}_title" placeholder="规则标题 ${index}" disabled>
+            <select id="custom_rule_${index}_target" disabled>
+              <option value="director">导演层</option>
+              <option value="actor">演员层</option>
+              <option value="both">两者</option>
+            </select>
+          </div>
+          <textarea id="custom_rule_${index}_content" placeholder="先启用此规则，再填写只对当前跑团生效的临时规则" disabled></textarea>
+        </div>
+      `).join("");
+      [1, 2, 3].forEach((index) => {
+        $(`custom_rule_${index}_enabled`).addEventListener("change", () => syncCustomRuleRow(index));
+        syncCustomRuleRow(index);
+      });
+    }
+    function syncCustomRuleRow(index) {
+      const enabled = $(`custom_rule_${index}_enabled`).checked;
+      const row = document.querySelector(`[data-custom-rule-row="${index}"]`);
+      row?.classList.toggle("disabled", !enabled);
+      ["title", "target", "content"].forEach((field) => {
+        const input = $(`custom_rule_${index}_${field}`);
+        if (!input) return;
+        input.disabled = !enabled;
+        if (!enabled) input.value = field === "target" ? "director" : "";
+      });
+    }
+    function conciseRuleContent(value) {
+      const text = String(value || "").replace(/[#*_`>-]/g, " ").replace(/\s+/g, " ").trim();
+      return text ? `${text.slice(0, 72)}${text.length > 72 ? "..." : ""}` : "";
+    }
+    function cleanRuleDetails(value) {
+      const text = String(value || "").replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      if (!text) return "";
+      return text.length > 900 ? `${text.slice(0, 900).trim()}...` : text;
+    }
+    function normalizeRuleRow(row, lang) {
+      const source = row && typeof row === "object" ? row : {};
+      const localizedDesc = (lang === "en" ? source.desc_en : source.desc_zh) || source.desc || "";
+      const contentDetails = cleanRuleDetails(source.content);
+      const title = (lang === "en" ? source.title_en : source.title_zh) || source.title || source.rule_id || source.id || "规则分类";
+      const desc = localizedDesc || conciseRuleContent(source.content) || "展开查看关联规则文件。";
+      const details = contentDetails || localizedDesc || desc;
+      const files = Array.isArray(source.files) ? source.files.filter(Boolean).map(String) : [];
+      return { title: String(title), desc: String(desc), details: String(details), files };
+    }
+    function renderRules() {
+      const lang = state.ruleLang;
+      const rows = Array.isArray(state.rules) && state.rules.length ? state.rules : FALLBACK_RULE_CATEGORIES;
+      if (!rows.length) {
+        $("defaultRules").innerHTML = `<p class="hintLine">未读取到规则分类，请刷新或检查 /api/new-campaign-defaults。</p>`;
+        return;
+      }
+      $("defaultRules").innerHTML = rows.map((row, index) => {
+        const normalized = normalizeRuleRow(row, lang);
+        return `<article class="ruleCard">
+          <button class="ruleToggle" type="button" data-rule-index="${index}">
+            <strong><b>${escapeHtml(normalized.title)}</b><i>+</i></strong>
+            <span>${escapeHtml(normalized.desc)}</span>
+          </button>
+          <div class="ruleDetails">
+            <div><b>规则说明</b><p>${escapeHtml(normalized.details)}</p></div>
+            <div><b>关联文件</b><span class="ruleFiles">${escapeHtml(normalized.files.length ? normalized.files.join(" / ") : "暂无关联文件")}</span></div>
+          </div>
+        </article>`;
+      }).join("");
+      document.querySelectorAll("[data-rule-index]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const card = button.closest(".ruleCard");
+          document.querySelectorAll(".ruleCard.expanded").forEach((item) => {
+            if (item !== card) {
+              item.classList.remove("expanded");
+              item.querySelector("i").textContent = "+";
+            }
+          });
+          const expanded = card.classList.toggle("expanded");
+          button.querySelector("i").textContent = expanded ? "−" : "+";
+        });
+      });
+    }
     async function loadDefaults() {
       try {
         const data = await api("/api/new-campaign-defaults");
-        const rows = data.defaults?.categories || [];
-        $("defaultRules").innerHTML = rows.map((row, index) => `
-          <article class="ruleCard">
-            <button class="ruleToggle" type="button" data-rule-index="${index}">
-              <span>${escapeHtml(row.title)}</span><b>+</b>
-            </button>
-            <span class="ruleFiles">${escapeHtml((row.files || []).join(" / "))}</span>
-            <pre class="hidden">${escapeHtml(row.content || "暂无内容")}</pre>
-          </article>
-        `).join("");
-        document.querySelectorAll("[data-rule-index]").forEach((button) => {
-          button.addEventListener("click", () => {
-            const pre = button.closest(".ruleCard").querySelector("pre");
-            const collapsed = pre.classList.toggle("hidden");
-            button.querySelector("b").textContent = collapsed ? "+" : "−";
-          });
-        });
+        const rows = data.defaults?.categories;
+        state.rules = Array.isArray(rows) && rows.length ? rows : FALLBACK_RULE_CATEGORIES;
+        renderRules();
       } catch (err) {
-        $("defaultRules").innerHTML = `<p class="hintLine">${escapeHtml(err.message)}</p>`;
+        state.rules = FALLBACK_RULE_CATEGORIES;
+        renderRules();
+        notice(`规则分类接口未读取，已使用前端兜底：${err.message}`);
       }
     }
-
     async function createCampaign(event) {
       event.preventDefault();
-      const { errors, warnings } = validateForm();
-      if (errors.length) {
-        notice(errors[0]);
-        return;
-      }
+      const { errors } = validateForm();
+      if (errors.length) return notice(errors[0]);
       const button = $("createCampaignBtn");
       button.disabled = true;
-      const prefix = warnings.length ? `${warnings.join(" ")} ` : "";
-      notice(`${prefix}正在创建跑团并写入初始化配置...`);
+      notice("");
+      resetSetupDialog();
+      setSetupProgress(5, "开始初始化故事", "正在校验创团表单。");
       try {
-        const data = await api("/api/create-campaign-smart", {
-          method: "POST",
-          body: JSON.stringify(payloadFromForm()),
-        });
-        const genre = data.analysis?.genre || "已归纳";
-        const tone = data.analysis?.tone || "已归纳";
-        notice(`创建完成：${genre} / ${tone}，正在进入控制台。`);
+        const start = await api("/api/create-campaign-smart-start", { method: "POST", body: JSON.stringify(payloadFromForm()) });
+        const jobId = start.job_id;
+        let visualPercent = 15;
+        setSetupProgress(15, "正在请求 V4 导演生成初始设定", "V4 导演正在整理初始化记忆；本阶段不会生成故事正文。");
+        while (true) {
+          await sleep(650);
+          const progress = await api(`/api/create-campaign-smart-progress?job_id=${encodeURIComponent(jobId)}`);
+          if (progress.error) throw new Error(progress.error);
+          renderSetupThink(progress.public_think || []);
+          const backendPercent = Number(progress.percent || 0);
+          if (backendPercent >= 50) {
+            visualPercent = Math.max(50, backendPercent);
+          } else {
+            visualPercent = Math.min(49, Math.max(visualPercent + 3, backendPercent));
+          }
+          const label = progress.label || (visualPercent >= 50 ? "V4 导演设定已返回" : "正在请求 V4 导演生成初始设定");
+          const message = visualPercent >= 75
+            ? "正在本地分析角色、规则与记忆。"
+            : visualPercent >= 50
+              ? "V4 导演设定已返回，正在写入初始化资料。"
+              : "V4 导演正在整理初始化记忆；本阶段不会生成故事正文。";
+          setSetupProgress(visualPercent, label, message);
+          if (progress.done) break;
+        }
+        setSetupProgress(100, "初始化完成，正在进入控制台", "跑团记忆已写入。");
+        await sleep(500);
         window.location.href = "/";
       } catch (err) {
-        notice(err.message);
+        showSetupError(err.message);
         button.disabled = false;
       }
     }
-
-    window.addEventListener("resize", resize);
+    $("showAiPromptBtn").addEventListener("click", () => {
+      $("aiPromptText").value = AI_SETUP_PROMPT;
+      $("aiPromptPanel").classList.toggle("hidden");
+      $("copyAiPromptBtn").classList.toggle("hidden", $("aiPromptPanel").classList.contains("hidden"));
+    });
+    $("copyAiPromptBtn").addEventListener("click", async () => {
+      $("aiPromptText").select();
+      await navigator.clipboard?.writeText($("aiPromptText").value).catch(() => document.execCommand("copy"));
+      notice("AI 问答 Prompt 已复制。");
+    });
+    $("rollAttributesBtn").addEventListener("click", rerollAttributes);
+    $("setupCloseBtn").addEventListener("click", closeSetupDialog);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeSetupDialog();
+    });
     $("template").addEventListener("change", () => applyTemplateDefaults(false));
     $("restoreTemplateBtn").addEventListener("click", () => applyTemplateDefaults(true));
     $("name").addEventListener("input", () => { dirty.name = true; });
     $("user_prompt").addEventListener("input", () => { dirty.user_prompt = true; });
-    ["model_mode", "companion_enabled", "character_card_enabled", "dice_enabled"].forEach((id) => {
-      $(id).addEventListener("change", syncConditionalSections);
+    ["companion_enabled", "character_card_enabled"].forEach((id) => $(id).addEventListener("change", syncConditionalSections));
+    document.querySelectorAll('input[name="model_mode_choice"]').forEach((input) => input.addEventListener("change", syncConditionalSections));
+    document.querySelectorAll(".langBtn").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.ruleLang = button.dataset.lang;
+        document.querySelectorAll(".langBtn").forEach((item) => item.classList.toggle("active", item === button));
+        renderRules();
+      });
     });
     $("createForm").addEventListener("submit", createCampaign);
+    window.addEventListener("resize", resize);
     initDragScroll();
+    renderCustomRuleEditors();
     resize();
     frame();
+    syncConditionalSections();
     applyTemplateDefaults(false);
     loadDefaults();
   </script>

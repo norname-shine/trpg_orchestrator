@@ -28,9 +28,12 @@
   currentMapAsset: null,
   writebackReview: {},
   currentPressurePack: {},
+  characterProfileExpanded: false,
+  characterProfileCampaign: "",
   ruleFiles: [],
   selectedRule: "",
   frontendState: {},
+  streamingPreview: false,
   modulePayloadCache: {},
   assetSeed: "",
   dragPanels: {},
@@ -42,11 +45,20 @@
     target: 0,
     timer: null,
     hideTimer: null,
+    streamTimer: null,
+    jobId: "",
+    streamText: "",
+    streamError: "",
+    publicThink: [],
+    publicNote: "",
+    stage: "",
+    needsHumanVerification: false,
   },
 };
 
 const $ = (id) => document.getElementById(id);
-const ASSET_GENERATOR_VERSION = 17;
+const ASSET_GENERATOR_VERSION = 19;
+const PORTRAIT_SPEC_VERSION = "story_linked_canvas_portrait.v1";
 const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v17";
 const LEGACY_DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels";
 
@@ -75,6 +87,10 @@ function bindControls() {
   });
   document.getElementById("viewCompanionDataBtn")?.addEventListener("click", () => {
     openCompanionOverlay();
+  });
+  document.getElementById("characterProfileToggle")?.addEventListener("click", () => {
+    state.characterProfileExpanded = !state.characterProfileExpanded;
+    renderCharacterProfile(state.lastCharacterCardForRender?.profile || {});
   });
   $("closeCompanionOverlay")?.addEventListener("click", closeCompanionOverlay);
   $("companionOverlay")?.addEventListener("click", (event) => {
@@ -425,7 +441,10 @@ async function startJob(path, payload, options = {}) {
       showPanel("logs");
       setLog("命令已提交，后台开始执行。");
     }
-    await api(path, { method: "POST", body: JSON.stringify(payload) });
+    const data = await api(path, { method: "POST", body: JSON.stringify(payload) });
+    if (options.storyProgress && data?.job?.stream_enabled && data?.job?.job_id) {
+      startRunStreamPolling(data.job.job_id);
+    }
     if (options.clearInputOnSuccess) {
       const input = $("actionInput");
       if (input) input.value = "";
@@ -444,6 +463,7 @@ async function refresh() {
     const previousCampaign = state.activeCampaign || "";
     const nextCampaign = data.active_campaign || "";
     state.frontendState = data.frontend_state || {};
+    state.streamingPreview = Boolean(data.streaming_preview);
     state.activeCampaign = nextCampaign;
     state.assetSeed = state.frontendState.asset_seed || state.frontendState.campaign?.asset_seed || nextCampaign || "";
     if (previousCampaign !== nextCampaign) {
@@ -581,6 +601,8 @@ function resetStoryProgressDropdown() {
   if (bar) bar.style.width = "0%";
   const legacyBar = $("storyOverallBar");
   if (legacyBar) legacyBar.style.width = "0%";
+  const details = $("storyProgressDetails");
+  if (details) details.innerHTML = "";
   closeStoryProgressMenu();
 }
 
@@ -625,6 +647,35 @@ function isValidMapRoute(route) {
   return Boolean(route && typeof route === "object" && Array.isArray(route.nodes) && route.nodes.length > 0);
 }
 
+function isAttributeStarAsset(asset = {}) {
+  const metadata = asset.metadata || {};
+  const text = [
+    asset.key,
+    asset.path,
+    asset.filename,
+    asset.kind,
+    asset.title,
+    asset.display_name,
+    metadata.kind,
+    metadata.source,
+    metadata.object_id,
+    metadata.title,
+    metadata.display_name,
+  ].join(" ").toLowerCase();
+  return text.includes("attribute_star") || text.includes("属性星图") || text.includes("六芒星");
+}
+
+function isValidCachedMapAsset(asset = {}) {
+  const metadata = asset.metadata || {};
+  const kind = String(asset.kind || "");
+  const text = [asset.key, asset.path, asset.filename, kind, metadata.kind, metadata.source, metadata.object_id].join(" ").toLowerCase();
+  if (!asset.url || asset.exists === false) return false;
+  if (asset.placeholder || asset.is_placeholder || metadata.placeholder) return false;
+  if (/(placeholder|empty_map|base_map|default_map)/.test(text)) return false;
+  if (!(kind === "map" || kind === "map_image" || kind.startsWith("gallery_map") || metadata.source === "map_route")) return false;
+  return isValidMapRoute(metadata.map_route || asset.map_route);
+}
+
 function renderCachedMap(scene, mapPanel = {}) {
   const modulePayload = mapPanel.payload || mapPanel.latest_map || {};
   const mode = mapPanel.mode || (mapPanel.keep_previous ? "keep_previous" : "none");
@@ -637,8 +688,7 @@ function renderCachedMap(scene, mapPanel = {}) {
   if (mode === "no_update" || mode === "none") return;
   if (!updateRequested || mode === "keep_previous") {
     const cached = findCurrentCampaignAsset((asset) => {
-      const kind = String(asset.kind || "");
-      return asset.exists && asset.url && (kind === "map" || kind === "map_image" || kind.startsWith("gallery_map"));
+      return isValidCachedMapAsset(asset);
     });
     const url = modulePayload.url && isUrlForCurrentCampaign(modulePayload.url, modulePayload.asset_key)
       ? modulePayload.url
@@ -743,29 +793,81 @@ function buildCharacterCard(campaignState, fallbackTitle, scene) {
   const prompt = campaignState.character_prompt || {};
   const provided = player.character_card || prompt.character_card || {};
   const identity = provided.identity || player.confirmed_identity || prompt.confirmed_identity || {};
+  const profile = normalizeCharacterProfile(provided.profile || prompt.profile || {});
   const mechanics = campaignState.mechanics || {};
   const strictReady = hasStrictVitals(provided.vitals) || hasStrictAttributes(provided.attributes);
   const requestedMode = provided.mode || (strictReady ? "strict_stats" : "narrative_status");
   const mode = requestedMode === "auto" ? (strictReady ? "strict_stats" : "narrative_status") : requestedMode;
-  const name = identity.name || extractPlayerName(player, prompt) || fallbackTitle;
+  const name = identity.name || extractPlayerName(player, prompt) || "未命名角色";
   const roleParts = [
     identity.ancestry,
     identity.class_or_role || identity.role,
     identity.level_or_stage,
   ].filter(Boolean);
   const fallback = characterFallback(campaignState, name, scene);
-  const fallbackRole = fallback.meta || campaignState.genre || "身份待确认";
+  const fallbackRole = identity.summary || fallback.meta || campaignState.genre || "身份待确认";
   const progression = normalizeProgression(provided.progression, mode, fallback);
   const companionSource = provided.companion || prompt.companion_card || identity.companion || null;
+  const vitalsSource = hasStrictVitals(provided.vitals)
+    ? provided.vitals
+    : deriveVitalsFromThreeAttributes(provided.attributes);
   return {
+    enabled: provided.enabled !== false,
     mode,
     name,
     meta: roleParts.length ? roleParts.join(" / ") : fallbackRole,
+    profile,
+    visual_profile: provided.visual_profile || state.frontendState?.character_card?.visual_profile || buildPlayerVisualProfile({ name, meta: roleParts.join(" / "), profile }, campaignState),
     progression,
-    vitals: normalizeVitals(provided.vitals, mode, fallback),
-    conditions: normalizeConditions(provided.conditions, campaignState, scene),
-    attributes: normalizeAttributes(provided.attributes, mode, fallback),
+    vitals: normalizeVitals(vitalsSource, mode, fallback),
+    conditions: normalizeConditions(provided.conditions || provided.tags || provided.badges, campaignState, scene),
+    attributes: normalizeCharacterAttributes(provided.attributes || fallback.attributes),
     companion: normalizeCompanion(companionSource),
+  };
+}
+
+function normalizeCharacterProfile(raw = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    background: String(source.background || "").trim() || "背景待确认",
+    motivation: String(source.motivation || "").trim(),
+    personality: String(source.personality || "").trim(),
+    notes: Array.isArray(source.notes) ? source.notes : [],
+  };
+}
+
+function normalizeCharacterAttributes(raw) {
+  const empty = { enabled: false, visible: false, cap: 20, float_ratio: 1.2, float_cap: 24, three: null, six: null, legacy: [] };
+  if (!raw) return empty;
+  if (Array.isArray(raw)) {
+    return { ...empty, enabled: true, visible: true, legacy: normalizeAttributes(raw, "strict_stats", {}) };
+  }
+  if (typeof raw !== "object") return empty;
+  const cap = Number(raw.cap) > 0 ? Number(raw.cap) : 20;
+  const floatRatio = Number(raw.float_ratio) >= 1 ? Number(raw.float_ratio) : 1.2;
+  const normalizeGroup = (group, fallbackTemplate = "") => {
+    if (!group || typeof group !== "object") return null;
+    const items = Array.isArray(group.items) ? group.items : [];
+    return {
+      template: group.template || fallbackTemplate,
+      source: group.source || "",
+      items: items.map((item, index) => ({
+        key: String(item.key || `attr_${index}`),
+        label: String(item.label || item.key || `属性${index + 1}`),
+        value: item.value === null || item.value === "" || item.value === undefined ? null : Number(item.value),
+      })),
+    };
+  };
+  const legacyItems = Array.isArray(raw.items) ? normalizeAttributes(raw.items, "strict_stats", {}) : [];
+  return {
+    enabled: raw.enabled !== false,
+    visible: raw.visible !== false,
+    cap,
+    float_ratio: floatRatio,
+    float_cap: Number(raw.float_cap) > 0 ? Number(raw.float_cap) : Math.ceil(cap * floatRatio),
+    three: normalizeGroup(raw.three, "three"),
+    six: normalizeGroup(raw.six, "six"),
+    legacy: legacyItems,
   };
 }
 
@@ -917,12 +1019,38 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
     if (job.kind === "portrait") {
       const card = frontendState.modules?.character_card?.payload || frontendState.character_card || {};
       const seed = card.name || job.asset_key || state.activeCampaign || "portrait";
+      const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, campaignState || state.lastCampaignState || {});
+      const visualHash = visualProfileHash(visualProfile);
       drawPixelActorPortrait(seed, {
         cache: true,
         objectId: slugify(job.asset_key || card.name || "portrait"),
-        seedText: scopedSeed(`${state.activeCampaign}:${job.asset_key}`),
+        seedText: scopedSeed(`${state.activeCampaign}:${job.asset_key}:${visualHash}:${currentStoryVisualContext()}`),
         role: "player",
         kind: "player_portrait",
+        visualProfile,
+        metadata: {
+          title: card.name || "player",
+          display_name: card.name || "player",
+          role: "player",
+          runtime_role: "player",
+          entity_key: makeEntityKey("player", card.name || "player"),
+          avatar_key: makeEntityKey("player", card.name || "player"),
+          portrait_asset_kind: "player_portrait",
+          gallery_category: "hidden",
+          visible_in_gallery: false,
+          not_in_gallery_filters: true,
+          display_slot: "main_character_card",
+          detail_slot: "main_character_detail",
+          render_tier: "player",
+          source_size: 512,
+          detail_level: "high",
+          visual_spec: "story_linked_canvas_portrait",
+          portrait_spec_version: PORTRAIT_SPEC_VERSION,
+          visual_profile: visualProfile,
+          visual_profile_hash: visualHash,
+          variant: `vp_${visualHash}`,
+          background_context: currentStoryVisualContext(),
+        },
       });
       return;
     }
@@ -997,8 +1125,61 @@ function renderStoryProgressDropdown(frontendState = {}) {
   setText("storyProgressPace", pace);
   setText("storyProgressPaceBadge", pace === "accelerate" ? "加速" : pace === "slow" ? "放缓" : "稳定");
   setText("storyProgressStatusText", status);
+  renderStoryProgressDetails(payload, chapter, node);
   const bar = $("storyProgressOverallBar");
   if (bar) bar.style.width = `${overall}%`;
+}
+
+function renderStoryProgressDetails(payload = {}, chapter = {}, node = {}) {
+  const holder = $("storyProgressDetails");
+  if (!holder) return;
+  holder.innerHTML = "";
+  const rows = [];
+  const chapterSummary = String(chapter.summary || chapter.description || "").trim();
+  if (chapterSummary) rows.push({ label: "章节摘要", value: chapterSummary });
+  const nodeGoal = String(node.goal || node.summary || node.description || "").trim();
+  if (nodeGoal) rows.push({ label: "节点目标", value: nodeGoal });
+  const targetChars = Number(node.target_chars || node.target_total_chars || 0);
+  const charsInNode = Number(node.chars_in_node || payload.chars_in_node || 0);
+  if (targetChars > 0) rows.push({ label: "目标字数", value: `${charsInNode > 0 ? `${charsInNode} / ` : ""}${targetChars}` });
+  const completed = Number(payload.completed_node_count || 0);
+  const total = Number(payload.total_node_count || 0);
+  if (total > 0) rows.push({ label: "节点计数", value: `${completed} / ${total}` });
+  rows.forEach((row) => holder.appendChild(storyProgressDetailRow(row.label, row.value)));
+
+  const beats = Array.isArray(node.beat_checklist) ? node.beat_checklist : [];
+  if (beats.length) {
+    const section = document.createElement("div");
+    section.className = "storyProgressDetailSection";
+    const title = document.createElement("b");
+    title.textContent = "检查点";
+    const list = document.createElement("ul");
+    beats.slice(0, 6).forEach((beat) => {
+      const item = document.createElement("li");
+      const status = String(beat.status || "pending");
+      item.dataset.status = status;
+      item.textContent = `${beat.text || beat.label || beat.id || "未命名检查点"}${status !== "pending" ? ` · ${status}` : ""}`;
+      list.appendChild(item);
+    });
+    section.append(title, list);
+    holder.appendChild(section);
+  }
+
+  const nextNodes = Array.isArray(node.next_nodes) ? node.next_nodes : [];
+  const nextText = nextNodes.map((item) => item.name || item.title || item.id).filter(Boolean).join(" / ");
+  if (nextText) holder.appendChild(storyProgressDetailRow("下一节点", nextText));
+  holder.classList.toggle("is-empty", !holder.children.length);
+}
+
+function storyProgressDetailRow(label, value) {
+  const row = document.createElement("div");
+  row.className = "storyProgressDetailRow";
+  const key = document.createElement("span");
+  key.textContent = label;
+  const text = document.createElement("p");
+  text.textContent = value;
+  row.append(key, text);
+  return row;
 }
 
 function clampPercent(value) {
@@ -1024,6 +1205,17 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
   if (!card || !card.name) {
     const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
     const scene = campaignState.recent?.current_scene || {};
+    const localCard = buildCharacterCard(campaignState, title, scene);
+    return {
+      ...localCard,
+      visual_profile: card.visual_profile || localCard.visual_profile,
+      portrait: card.portrait || localCard.portrait || {},
+    };
+  }
+  const provided = campaignState.player?.character_card || campaignState.character_prompt?.character_card || {};
+  if (provided && (provided.profile || (provided.attributes && !Array.isArray(provided.attributes)))) {
+    const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
+    const scene = campaignState.recent?.current_scene || {};
     return buildCharacterCard(campaignState, title, scene);
   }
   const statVisibility = card.stat_visibility || "narrative";
@@ -1034,6 +1226,7 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
     name: card.name,
     meta: card.identity || "身份待确认",
     portrait: card.portrait || {},
+    visual_profile: card.visual_profile || buildPlayerVisualProfile({ name: card.name, meta: card.identity, profile: card.profile || {} }, campaignState),
     progression: {
       label: card.progress?.label || "进展",
       value: card.progress?.text || "",
@@ -1073,6 +1266,7 @@ function protocolCompanionCard(companion = {}, campaignState = {}) {
       seed: raw.visual_seed || companion.visual_seed || companion.portrait?.asset_key || companion.name,
       archetype: companion.archetype || "companion",
       portrait: companion.portrait || {},
+      visual_profile: companion.visual_profile || raw.visual_profile || buildCompanionVisualProfile({ ...companion, meta: raw }, campaignState, {}, {}),
       raw,
       pending: Boolean(companion.pending),
     };
@@ -1199,7 +1393,11 @@ function hasStrictVitals(vitals) {
 }
 
 function hasStrictAttributes(attributes) {
-  return Array.isArray(attributes) && attributes.some((item) => Number.isFinite(item?.value));
+  if (Array.isArray(attributes)) return attributes.some((item) => Number.isFinite(item?.value));
+  if (attributes && typeof attributes === "object") {
+    return [attributes.three, attributes.six].some((group) => Array.isArray(group?.items) && group.items.some((item) => Number.isFinite(Number(item?.value))));
+  }
+  return false;
 }
 
 function normalizeProgression(progress, mode, fallback = {}) {
@@ -1229,6 +1427,32 @@ function normalizeVitals(vitals, mode, fallback = {}) {
     { key: "focus", label: "专注值", state: "稳定", percent: 78, tone: "blue" },
     { key: "stamina", label: "体力值", state: "有消耗", percent: 72, tone: "green" },
   ];
+}
+
+function deriveVitalsFromThreeAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return [];
+  const group = attributes.three || {};
+  const items = Array.isArray(group.items) ? group.items : [];
+  if (!items.length) return [];
+  const floatCap = Number(attributes.float_cap || Math.ceil((Number(attributes.cap) || 20) * (Number(attributes.float_ratio) || 1.2))) || 24;
+  const findItem = (keys, fallbackIndex) => items.find((item) => keys.includes(String(item.key || "").toUpperCase())) || items[fallbackIndex] || {};
+  return [
+    ["status", "状态", findItem(["BODY"], 0), "green"],
+    ["focus", "专注", findItem(["ACTION", "REFLEX", "SKILL", "OBSERVE"], 1), "blue"],
+    ["resource", "资源", findItem(["MIND", "SANITY"], 2), "amber"],
+  ].map(([key, label, item, tone]) => {
+    const value = Number(item.value);
+    const safeValue = Number.isFinite(value) ? value : 0;
+    const attrLabel = item.label || item.key || label;
+    return {
+      key,
+      label,
+      current: safeValue,
+      max: floatCap,
+      text: `${attrLabel} ${safeValue}/${floatCap}`,
+      tone,
+    };
+  });
 }
 
 function normalizeVital(item, index, mode) {
@@ -1286,9 +1510,11 @@ function normalizeAttributes(attributes, mode, fallback = {}) {
 function renderCharacterCard(card) {
   const panel = document.querySelector(".characterPanel");
   panel?.classList.toggle("character-disabled", card.enabled === false);
-  setText("characterName", card.name);
-  setText("characterMeta", card.meta);
+  setText("characterName", card.name || "未命名角色");
+  setText("characterMeta", card.meta || "身份待确认");
+  renderCharacterProfile(card.profile || {});
   const visibility = card.statVisibility || "narrative";
+  state.lastCharacterCardForRender = card;
   setText("characterCardMode", card.enabled === false ? "未启用" : visibility === "numeric" ? "数值卡" : visibility === "hybrid" ? "半数值卡" : "叙事卡");
   setText("progressLabel", card.progression.label);
   setText("progressValue", card.progression.value);
@@ -1300,12 +1526,72 @@ function renderCharacterCard(card) {
   }
   renderVitals(card.vitals, visibility);
   renderConditionBadges(card.conditions);
-  renderAttributes(card.attributes, card.name, visibility);
+  renderAttributePanel(card.attributes, card.name, visibility);
   if (card.enabled === false) {
     clearImageElement("avatarImage");
     return;
   }
   renderCharacterPortrait(card);
+}
+
+function renderCharacterProfile(profile) {
+  const holder = $("characterBackground");
+  const toggle = $("characterProfileToggle");
+  const details = $("characterProfileDetails");
+  if (!holder) return;
+  if (state.characterProfileCampaign !== state.activeCampaign) {
+    state.characterProfileCampaign = state.activeCampaign;
+    state.characterProfileExpanded = false;
+  }
+  const normalized = normalizeCharacterProfile(profile);
+  holder.textContent = normalized.background || "背景待确认";
+  if (!toggle || !details) return;
+  const hasDetails = Boolean(
+    normalized.background ||
+    normalized.motivation ||
+    normalized.personality ||
+    (Array.isArray(normalized.notes) && normalized.notes.length)
+  );
+  toggle.hidden = !hasDetails;
+  toggle.textContent = state.characterProfileExpanded ? "主角资料 · 收起" : "主角资料 · 展开";
+  toggle.setAttribute("aria-expanded", state.characterProfileExpanded ? "true" : "false");
+  details.hidden = !state.characterProfileExpanded || !hasDetails;
+  details.innerHTML = "";
+  if (details.hidden) return;
+  renderCharacterProfileDetails(details, normalized);
+}
+
+function renderCharacterProfileDetails(holder, profile) {
+  const rows = [
+    ["背景", profile.background || "背景待确认"],
+    ["动机", profile.motivation || "动机待确认"],
+    ["性格", profile.personality || "性格待确认"],
+  ];
+  rows.forEach(([label, value]) => {
+    const row = document.createElement("div");
+    row.className = "characterProfileRow";
+    const key = document.createElement("span");
+    key.textContent = label;
+    const text = document.createElement("p");
+    text.textContent = value;
+    row.append(key, text);
+    holder.appendChild(row);
+  });
+  const notes = Array.isArray(profile.notes) ? profile.notes.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  if (notes.length) {
+    const row = document.createElement("div");
+    row.className = "characterProfileRow";
+    const key = document.createElement("span");
+    key.textContent = "备注";
+    const list = document.createElement("ul");
+    notes.slice(0, 5).forEach((note) => {
+      const item = document.createElement("li");
+      item.textContent = note;
+      list.appendChild(item);
+    });
+    row.append(key, list);
+    holder.appendChild(row);
+  }
 }
 
 function renderCompanionCard(companion) {
@@ -1327,16 +1613,17 @@ function renderCompanionCard(companion) {
     clearImageElement("companionImage");
     return;
   }
-  const resolved = resolveVisualAsset({ ...companion, type: "companion", role: "companion", portrait: companion.portrait || {} });
+  const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
+  const visualHash = visualProfileHash(visualProfile);
+  const resolved = resolveVisualAsset({ ...companion, visual_profile: visualProfile, type: "companion", role: "companion", portrait: companion.portrait || {} });
   if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
     showAvatarImage("companionImage", resolved.url, resolved.asset_key || "");
     return;
   }
-  const visualProfile = buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
   drawPixelCompanionPortrait(resolved.fallback_seed || companion.seed || companion.name, {
     cache: true,
     objectId: slugify(resolved.entity_key || companion.name || "companion"),
-    seedText: scopedSeed(resolved.fallback_seed || companion.seed || companion.name || "companion"),
+    seedText: scopedSeed(`${resolved.fallback_seed || companion.seed || companion.name || "companion"}:${visualHash}:${currentStoryVisualContext()}`),
     archetype: visualProfile.companion_type_preset || "custom",
     visualProfile,
     kind: "companion_portrait",
@@ -1362,7 +1649,11 @@ function renderCompanionCard(companion) {
       render_tier: "companion",
       source_size: 512,
       detail_level: "high",
-      visual_spec: "secondary_full_body_story_context",
+      visual_spec: "story_linked_canvas_portrait",
+      portrait_spec_version: PORTRAIT_SPEC_VERSION,
+      visual_profile: visualProfile,
+      visual_profile_hash: visualHash,
+      variant: `vp_${visualHash}`,
       background_context: currentStoryVisualContext(),
     },
   });
@@ -1372,6 +1663,10 @@ function renderVitals(vitals, statVisibility = "narrative") {
   const holder = $("vitalList");
   if (!holder) return;
   holder.innerHTML = "";
+  const attributes = normalizeCharacterAttributes((state.lastCharacterCardForRender || {}).attributes);
+  if (attributes.enabled !== false && attributes.visible !== false && attributes.three?.items?.length) {
+    return;
+  }
   if (!Array.isArray(vitals) || !vitals.length) {
     const row = document.createElement("div");
     row.className = "vitalRow narrative";
@@ -1420,6 +1715,86 @@ function renderAttributes(attributes, characterName = "player", statVisibility =
   if (wrap) wrap.hidden = statVisibility === "narrative" || !Array.isArray(attributes) || !attributes.length;
   if (statVisibility === "narrative" || !Array.isArray(attributes) || !attributes.length) return;
   renderAttributeStar(attributes, characterName);
+}
+
+function renderAttributePanel(attributes, characterName = "player", statVisibility = "narrative") {
+  const wrap = $("attributeStar");
+  const threeSlot = $("threeAttributeSlot");
+  if (threeSlot) threeSlot.innerHTML = "";
+  if (!wrap) return;
+  const normalized = normalizeCharacterAttributes(attributes);
+  wrap.hidden = normalized.enabled === false || normalized.visible === false;
+  if (wrap.hidden) return;
+  wrap.querySelectorAll(".threeAttributeBars,.sixAttributeList,.attributeGroupTitle").forEach((node) => node.remove());
+  const image = $("attributeStarImage");
+  if (image) image.hidden = true;
+  if (normalized.three?.items?.length) renderThreeAttributeBars(normalized.three, normalized.cap, normalized.float_cap, threeSlot || wrap);
+  if (normalized.six?.items?.length) {
+    renderSixAttributeRadar(normalized.six, characterName, normalized.float_cap);
+  } else if (normalized.legacy?.length) {
+    renderLegacyAttributeList(normalized.legacy);
+  }
+}
+
+function renderThreeAttributeBars(group, cap = 20, floatCap = 24, target = $("attributeStar")) {
+  const wrap = target || $("attributeStar");
+  if (!wrap) return;
+  const title = document.createElement("div");
+  title.className = "attributeGroupTitle";
+  title.textContent = "三维属性";
+  const box = document.createElement("div");
+  box.className = "threeAttributeBars";
+  (group.items || []).forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "attributeBarRow";
+    const label = document.createElement("span");
+    label.textContent = item.label || item.key;
+    const track = document.createElement("em");
+    track.className = "attributeBarTrack";
+    const fill = document.createElement("i");
+    const value = Number(item.value);
+    fill.style.width = `${Number.isFinite(value) ? Math.max(4, Math.min(100, value / Math.max(1, floatCap || cap) * 100)) : 0}%`;
+    track.appendChild(fill);
+    const num = document.createElement("b");
+    num.textContent = Number.isFinite(value) ? String(value) : "-";
+    row.append(label, track, num);
+    box.appendChild(row);
+  });
+  wrap.append(title, box);
+}
+
+function renderSixAttributeRadar(group, characterName = "player", floatCap = 24) {
+  const wrap = $("attributeStar");
+  const image = $("attributeStarImage");
+  if (image) image.hidden = false;
+  const rows = (group.items || []).map((item) => ({ ...item, max: floatCap, text: item.label }));
+  if (rows.length >= 3) renderAttributeStar(rows, characterName);
+  const title = document.createElement("div");
+  title.className = "attributeGroupTitle";
+  title.textContent = "六维属性";
+  wrap?.appendChild(title);
+  renderLegacyAttributeList(rows, "sixAttributeList");
+}
+
+function renderLegacyAttributeList(attributes, className = "sixAttributeList") {
+  const wrap = $("attributeStar");
+  if (!wrap) return;
+  const box = document.createElement("div");
+  box.className = className;
+  (attributes || []).slice(0, 6).forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "sixAttributeItem";
+    const label = document.createElement("span");
+    label.textContent = item.label || item.key || "属性";
+    const key = document.createElement("span");
+    key.textContent = item.key || item.text || "";
+    const value = document.createElement("b");
+    const number = Number(item.value);
+    value.textContent = Number.isFinite(number) ? String(number) : (item.text || "-");
+    row.append(label, key, value);
+    box.appendChild(row);
+  });
+  wrap.appendChild(box);
 }
 
 function renderAttributeStar(attributes = [], characterName = "player") {
@@ -1587,14 +1962,138 @@ function questRows(campaignState) {
 function itemRows(campaignState) {
   const player = campaignState.player || {};
   const recent = campaignState.recent || {};
-  const source = [
-    ...normalizeFactRows(campaignState.equipment?.facts),
-    ...normalizeFactRows(player.facts),
-    ...clauseRows(recent.short_term_state?.resources, "物品"),
-    ...clauseRows(recent.short_term_state?.injury_or_damage, "损耗"),
+  const sourceTexts = [
+    ...factSourceTexts(campaignState.equipment?.facts),
+    ...factSourceTexts(campaignState.equipment?.equipment_updates),
+    ...factSourceTexts(campaignState.equipment?.inventory_updates),
+    ...factSourceTexts(player.facts),
+    ...factSourceTexts(recent.short_term_state?.resources),
   ];
-  const keywords = /斩斧|碎羽|素材|装备|物件|药瓶|货车|泥|痕|油灯|拖布|登记册|任务板|缰绳|行囊|鳞|补给|样本|碎片/;
-  return dedupeRows(source.filter((row) => keywords.test(row.title + row.detail))).map((row) => ({ ...row, tag: row.tag || "物品" }));
+  return dedupeInventoryRows(sourceTexts.flatMap(canonicalInventoryRows)).slice(-8);
+}
+
+function dedupeInventoryRows(rows = []) {
+  const byKey = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!row || !row.title) return;
+    const key = slugify(row.id || `${row.item_type || row.category || "item"}:${row.title}`);
+    byKey.set(key, row);
+  });
+  return Array.from(byKey.values());
+}
+
+function factSourceTexts(rows) {
+  const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
+  return list.map((row) => {
+    if (typeof row === "string") return row;
+    if (!row || typeof row !== "object") return "";
+    if (row.value && typeof row.value === "object") return row.value;
+    return row.value || row.summary || row.title || row.name || row.text || row.description || row.detail || "";
+  }).filter((text) => (typeof text === "object" && text) || String(text || "").trim());
+}
+
+function canonicalInventoryRows(input) {
+  if (input && typeof input === "object") {
+    const name = input.name || input.title || input.display_name || "";
+    const description = input.description || input.detail || input.summary || input.source_evidence || "";
+    const cleanObjectText = `${name} ${description}`.trim();
+    if (!name || isNegativeInventoryText(cleanObjectText)) return [];
+    const prompt = input.visual_hint || inferItemVisualPrompt(name, description, "item");
+    const category = input.category || prompt.category || "misc";
+    const itemType = input.item_type || prompt.archetype || prompt.type || "generic";
+    return [{
+      id: slugify(input.id || `${itemType}:${name}`),
+      title: conciseTitle(name, 20),
+      detail: conciseTitle(description || input.source_evidence || name, 96),
+      tag: input.tag || inventoryCategoryLabel(category),
+      category,
+      item_type: itemType,
+      status: input.status || itemStatusFromText(cleanObjectText),
+      source_evidence: input.source_evidence || description || name,
+      certainty: input.certainty || "confirmed",
+      visual_hint: { ...prompt, archetype: prompt.archetype || itemType, category },
+    }];
+  }
+  const clean = String(input || "").replace(/\s+/g, " ").trim();
+  if (!clean || isNegativeInventoryText(clean)) return [];
+  const specs = [
+    { type: "short_sword", category: "weapon", tag: "武器", pattern: /家传短剑|短剑|佩剑|长剑|剑\b|刀\b/, label: (m) => m.includes("家传") ? "家传短剑" : m },
+    { type: "oil_lantern", category: "resource", tag: "照明", pattern: /油灯|提灯|灯笼|灯火|火苗|灯油/, label: () => "油灯" },
+    { type: "pendant", category: "relic", tag: "遗物", pattern: /三角吊坠|吊坠|护身符|符坠|徽记|圣物/, label: (m) => m.includes("三角") ? "三角吊坠" : m },
+    { type: "potion", category: "supply", tag: "补给", pattern: /药瓶|药剂|绷带|补给|食物|口粮/, label: (m) => m },
+    { type: "document", category: "clue", tag: "线索", pattern: /登记册|任务板|书信|文件|地图|记录|照片|文献/, label: (m) => m },
+    { type: "key", category: "key", tag: "钥匙", pattern: /钥匙|钥|门牌/, label: (m) => m },
+    { type: "material", category: "material", tag: "材料", pattern: /碎羽|鳞|素材|样本|碎片|甲片/, label: (m) => m },
+  ];
+  const rows = [];
+  specs.forEach((spec) => {
+    const match = clean.match(spec.pattern);
+    if (!match) return;
+    const name = conciseTitle(spec.label(match[0]), 20);
+    const evidence = inventoryEvidenceFor(clean, match[0]);
+    rows.push({
+      id: slugify(`${spec.type}:${name}`),
+      title: name,
+      detail: conciseTitle(evidence || clean, 96),
+      tag: spec.tag,
+      category: spec.category,
+      item_type: spec.type,
+      status: itemStatusFromText(clean),
+      source_evidence: clean,
+      certainty: "confirmed",
+      visual_hint: {
+        archetype: spec.type,
+        category: spec.category,
+        source_text: conciseTitle(clean, 120),
+      },
+    });
+  });
+  if (rows.length) return rows;
+  const generic = splitFactText(clean);
+  const keywords = /斩斧|武器|物件|装备|行囊|货车|泥|痕|拖布|缰绳|线索|补给|材料/;
+  if (!keywords.test(`${generic.title}${generic.detail}`)) return [];
+  return [{
+    ...generic,
+    title: conciseTitle(generic.title, 20),
+    tag: generic.tag || "物品",
+    category: "misc",
+    item_type: "generic",
+    status: itemStatusFromText(clean),
+    source_evidence: clean,
+    certainty: "clue",
+    visual_hint: inferItemVisualPrompt(generic.title, generic.detail, "item"),
+  }];
+}
+
+function inventoryCategoryLabel(category = "") {
+  return {
+    weapon: "武器",
+    resource: "资源",
+    relic: "遗物",
+    supply: "补给",
+    clue: "线索",
+    material: "材料",
+    misc: "物品",
+  }[String(category || "").toLowerCase()] || "物品";
+}
+
+function inventoryEvidenceFor(text, token) {
+  const parts = String(text || "").split(/[；;。]/).map((part) => part.trim()).filter(Boolean);
+  return parts.find((part) => part.includes(token)) || parts.find((part) => /携带|持有|可用|剩余|不稳|发热|损坏/.test(part)) || "";
+}
+
+function isNegativeInventoryText(text = "") {
+  const value = String(text || "").replace(/\s+/g, "");
+  return /(?:暂无|没有|无|未发现|尚无|不存在).{0,14}(?:伤势|损坏|装备损坏|物品|装备|线索)/.test(value)
+    || /(?:伤势|装备损坏|损坏).{0,10}(?:暂无|没有|无|未发现)/.test(value);
+}
+
+function itemStatusFromText(text = "") {
+  const value = String(text || "");
+  if (/损坏|破损|断裂/.test(value) && !isNegativeInventoryText(value)) return "damaged";
+  if (/不稳|偏低|剩余|有限|消耗|减少/.test(value)) return "limited";
+  if (/未确认|不明|未知/.test(value)) return "uncertain";
+  return "confirmed";
 }
 
 function renderMemoryPanel(campaignState) {
@@ -1760,21 +2259,33 @@ function appendStoryTurnHistory(blocks, fallbackText, output = {}) {
     state.storyTurnsByCampaign[campaignId] = turns;
     state.storyTurnSignatures[campaignId] = signatures;
   }
-  return (state.storyTurnsByCampaign[campaignId] || []).flatMap((turn) => turn.blocks);
+  return dedupeAdjacentPlayerActions((state.storyTurnsByCampaign[campaignId] || []).flatMap((turn) => turn.blocks));
 }
 
 function fallbackPlayerInstructionBlocks(fallbackText = "") {
   const text = String(fallbackText || "").trim();
   if (text && !isEmptyStoryPlaceholder(text)) return legacyTextBlocks(text);
-  const action = String(state.frontendState?.last_player_action || $("actionInput")?.value || "").trim() || "继续。";
-  const name = state.frontendState?.character_card?.name || $("characterName")?.textContent || "玩家";
   return [{
-    type: "player_action",
-    speaker: name,
-    actor_id: makeEntityKey("player", name),
-    body: action,
+    type: "system_check",
+    speaker: "系统",
+    actor_id: "system",
+    body: "请开始游戏。",
     time: "现在",
   }];
+}
+
+function dedupeAdjacentPlayerActions(blocks = []) {
+  const output = [];
+  (Array.isArray(blocks) ? blocks : []).forEach((block) => {
+    const prev = output[output.length - 1];
+    const currentIsPlayer = block?.type === "player_action";
+    const prevIsPlayer = prev?.type === "player_action";
+    const sameActor = normalizeActorName(block?.actor_id || block?.speaker || "") === normalizeActorName(prev?.actor_id || prev?.speaker || "");
+    const sameBody = String(block?.body || "").trim() && String(block?.body || "").trim() === String(prev?.body || "").trim();
+    if (currentIsPlayer && prevIsPlayer && sameActor && sameBody) return;
+    output.push(block);
+  });
+  return output;
 }
 
 function isEmptyStoryPlaceholder(text = "") {
@@ -1803,7 +2314,9 @@ function storyTurnSignature(blocks, output = {}) {
 }
 
 function renderCharacterPortrait(card) {
-  const resolved = resolveVisualAsset({ ...card, type: "player", role: "player", portrait: card?.portrait || {} });
+  const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, state.lastCampaignState || {});
+  const visualHash = visualProfileHash(visualProfile);
+  const resolved = resolveVisualAsset({ ...card, visual_profile: visualProfile, type: "player", role: "player", portrait: card?.portrait || {} });
   if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
     showAvatarImage("avatarImage", resolved.url, resolved.asset_key || "");
     return;
@@ -1813,7 +2326,8 @@ function renderCharacterPortrait(card) {
     role: "player",
     kind: "player_portrait",
     objectId: slugify(resolved.entity_key || card?.name || "player"),
-    seedText: scopedSeed(resolved.fallback_seed || card?.name || "player"),
+    seedText: scopedSeed(`${resolved.fallback_seed || card?.name || "player"}:${visualHash}:${currentStoryVisualContext()}`),
+    visualProfile,
     targetImage: $("avatarImage"),
     metadata: {
       title: resolved.display_name || card?.name || "player",
@@ -1831,7 +2345,11 @@ function renderCharacterPortrait(card) {
       render_tier: "player",
       source_size: 512,
       detail_level: "high",
-      visual_spec: "primary_full_body_story_context",
+      visual_spec: "story_linked_canvas_portrait",
+      portrait_spec_version: PORTRAIT_SPEC_VERSION,
+      visual_profile: visualProfile,
+      visual_profile_hash: visualHash,
+      variant: `vp_${visualHash}`,
       background_context: currentStoryVisualContext(),
     },
   });
@@ -1937,9 +2455,11 @@ function resolveActorIdentity(source = {}, campaignState = state.frontendState |
   };
 }
 
-function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.cachedAssets || []) {
+function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.cachedAssets || [], expectedVisualHash = "") {
   const matches = (Array.isArray(assets) ? assets : []).filter((asset) => {
     if (!asset?.exists || !asset.url) return false;
+    if (isAttributeStarAsset(asset)) return false;
+    if (!avatarAssetAcceptsVisualProfile(asset, expectedVisualHash)) return false;
     const id = normalizeAssetIdentity(asset);
     return id.entity_key === entityKey && (id.portrait_asset_kind === portraitAssetKind || asset.kind === portraitAssetKind);
   });
@@ -1949,13 +2469,15 @@ function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.cach
 
 function resolveActorAvatar(source = {}, campaignState = state.frontendState || {}, assets = state.cachedAssets || []) {
   const identity = resolveActorIdentity(source, campaignState, assets);
+  const visualProfile = source.visual_profile || identity.visual_profile || {};
+  const expectedVisualHash = visualProfileHash(visualProfile);
   const portraitKey = source.portrait?.asset_key || source.asset_key || source.avatar_key || identity.selected_avatar_key || "";
-  const byKey = portraitKey ? findCurrentCampaignAsset((asset) => asset.exists && asset.url && asset.key === portraitKey) : null;
-  const best = selectBestAvatarAsset(identity.entity_key, identity.portrait_asset_kind || identity.asset_kind || assetKindForRole(identity.runtime_role), assets);
+  const byKey = portraitKey ? findCurrentCampaignAsset((asset) => asset.exists && asset.url && asset.key === portraitKey && avatarAssetAcceptsVisualProfile(asset, expectedVisualHash)) : null;
+  const best = selectBestAvatarAsset(identity.entity_key, identity.portrait_asset_kind || identity.asset_kind || assetKindForRole(identity.runtime_role), assets, expectedVisualHash);
   const directUrl = source.portrait?.url || source.url || source.cachedUrl || source.cached_url || "";
   const selected = best || byKey || null;
-  const selectedKey = identity.selected_avatar_key || selected?.key || portraitKey || "";
-  const selectedUrl = identity.selected_avatar_url || selected?.url || "";
+  const selectedKey = selected?.key || (!expectedVisualHash ? identity.selected_avatar_key : "") || portraitKey || "";
+  const selectedUrl = selected?.url || (!expectedVisualHash ? identity.selected_avatar_url : "") || "";
   const directOk = isUrlForCurrentCampaign(directUrl, portraitKey);
   return {
     ...identity,
@@ -1964,10 +2486,21 @@ function resolveActorAvatar(source = {}, campaignState = state.frontendState || 
     asset_key: selectedKey,
     url: selectedUrl && isUrlForCurrentCampaign(selectedUrl, selectedKey) ? selectedUrl : (directOk ? directUrl : ""),
     display_name: identity.display_name || source.display_name || source.name || source.title || identity.entity_key,
+    visual_profile: visualProfile,
+    visual_profile_hash: expectedVisualHash,
     fallback_seed: identity.fallback_seed || `${state.activeCampaign}:${identity.entity_key}:${identity.runtime_role || identity.role}`,
     renderer: identity.runtime_role === "item" ? "item_icon" : "actor_portrait",
     visible_in_gallery: Boolean(identity.visible_in_gallery),
   };
+}
+
+function avatarAssetAcceptsVisualProfile(asset = {}, expectedVisualHash = "") {
+  if (!expectedVisualHash) return true;
+  if (isVcgAvatarAsset(asset)) return true;
+  const metadata = asset.metadata || {};
+  const role = normalizeRuntimeRole(metadata.runtime_role || metadata.role || asset.role || "");
+  if (!["player", "companion"].includes(role)) return true;
+  return metadata.visual_profile_hash === expectedVisualHash && metadata.portrait_spec_version === PORTRAIT_SPEC_VERSION;
 }
 
 function normalizeRuntimeRole(value = "") {
@@ -1990,6 +2523,7 @@ function isVcgAvatarAsset(asset = {}) {
 
 function avatarPriority(asset = {}) {
   const metadata = asset.metadata || {};
+  if (isAttributeStarAsset(asset)) return -1;
   const source = String(metadata.source || metadata.avatar_source || "").toLowerCase();
   const version = Number(asset.generator_version || 0);
   if (isVcgAvatarAsset(asset)) return 500000 + version;
@@ -2201,6 +2735,7 @@ function renderStoryBlocks(blocks, fallbackText) {
       console.warn("story block render failed", block, err);
     }
   });
+  if (state.streamingPreview) renderInlineRunProgress();
   scrollActiveFeed();
   if (state.runProgress.active && blocks.length) scrollStoryToBottom(true);
 }
@@ -2657,6 +3192,7 @@ function renderStoryPicker() {
   const stories = $("storyList");
   campaigns.innerHTML = "";
   stories.innerHTML = "";
+  const usingDemoCampaigns = !state.campaigns.length;
   const availableCampaigns = state.campaigns.length ? state.campaigns : demoCampaigns();
   if (!state.selectedCampaign && availableCampaigns[0]) {
     state.selectedCampaign = availableCampaigns[0].campaign_id;
@@ -2688,7 +3224,16 @@ function renderStoryPicker() {
   switchBtn.textContent = isActive ? "当前跑团" : "切换到此跑团";
   switchBtn.disabled = isActive;
   switchBtn.addEventListener("click", () => selectCampaign(selected.campaign_id));
-  stories.append(detail, switchBtn);
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "pickerAction danger";
+  deleteBtn.textContent = "删除故事";
+  deleteBtn.disabled = usingDemoCampaigns;
+  deleteBtn.addEventListener("click", () => deleteCampaign(selected.campaign_id, selected.title || selected.name || selected.campaign_id));
+  const actions = document.createElement("div");
+  actions.className = "pickerActionRow";
+  actions.append(switchBtn, deleteBtn);
+  stories.append(detail, actions);
 }
 
 function populateCampaignProfileFields(campaign) {
@@ -2787,6 +3332,29 @@ async function selectCampaign(campaignId) {
   resetCampaignScopedUiState(campaignId);
   closeStoryPicker();
   await refresh();
+}
+
+async function deleteCampaign(campaignId, title = "") {
+  if (!campaignId) return;
+  const label = title || campaignId;
+  const confirmed = window.confirm(`永久删除跑团“${label}”？\n\n这会删除该跑团目录和索引记录，无法恢复。`);
+  if (!confirmed) return;
+  try {
+    const data = await api("/api/delete-campaign", {
+      method: "POST",
+      body: JSON.stringify({ campaign_id: campaignId }),
+    });
+    const status = data.status || {};
+    state.campaigns = status.campaign_list || [];
+    state.activeCampaign = status.active_campaign || "";
+    state.selectedCampaign = state.activeCampaign || state.campaigns[0]?.campaign_id || "";
+    resetCampaignScopedUiState(state.activeCampaign);
+    await refresh();
+    renderStoryPicker();
+    window.alert("故事已删除。");
+  } catch (err) {
+    setPickerNotice(err.message);
+  }
 }
 
 async function createCampaign() {
@@ -3137,6 +3705,7 @@ function protocolGalleryAsset(asset) {
   let kind = fixedGalleryKind(asset.kind);
   if (role === "item") kind = "item";
   if (!kind) return null;
+  if (kind === "item" && isInvalidGalleryItemAsset(asset)) return null;
   const detail = asset.detail || "";
   const entityKey = asset.entity_key || asset.entityKey || makeEntityKey(role === "npc" || role === "companion" || role === "master" || role === "item" ? role : kind, asset.title || asset.display_name || asset.key || kind);
   const logicalKey = asset.key || entityKey;
@@ -3152,7 +3721,7 @@ function protocolGalleryAsset(asset) {
     status: asset.status || "",
     archived: Boolean(asset.archived),
     createdAt: asset.created_at || "",
-    visualPrompt: asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(asset.title || asset.key || "", detail, kind),
+    visualPrompt: asset.visual_hint || asset.visual_prompt || asset.visualPrompt || inferItemVisualPrompt(asset.title || asset.key || "", detail, kind),
     imagePrompt: asset.image_prompt || asset.imagePrompt || {},
     campaign_id: asset.campaign_id || state.activeCampaign,
     asset_seed: asset.asset_seed || state.assetSeed,
@@ -3463,16 +4032,6 @@ function buildVisualAssets(campaignState) {
   const protectedActors = protectedActorNames(campaignState);
   const pressureAssets = pressureVisualAssets(protectedActors);
   const rows = [];
-  rows.push({
-    kind: "scene",
-    key: makeScopedAssetKey("map", scene.location || "current", "gallery"),
-    title: conciseTitle(scene.location || "当前区域地图", 18),
-    meta: "地图",
-    seed: scopedSeed(scene.location || state.activeCampaign || "map"),
-    campaign_id: state.activeCampaign,
-    asset_seed: state.assetSeed,
-    scene,
-  });
   (scene.active_npcs || [])
     .filter((name) => !isProtectedActorName(name, protectedActors))
     .slice(0, 4)
@@ -3501,6 +4060,9 @@ function buildVisualAssets(campaignState) {
       role: "item",
       entity_key: itemEntity,
       assetKind: "item_icon",
+      status: item.status || "",
+      visualPrompt: item.visual_hint || inferItemVisualPrompt(item.title, item.detail, "item"),
+      sourceMemory: item.source_evidence || "",
     });
   });
   monsterRows(campaignState).slice(-3).forEach((monster, index) => {
@@ -3565,6 +4127,7 @@ function normalizePressureKind(kind) {
 function cachedGalleryAssets() {
   return (state.cachedAssets || []).filter((entry) => {
     if (!isAssetForCurrentCampaign(entry)) return false;
+    if (isAttributeStarAsset(entry)) return false;
     const kind = String(entry.kind || "");
     const metadata = entry.metadata || {};
     const runtimeRole = String(metadata.runtime_role || entry.runtime_role || metadata.role || entry.role || "").toLowerCase();
@@ -3573,6 +4136,7 @@ function cachedGalleryAssets() {
     const reusableKind = ["npc_portrait", "companion_portrait", "master_portrait", "item_icon", "scene_image", "map_image", "monster_image", "cg_image", "gallery_image"].includes(kind);
     if (!entry.exists || !entry.metadata || !(kind === "map" || kind.startsWith("gallery_") || reusableKind)) return false;
     const normalizedKind = normalizeGalleryKind(kind);
+    if (normalizedKind === "scene" && (kind === "map" || kind === "map_image" || entry.metadata?.source === "map_route") && !isValidCachedMapAsset(entry)) return false;
     if (normalizedKind === "scene" && !(["map", "map_image", "scene_image"].includes(kind) || entry.metadata?.source === "map_route")) return false;
     if (normalizedKind === "npc" && ["player", "master", "companion"].includes(entry.role || metadata.role)) return false;
     if (normalizedKind !== "npc") return true;
@@ -3636,6 +4200,61 @@ function currentCompanion() {
   ).companion;
 }
 
+function buildPlayerVisualProfile(card = {}, campaignState = state.lastCampaignState || {}) {
+  const profile = normalizeCharacterProfile(card.profile || {});
+  const context = [
+    card.name,
+    card.meta,
+    profile.background,
+    profile.motivation,
+    profile.personality,
+    ...(profile.notes || []),
+    campaignState.template,
+    campaignState.genre,
+    campaignState.tone,
+    campaignState.campaign_direction?.background_direction,
+    campaignState.campaign_direction?.core_concept,
+    campaignState.campaign_direction?.opening_situation,
+    currentStoryVisualContext(),
+  ].flat().filter(Boolean).join(" ");
+  const text = normalizeActorName(context);
+  const equipment = [];
+  const motifs = [];
+  const palette = [];
+  if (/剑|盾|勇者|骑士|冒险|神殿|遗迹|地城|sword|shield|hero|knight|adventure|temple|ruin|dungeon/.test(text)) {
+    equipment.push("travel cloak", "adventurer belts", "sword or shield marker");
+    motifs.push("ancient triangle mark", "ruin light", "destiny emblem");
+    palette.push("forest green", "leather brown", "ancient gold");
+  }
+  if (/森林|林|精灵|自然|forest|wood|elf|nature/.test(text)) {
+    motifs.push("leaf silhouette", "forest backlight");
+    palette.push("moss green", "warm bark");
+  }
+  if (/调查|侦探|旧案|失踪|悬疑|恐怖|克苏鲁|detective|investigation|mystery|horror/.test(text)) {
+    equipment.push("notebook", "lantern", "long coat");
+    motifs.push("paper clue", "low shadow");
+    palette.push("lamp amber", "deep shadow");
+  }
+  if (/魔法|法术|命运|灵|圣杯|magic|spell|fate|spirit|grail/.test(text)) {
+    motifs.push("soft magical glow", "arcane badge");
+    palette.push("blue glow", "silver accent");
+  }
+  return {
+    source: "campaign_initialization",
+    role: "player",
+    identity_markers: normalizeProfileList([card.name, card.meta].filter(Boolean).join(" / ")).slice(0, 6),
+    background_markers: normalizeProfileList([profile.background, campaignState.campaign_direction?.background_direction, currentStoryVisualContext()].flat().filter(Boolean).join(" / ")).slice(0, 8),
+    personality_markers: normalizeProfileList(profile.personality).slice(0, 6),
+    motivation_markers: normalizeProfileList(profile.motivation).slice(0, 6),
+    costume_or_equipment: [...new Set(equipment.length ? equipment : ["campaign travel outfit", "role-readable gear"])],
+    palette_hints: [...new Set(palette.length ? palette : [campaignState.genre, campaignState.tone, campaignState.template].filter(Boolean))].slice(0, 8),
+    pose_rules: ["full-body readable silhouette", "protagonist posture", "do not crop to only face"],
+    symbolic_motifs: [...new Set(motifs.length ? motifs : ["campaign fate marker"])].slice(0, 8),
+    campaign_style_markers: normalizeProfileList([campaignState.template, campaignState.genre, campaignState.tone].filter(Boolean).join(" / ")).slice(0, 8),
+    avoid: ["do_not_use_generic_placeholder", "do_not_reuse_companion_silhouette", "do_not_ignore_story_background"],
+  };
+}
+
 function buildCompanionVisualProfile(companion = {}, campaignState = state.lastCampaignState || {}, styleProfile = {}, imageProfile = {}) {
   const existing = companion.visual_profile || companion.meta?.visual_profile;
   if (existing && typeof existing === "object") return existing;
@@ -3650,6 +4269,7 @@ function buildCompanionVisualProfile(companion = {}, campaignState = state.lastC
     campaignState.genre,
     campaignState.tone,
     campaignState.recent?.current_scene?.mood,
+    campaignState.campaign_direction?.background_direction,
     styleProfile.style,
     imageProfile.style_preset,
   ].filter(Boolean).join(" / "));
@@ -3666,6 +4286,8 @@ function buildCompanionVisualProfile(companion = {}, campaignState = state.lastC
     costume_or_equipment: normalizeProfileList(equipmentText),
     temperament,
     campaign_style_markers: campaignStyle,
+    background_markers: normalizeProfileList([campaignState.campaign_direction?.background_direction, currentStoryVisualContext()].flat().filter(Boolean).join(" / ")).slice(0, 8),
+    relationship_markers: normalizeProfileList(companion.relationship_to_protagonist || companion.meta?.relationship_to_protagonist || companion.raw?.relationship_to_protagonist).slice(0, 6),
     scale: meta.scale || "companion scale",
     silhouette_rules: ["must differ from the main player silhouette", "support non-human forms when implied"],
     face_rules: ["do not reuse player face template", "do not draw as ordinary NPC unless confirmed"],
@@ -3756,7 +4378,9 @@ function openCompanionOverlay() {
   renderCompanionData(companion);
   const image = $("companionDialogImage");
   if (image) {
-    const resolved = resolveVisualAsset({ ...companion, type: "companion", role: "companion", portrait: companion.portrait || {} });
+    const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
+    const visualHash = visualProfileHash(visualProfile);
+    const resolved = resolveVisualAsset({ ...companion, visual_profile: visualProfile, type: "companion", role: "companion", portrait: companion.portrait || {} });
     if (resolved.url) {
       setAssetImage(image, resolved.url);
     } else {
@@ -3764,15 +4388,22 @@ function openCompanionOverlay() {
         cache: true,
         objectId: slugify(resolved.entity_key || companion.name || "companion"),
         targetImage: image,
-        seedText: scopedSeed(resolved.fallback_seed || companion.seed || companion.name || "companion"),
-        archetype: "companion",
+        seedText: scopedSeed(`${resolved.fallback_seed || companion.seed || companion.name || "companion"}:${visualHash}:${currentStoryVisualContext()}`),
+        archetype: visualProfile.companion_type_preset || "companion",
+        visualProfile,
         kind: "companion_portrait",
         metadata: {
           title: resolved.display_name || companion.name,
           display_name: resolved.display_name || companion.name,
           role: "companion",
           entity_key: makeEntityKey("companion", companion.name),
-          visible_in_gallery: true,
+          runtime_role: "companion",
+          visual_profile: visualProfile,
+          visual_profile_hash: visualHash,
+          portrait_spec_version: PORTRAIT_SPEC_VERSION,
+          visual_spec: "story_linked_canvas_portrait",
+          variant: `vp_${visualHash}`,
+          visible_in_gallery: false,
         },
       });
     }
@@ -3909,12 +4540,41 @@ function fixedGalleryKind(kind) {
 }
 
 function normalizeGalleryAssetForFixedFilters(asset) {
+  if (isAttributeStarAsset(asset || {})) return null;
   const identity = normalizeAssetIdentity(asset || {});
   if (identity.runtime_role === "player" || identity.runtime_role === "companion") return null;
   if (identity.visible_in_gallery === false || identity.not_in_gallery_filters) return null;
   const kind = fixedGalleryKind(asset?.kind);
+  if (kind === "item" && isInvalidGalleryItemAsset(asset)) return null;
+  if (kind === "scene" && (asset?.kind === "map" || asset?.kind === "map_image" || asset?.metadata?.source === "map_route") && !isValidCachedMapAsset(asset)) return null;
   if (!kind) return null;
   return { ...asset, kind: identity.gallery_category && identity.gallery_category !== "hidden" ? fixedGalleryKind(identity.gallery_category) || kind : kind };
+}
+
+function isInvalidGalleryItemAsset(asset = {}) {
+  const metadata = asset.metadata || {};
+  const text = [
+    asset.title,
+    asset.display_name,
+    asset.detail,
+    asset.meta,
+    asset.key,
+    metadata.title,
+    metadata.display_name,
+    metadata.detail,
+    metadata.meta,
+    metadata.source_memory,
+  ].filter(Boolean).join(" ");
+  if (isNegativeInventoryText(text)) return true;
+  if (/(attribute_star|六维星图|属性星图)/i.test(text)) return true;
+  const kind = fixedGalleryKind(asset.kind || metadata.kind || metadata.gallery_category);
+  if (kind !== "item") return false;
+  const title = String(asset.title || asset.display_name || metadata.title || metadata.display_name || "");
+  const concrete = /短剑|剑|刀|油灯|提灯|灯笼|三角吊坠|吊坠|护身符|药瓶|钥匙|登记册|任务板|碎羽|鳞|素材|样本|碎片/.test(title);
+  if (!concrete && /携带|持有|带着|装备有/.test(title)) return true;
+  if (metadata.source === "gallery" && /本地记忆中的物品、装备或现场线索/.test(String(metadata.detail || "")) && /(可用|火苗|估计|剩余|在身|携带)/.test(title)) return true;
+  if (metadata.source === "gallery" && /本地记忆中的物品、装备或现场线索/.test(String(metadata.detail || "")) && /暂无|没有|无|未发现/.test(text)) return true;
+  return false;
 }
 
 function readableAssetTitle(key, kind) {
@@ -4039,11 +4699,20 @@ function setBusy(running, error = false) {
 
 function beginRunProgress() {
   clearTimeout(state.runProgress.hideTimer);
+  stopRunStreamPolling();
   state.runProgress.active = true;
   state.runProgress.percent = 0;
   state.runProgress.target = 12;
+  state.runProgress.jobId = "";
+  state.runProgress.streamText = "";
+  state.runProgress.streamError = "";
+  state.runProgress.publicThink = [];
+  state.runProgress.publicNote = "";
+  state.runProgress.stage = "";
+  state.runProgress.needsHumanVerification = false;
   const panel = $("runProgress");
-  if (panel) panel.classList.remove("hidden", "complete");
+  if (panel) panel.classList.toggle("hidden", state.streamingPreview);
+  if (state.streamingPreview) renderInlineRunProgress();
   setRunProgress(8, "发送行动中");
   startRunProgressTween();
 }
@@ -4065,7 +4734,39 @@ function startRunProgressTween() {
 function setRunProgress(target, label) {
   state.runProgress.target = Math.max(state.runProgress.target, Math.min(100, Number(target) || 0));
   setText("runProgressLabel", label || "处理中");
+  setText("runProgressInlineLabel", label || "处理中");
   startRunProgressTween();
+}
+
+function startRunStreamPolling(jobId) {
+  state.runProgress.jobId = jobId || "";
+  if (!state.runProgress.jobId) return;
+  if (state.runProgress.streamTimer) clearInterval(state.runProgress.streamTimer);
+  pollRunStream();
+  state.runProgress.streamTimer = setInterval(pollRunStream, 700);
+}
+
+function stopRunStreamPolling() {
+  if (state.runProgress.streamTimer) clearInterval(state.runProgress.streamTimer);
+  state.runProgress.streamTimer = null;
+}
+
+async function pollRunStream() {
+  if (!state.runProgress.jobId) return;
+  try {
+    const data = await api(`/api/run-turn-stream?job_id=${encodeURIComponent(state.runProgress.jobId)}`);
+    state.runProgress.publicThink = Array.isArray(data.public_think) ? data.public_think : state.runProgress.publicThink || [];
+    state.runProgress.publicNote = data.public_note || state.runProgress.publicNote || "";
+    state.runProgress.stage = data.stage || state.runProgress.stage || "";
+    state.runProgress.needsHumanVerification = Boolean(data.needs_human_verification);
+    state.runProgress.streamError = data.error_tail || "";
+    renderInlineRunProgress();
+    if (!data.running) stopRunStreamPolling();
+  } catch (err) {
+    state.runProgress.streamError = err.message;
+    renderInlineRunProgress();
+    stopRunStreamPolling();
+  }
 }
 
 function updateRunProgressFromPipeline(pipeline, job, output) {
@@ -4101,25 +4802,34 @@ function completeRunProgress() {
   setRunProgress(100, "已同步到页面");
   const panel = $("runProgress");
   if (panel) panel.classList.add("complete");
+  const inline = $("runProgressInline");
+  if (inline) inline.classList.add("complete");
   scrollStoryToBottom(true);
+  stopRunStreamPolling();
   clearTimeout(state.runProgress.hideTimer);
   state.runProgress.hideTimer = setTimeout(() => {
     state.runProgress.active = false;
     const progress = $("runProgress");
     if (progress) progress.classList.add("hidden");
+    renderInlineRunProgress();
   }, 1500);
 }
 
 function failRunProgress() {
   if (!state.runProgress.active) return;
   setText("runProgressLabel", "执行失败");
+  setText("runProgressInlineLabel", "执行失败");
   const panel = $("runProgress");
   if (panel) panel.classList.add("complete");
+  const inline = $("runProgressInline");
+  if (inline) inline.classList.add("failed");
+  stopRunStreamPolling();
   clearTimeout(state.runProgress.hideTimer);
   state.runProgress.hideTimer = setTimeout(() => {
     state.runProgress.active = false;
     const progress = $("runProgress");
     if (progress) progress.classList.add("hidden");
+    renderInlineRunProgress();
   }, 2200);
 }
 
@@ -4127,7 +4837,64 @@ function paintRunProgress(percent) {
   const value = Math.round(Math.max(0, Math.min(100, percent)));
   const bar = $("runProgressBar");
   if (bar) bar.style.width = `${value}%`;
+  const inlineBar = $("runProgressInlineBar");
+  if (inlineBar) inlineBar.style.width = `${value}%`;
   setText("runProgressPercent", `${value}%`);
+  setText("runProgressInlinePercent", `${value}%`);
+}
+
+function renderInlineRunProgress() {
+  const container = $("storyText");
+  if (!container) return;
+  const existing = $("runProgressInline");
+  if (!state.streamingPreview || !state.runProgress.active) {
+    existing?.remove();
+    return;
+  }
+  const panel = existing || document.createElement("section");
+  panel.id = "runProgressInline";
+  panel.className = `runProgress inline${state.runProgress.percent >= 99 ? " complete" : ""}${state.runProgress.streamError && !state.runProgress.active ? " failed" : ""}`;
+  panel.setAttribute("aria-live", "polite");
+  panel.innerHTML = `
+    <div class="runProgressHeader">
+      <b id="runProgressInlineLabel">${escapeHtml($("runProgressLabel")?.textContent || "AI 正在生成")}</b>
+      <span id="runProgressInlinePercent">${Math.round(Math.max(0, Math.min(100, state.runProgress.percent)))}%</span>
+    </div>
+    <div class="runProgressTrack"><span id="runProgressInlineBar" style="width:${Math.round(Math.max(0, Math.min(100, state.runProgress.percent)))}%"></span></div>
+    <div class="runProgressStream" id="runProgressStreamText"></div>
+  `;
+  if (!existing) container.appendChild(panel);
+  else if (panel.parentElement !== container || panel !== container.lastElementChild) container.appendChild(panel);
+  renderRunStreamText();
+}
+
+function renderRunStreamText() {
+  const stream = $("runProgressStreamText");
+  if (!stream) return;
+  const think = Array.isArray(state.runProgress.publicThink) ? state.runProgress.publicThink : [];
+  const note = String(state.runProgress.publicNote || "").trim();
+  const error = String(state.runProgress.streamError || "").trim();
+  if (state.runProgress.needsHumanVerification) {
+    stream.textContent = "等待人工验证。请在常驻浏览器里完成验证，完成后系统会继续。";
+    stream.classList.remove("empty");
+    return;
+  }
+  if (think.length) {
+    stream.innerHTML = think.map((item) => {
+      const stage = escapeHtml(item.stage || "处理进度");
+      const text = escapeHtml(item.text || "");
+      return `<p><b>${stage}</b><span>${text}</span></p>`;
+    }).join("");
+    stream.classList.remove("empty");
+    return;
+  }
+  if (note) {
+    stream.textContent = note;
+    stream.classList.remove("empty");
+    return;
+  }
+  stream.textContent = error ? `执行日志：${error.slice(-800)}` : "等待公开导演进度...";
+  stream.classList.add("empty");
 }
 
 function setLog(text) {
@@ -4390,11 +5157,12 @@ function drawPixelPortraitToCanvas(canvas, seedText, role) {
 }
 
 function drawPixelActorPortrait(seedText, options = {}) {
-  const canvas = options.canvas || createAssetCanvas(96, 96);
-  const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
   const role = normalizeVisualRole(options.role || "npc");
+  const canvas = options.canvas || createAssetCanvas(["player", "companion"].includes(role) ? 192 : 96, ["player", "companion"].includes(role) ? 192 : 96);
+  const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
   const effectiveSeed = options.seedText || scopedSeed(`${state.activeCampaign}:${seedText}:${role}`);
   const kind = options.kind || assetKindForRole(role);
+  const visualProfile = options.visualProfile || {};
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -4420,12 +5188,12 @@ function drawPixelActorPortrait(seedText, options = {}) {
         source_size: role === "player" || role === "companion" ? 512 : 256,
         detail_level: role === "player" || role === "companion" ? "high" : "standard",
       },
-      draw: () => drawPixelActorPortrait(effectiveSeed, { cache: false, role, canvas, targetImage: null }),
+      draw: () => drawPixelActorPortrait(effectiveSeed, { cache: false, role, canvas, targetImage: null, visualProfile }),
     });
     return;
   }
   if (role === "player") {
-    drawPlayerFullBodyToCanvas(canvas, effectiveSeed);
+    drawHighSpecPlayerPortraitToCanvas(canvas, effectiveSeed, visualProfile);
   } else {
     drawPixelPortraitToCanvas(canvas, effectiveSeed, role);
   }
@@ -4472,6 +5240,106 @@ function drawPixelSystemIcon(kind = "system") {
 
 function drawPixelFallbackAvatar(seedText, options = {}) {
   return drawPixelActorPortrait(seedText, { ...options, role: options.role || "npc", cache: false });
+}
+
+function drawHighSpecPlayerPortraitToCanvas(canvas, seedText, visualProfile = {}) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`player-high:${seedText}:${stableJson(visualProfile || {})}`);
+  const size = canvas.width;
+  const cell = size / 32;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const mirror = (x, y, w, h, color) => {
+    px(x, y, w, h, color);
+    px(32 - x - w, y, w, h, color);
+  };
+  const text = normalizeActorName(stableJson(visualProfile || {}));
+  const palette = playerPortraitPalette(seed, visualProfile);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, size, size);
+  drawStoryContextBackdrop(canvas, `${seedText}:${stableJson(visualProfile || {})}`, palette.bg, 32);
+  if (/森林|forest|leaf|wood|moss/.test(text)) {
+    px(2, 5, 5, 2, "rgba(84,116,67,.42)");
+    px(25, 7, 4, 2, "rgba(84,116,67,.38)");
+    px(4, 9, 2, 8, "rgba(92,70,42,.28)");
+  }
+  if (/神殿|遗迹|ruin|temple|ancient|triangle/.test(text)) {
+    px(23, 5, 5, 1, "rgba(177,145,76,.45)");
+    px(24, 6, 1, 6, "rgba(143,116,72,.38)");
+    px(28, 6, 1, 6, "rgba(143,116,72,.38)");
+    px(25, 8, 3, 1, "rgba(230,201,124,.46)");
+  }
+  px(5, 28, 22, 2, "rgba(76, 58, 39, .28)");
+  const skin = palette.skin;
+  const hair = palette.hair;
+  const cloth = palette.cloth;
+  const cloak = palette.cloak;
+  const leather = palette.leather;
+  const accent = palette.accent;
+  const hood = /斗篷|cloak|hood|mystery|shadow|阴影/.test(text);
+  const investigator = /调查|侦探|notebook|lantern|旧案|detective|investigation/.test(text);
+  const magic = /魔法|法术|灵|magic|spell|glow|arcane/.test(text);
+  const adventurer = /剑|盾|冒险|勇者|sword|shield|adventure|hero|knight/.test(text);
+  if (hood) {
+    px(8, 3, 16, 8, cloak);
+    mirror(7, 8, 3, 8, cloak);
+  } else {
+    px(10, 3, 12, 3, hair);
+    px(9, 5, 14, 3, hair);
+    mirror(8, 7, 3, 4, hair);
+  }
+  px(10, 7, 12, 8, skin);
+  mirror(9, 9, 2, 4, shadeColor(skin, -18));
+  px(12, 9, 8, 3, shadeColor(skin, 18));
+  mirror(12, 10, 2, 1, "#101615");
+  px(15, 12, 2, 1, "#805338");
+  px(13, 14, 6, 1, "#4e2c24");
+  px(9, 16, 14, 9, cloth);
+  px(10, 16, 12, 2, accent);
+  px(12, 19, 8, 5, shadeColor(cloth, -12));
+  mirror(6, 17, 4, 8, leather);
+  if (hood || adventurer) {
+    px(7, 16, 18, 3, cloak);
+    px(8, 19, 3, 8, cloak);
+    px(21, 19, 3, 8, cloak);
+  }
+  px(8, 24, 6, 5, "#3a3329");
+  px(18, 24, 6, 5, "#3a3329");
+  px(7, 29, 7, 1, "#25221d");
+  px(18, 29, 7, 1, "#25221d");
+  if (adventurer) {
+    px(23, 12, 2, 13, accent);
+    px(24, 11, 1, 3, "#efe0ad");
+    px(5, 20, 4, 5, shadeColor(accent, -18));
+  }
+  if (investigator) {
+    px(22, 18, 4, 5, "#d8c49a");
+    px(23, 19, 2, 1, "#725d3b");
+    px(6, 11, 2, 6, "#e8c875");
+    px(5, 16, 4, 3, "rgba(230,190,90,.52)");
+  }
+  if (magic) {
+    px(25, 9, 2, 2, "rgba(141,202,230,.75)");
+    px(27, 7, 1, 1, "rgba(225,245,255,.9)");
+    px(4, 12, 1, 1, "rgba(141,202,230,.65)");
+    px(14, 17, 4, 1, "rgba(141,202,230,.55)");
+  }
+}
+
+function playerPortraitPalette(seed, visualProfile = {}) {
+  const text = normalizeActorName(stableJson(visualProfile || {}));
+  const rows = [
+    { bg: "#d8c7a8", skin: "#d7a06c", hair: "#2b241c", cloth: "#385046", cloak: "#2f483b", leather: "#7b5734", accent: "#d2b56b" },
+    { bg: "#d3ccb7", skin: "#c48a5c", hair: "#463423", cloth: "#314c5d", cloak: "#253947", leather: "#65452b", accent: "#9fb7c7" },
+    { bg: "#d6c2a5", skin: "#e0b17d", hair: "#1d2528", cloth: "#4a3e58", cloak: "#302b45", leather: "#8a623b", accent: "#b66c45" },
+  ];
+  const base = { ...rows[Math.abs(seed) % rows.length] };
+  if (/森林|forest|leaf|moss/.test(text)) Object.assign(base, { bg: "#c8d0ad", cloth: "#385a3f", cloak: "#2e4935", accent: "#c7b86a" });
+  if (/调查|侦探|horror|detective|investigation/.test(text)) Object.assign(base, { bg: "#c7beb0", cloth: "#3f464b", cloak: "#2d3034", accent: "#d0a24d" });
+  if (/魔法|magic|spell|arcane/.test(text)) Object.assign(base, { cloth: "#3b4264", cloak: "#2f3158", accent: "#8dcade" });
+  return base;
 }
 
 function shadeColor(hex, amount) {
@@ -4627,6 +5495,36 @@ function drawCompanionAvatar(seedText, options = {}) {
   const targetImage = options.targetImage === undefined ? $("companionImage") : options.targetImage;
   const effectiveSeed = options.seedText || seedText;
   const visualProfile = options.visualProfile || buildCompanionVisualProfile({ name: seedText, meta: options.metadata || {}, archetype: options.archetype }, state.lastCampaignState || {}, {}, {});
+  const profileHash = visualProfileHash(visualProfile);
+  const metadata = {
+    ...(options.metadata || {
+      title: String(seedText || "companion"),
+      display_name: String(seedText || "companion"),
+      role: "companion",
+      runtime_role: "companion",
+      companion_type: visualProfile.companion_type_raw,
+      companion_type_raw: visualProfile.companion_type_raw,
+      companion_type_preset: visualProfile.companion_type_preset,
+      archetype: options.archetype || "",
+      species: options.species || "",
+      entity_key: makeEntityKey("companion", seedText),
+      avatar_key: makeEntityKey("companion", seedText),
+      portrait_asset_kind: "companion_portrait",
+      gallery_category: "hidden",
+      visible_in_gallery: false,
+      not_in_gallery_filters: true,
+      display_slot: "companion_card",
+      detail_slot: "companion_detail",
+      render_tier: "companion",
+      source_size: 512,
+      detail_level: "high",
+    }),
+    visual_profile: visualProfile,
+    visual_profile_hash: profileHash,
+    portrait_spec_version: PORTRAIT_SPEC_VERSION,
+    visual_spec: "story_linked_canvas_portrait",
+    variant: (options.metadata && options.metadata.variant) || `vp_${profileHash}`,
+  };
   if (options.cache && state.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -4635,29 +5533,7 @@ function drawCompanionAvatar(seedText, options = {}) {
       subdir: "portraits",
       objectId: options.objectId || slugify(seedText),
       seedText: effectiveSeed,
-      metadata: options.metadata || {
-        title: String(seedText || "companion"),
-        display_name: String(seedText || "companion"),
-        role: "companion",
-        runtime_role: "companion",
-        companion_type: visualProfile.companion_type_raw,
-        companion_type_raw: visualProfile.companion_type_raw,
-        companion_type_preset: visualProfile.companion_type_preset,
-        archetype: options.archetype || "",
-        species: options.species || "",
-        visual_profile: visualProfile,
-        entity_key: makeEntityKey("companion", seedText),
-        avatar_key: makeEntityKey("companion", seedText),
-        portrait_asset_kind: "companion_portrait",
-        gallery_category: "hidden",
-        visible_in_gallery: false,
-        not_in_gallery_filters: true,
-        display_slot: "companion_card",
-        detail_slot: "companion_detail",
-        render_tier: "companion",
-        source_size: 512,
-        detail_level: "high",
-      },
+      metadata,
       draw: () => drawCompanionToCanvas(canvas, effectiveSeed, options.archetype, visualProfile),
     });
     return;
@@ -4688,6 +5564,9 @@ function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "", visualP
     ...(visualProfile.body_structure || []),
     ...(visualProfile.species_or_origin || []),
     ...(visualProfile.material_traits || []),
+    ...(visualProfile.background_markers || []),
+    ...(visualProfile.relationship_markers || []),
+    ...(visualProfile.temperament || []),
   ].join(" "));
   if (/palico|felyne|cat|feline|猫|艾露/.test(text)) {
     drawFelineCompanion(px, palette);
@@ -4706,6 +5585,7 @@ function drawHighSpecCompanionToCanvas(canvas, seedText, archetype = "", visualP
 }
 
 function companionPalette(seed, visualProfile = {}) {
+  const text = normalizeActorName(stableJson(visualProfile || {}));
   const presets = [
     ["#2d3242", "#c9b37e", "#6f8f9c", "#f1e6c8"],
     ["#2f2838", "#9c7ec9", "#c2d58a", "#f4e9f2"],
@@ -4714,6 +5594,9 @@ function companionPalette(seed, visualProfile = {}) {
   ];
   const row = presets[seed % presets.length];
   if (String(visualProfile.body_form || "").toLowerCase().includes("mechanical")) return ["#27323a", "#8fb0bf", "#d8edf2", "#f0c86a"];
+  if (/forest|森林|leaf|wood/.test(text)) return ["#243536", "#80b59c", "#d8c07a", "#edf4df"];
+  if (/spirit|灵|magic|glow|命运/.test(text)) return ["#272b42", "#8aa5d9", "#d8c07a", "#f3f1ff"];
+  if (/guide|向导|伙伴|relationship/.test(text)) return ["#342b25", "#c6845a", "#86a66b", "#f4dfc5"];
   return row;
 }
 
@@ -4788,9 +5671,23 @@ function drawCustomHumanoidCompanion(px, p, seed, visualProfile = {}) {
 
 function drawCompanionProfileMarks(px, visualProfile = {}, p) {
   const gear = normalizeProfileList(visualProfile.costume_or_equipment || "").join(" ").toLowerCase();
+  const marks = normalizeActorName([
+    ...(visualProfile.background_markers || []),
+    ...(visualProfile.relationship_markers || []),
+    ...(visualProfile.temperament || []),
+  ].join(" "));
   if (/blade|sword|knife|bow|枪|剑|刀|弓/.test(gear)) px(25, 8, 2, 17, p[3]);
   if (/goggle|visor|护目|面罩|mask/.test(gear + " " + (visualProfile.face_rules || []).join(" "))) {
     px(11, 14, 10, 2, "rgba(20,25,30,.75)");
+  }
+  if (/森林|forest|leaf/.test(marks)) {
+    px(4, 8, 3, 1, p[2]); px(5, 7, 1, 3, p[2]);
+  }
+  if (/命运|fate|spirit|灵|magic/.test(marks)) {
+    px(25, 6, 2, 2, p[3]); px(27, 5, 1, 1, "rgba(255,255,255,.85)");
+  }
+  if (/向导|guide|support|守护|protect/.test(marks)) {
+    px(5, 24, 4, 3, p[3]);
   }
   px(4, 28, 24, 2, "rgba(0,0,0,.22)");
 }
@@ -5591,10 +6488,14 @@ function drawCanvasItem(canvas, asset) {
   const ctx = canvas.getContext("2d");
   const seed = hashSeed(asset.seed || asset.title);
   drawIconBase(ctx, canvas.width, canvas.height, "#cfb88d", "#7f603d");
-  const prompt = asset.visualPrompt || asset.visual_prompt || inferItemVisualPrompt(asset.title, asset.detail, asset.kind);
+  const prompt = asset.visual_hint || asset.visualHint || asset.visualPrompt || asset.visual_prompt || asset.metadata?.visual_prompt || inferItemVisualPrompt(asset.title, asset.detail, asset.kind);
+  const archetype = String(prompt.archetype || prompt.type || "").toLowerCase();
   const type = String(prompt.type || "").toLowerCase();
   const silhouette = String(prompt.silhouette || "").toLowerCase();
   const text = `${asset.title}${asset.detail || ""}${asset.meta || ""}${asset.kind || ""}${type}${silhouette}`;
+  if (archetype === "short_sword" || type === "short_sword" || silhouette.includes("short_sword")) return drawShortSwordIcon(ctx, canvas.width, canvas.height, seed);
+  if (archetype === "oil_lantern" || type === "oil_lantern" || silhouette.includes("lantern")) return drawOilLanternIcon(ctx, canvas.width, canvas.height, seed);
+  if (archetype === "pendant" || type === "pendant" || type === "relic_pendant" || silhouette.includes("pendant")) return drawPendantIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "red_gate_signal" || silhouette.includes("door_crack_light")) return drawRedGateSignalIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "broken_door_impact" || silhouette.includes("cracked_door")) return drawBrokenDoorImpactIcon(ctx, canvas.width, canvas.height, seed);
   if (type === "switch_axe" || silhouette.includes("transforming_axe")) return drawSwitchAxeIcon(ctx, canvas.width, canvas.height, seed);
@@ -5605,6 +6506,9 @@ function drawCanvasItem(canvas, asset) {
   if (/卷帘|红光|gate/.test(text)) return drawRedGateSignalIcon(ctx, canvas.width, canvas.height, seed);
   if (/门缝|door/.test(text)) return drawRedGateSignalIcon(ctx, canvas.width, canvas.height, seed);
   if (/手机|电话|信号|拨号|屏幕|phone|smartphone/.test(text)) return drawPhoneIcon(ctx, canvas.width, canvas.height, seed);
+  if (/油灯|提灯|灯笼|灯油|火苗|lantern/.test(text)) return drawOilLanternIcon(ctx, canvas.width, canvas.height, seed);
+  if (/三角吊坠|吊坠|护身符|符坠|pendant/.test(text)) return drawPendantIcon(ctx, canvas.width, canvas.height, seed);
+  if (/家传短剑|短剑|匕首|小刀|short_sword|dagger/.test(text)) return drawShortSwordIcon(ctx, canvas.width, canvas.height, seed);
   if (/ritual|仪式|占卜|骨|匣|盒|钥匙/.test(text)) return drawRitualIcon(ctx, canvas.width, canvas.height, seed);
   if (/泥|痕/.test(text)) return drawMudIcon(ctx, canvas.width, canvas.height, seed);
   if (/药|瓶|supply/.test(text)) return drawBottleIcon(ctx, canvas.width, canvas.height, seed);
@@ -5625,6 +6529,12 @@ function inferItemVisualPrompt(title = "", detail = "", kind = "") {
     type = "phone"; category = "device"; role = "communication_or_clue"; material = "glass_and_plastic"; silhouette = "smartphone";
   } else if (/斩斧|switch\s*axe/i.test(text)) {
     type = "switch_axe"; category = "weapon"; role = "equipment"; material = "bone_and_metal"; silhouette = "long_transforming_axe_sword";
+  } else if (/家传短剑|短剑|匕首|小刀|short\s*sword|dagger/i.test(text)) {
+    type = "short_sword"; category = "weapon"; role = "equipment"; material = "steel_and_leather"; silhouette = "short_sword";
+  } else if (/油灯|提灯|灯笼|灯油|火苗|lantern/i.test(text)) {
+    type = "oil_lantern"; category = "resource"; role = "light_source"; material = "brass_glass_oil"; silhouette = "lantern";
+  } else if (/三角吊坠|吊坠|护身符|符坠|pendant|relic/i.test(text)) {
+    type = "pendant"; category = "relic"; role = "story_relic"; material = "old_metal"; silhouette = "pendant";
   } else if (/井匣|金属盒|盒|匣/.test(text)) {
     type = "sealed_relic_box"; category = "ritual_tool"; role = "clue"; material = "dark_metal"; silhouette = "sealed_square_box";
   } else if (/泥甲|泥壳|甲片/.test(text)) {
@@ -5640,7 +6550,7 @@ function inferItemVisualPrompt(title = "", detail = "", kind = "") {
   } else if (/斧|剑|弓|枪|武器|刀|weapon/.test(text)) {
     type = "weapon"; category = "weapon"; role = "equipment"; material = "metal_or_bone"; silhouette = "weapon";
   }
-  return { type, category, role, material, silhouette, source_text: conciseTitle(text, 120) };
+  return { type, archetype: type, category, role, material, silhouette, source_text: conciseTitle(text, 120) };
 }
 
 function buildImagePrompt(title = "", detail = "", kind = "item") {
@@ -5683,6 +6593,107 @@ function inferSceneVisualPrompt(title = "", detail = "") {
     silhouette = "shadow_figures";
   }
   return { type, category: "scene_visual", role: "visual_record", material, silhouette, source_text: conciseTitle(text, 120) };
+}
+
+function drawShortSwordIcon(ctx, w, h, seed) {
+  drawIconBase(ctx, w, h, "#cdb280", "#725434");
+  ctx.save();
+  ctx.translate(w * 0.5, h * 0.5);
+  ctx.rotate(-0.72 + ((seed % 5) - 2) * 0.015);
+  ctx.fillStyle = "#d9e1dc";
+  ctx.strokeStyle = "#5b5f5d";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, -h * 0.37);
+  ctx.lineTo(w * 0.085, -h * 0.02);
+  ctx.lineTo(0, h * 0.12);
+  ctx.lineTo(-w * 0.085, -h * 0.02);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = "#eef5f1";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, -h * 0.31);
+  ctx.lineTo(0, h * 0.08);
+  ctx.stroke();
+  ctx.fillStyle = "#8b6737";
+  ctx.fillRect(-w * 0.19, h * 0.1, w * 0.38, h * 0.055);
+  ctx.fillStyle = "#4f3424";
+  ctx.fillRect(-w * 0.04, h * 0.13, w * 0.08, h * 0.22);
+  ctx.fillStyle = "#c49a44";
+  ctx.fillRect(-w * 0.06, h * 0.32, w * 0.12, h * 0.055);
+  ctx.restore();
+}
+
+function drawOilLanternIcon(ctx, w, h, seed) {
+  drawIconBase(ctx, w, h, "#c8ab72", "#765637");
+  ctx.save();
+  const cx = w * 0.5;
+  const top = h * 0.22;
+  ctx.strokeStyle = "#5d4630";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(cx, top + h * 0.06, w * 0.16, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillStyle = "#7c5c38";
+  ctx.fillRect(cx - w * 0.17, top + h * 0.08, w * 0.34, h * 0.1);
+  ctx.fillStyle = "#d8c38c";
+  ctx.strokeStyle = "#60462e";
+  ctx.lineWidth = 4;
+  roundRectPath(ctx, cx - w * 0.19, top + h * 0.18, w * 0.38, h * 0.4, 8);
+  ctx.fill();
+  ctx.stroke();
+  const grad = ctx.createRadialGradient(cx, top + h * 0.38, 2, cx, top + h * 0.38, w * 0.22);
+  grad.addColorStop(0, "rgba(255,225,122,.95)");
+  grad.addColorStop(0.5, "rgba(235,150,50,.62)");
+  grad.addColorStop(1, "rgba(235,150,50,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(cx - w * 0.24, top + h * 0.2, w * 0.48, h * 0.38);
+  ctx.fillStyle = "#f7c85a";
+  ctx.beginPath();
+  ctx.moveTo(cx, top + h * 0.25);
+  ctx.quadraticCurveTo(cx + w * 0.08, top + h * (0.35 + (seed % 3) * 0.01), cx, top + h * 0.48);
+  ctx.quadraticCurveTo(cx - w * 0.075, top + h * 0.37, cx, top + h * 0.25);
+  ctx.fill();
+  ctx.fillStyle = "#684a2d";
+  ctx.fillRect(cx - w * 0.22, top + h * 0.6, w * 0.44, h * 0.08);
+  ctx.restore();
+}
+
+function drawPendantIcon(ctx, w, h, seed) {
+  drawIconBase(ctx, w, h, "#c7b483", "#715638");
+  ctx.save();
+  const cx = w * 0.5;
+  ctx.strokeStyle = "#59412e";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.33, h * 0.18);
+  ctx.quadraticCurveTo(cx, h * 0.36, w * 0.67, h * 0.18);
+  ctx.stroke();
+  ctx.fillStyle = "#b88734";
+  ctx.strokeStyle = "#4f3825";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(cx, h * 0.34);
+  ctx.lineTo(w * 0.72, h * 0.7);
+  ctx.lineTo(w * 0.28, h * 0.7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#e4c36b";
+  ctx.beginPath();
+  ctx.moveTo(cx, h * 0.44);
+  ctx.lineTo(w * 0.61, h * 0.64);
+  ctx.lineTo(w * 0.39, h * 0.64);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = seed % 2 ? "#75a4bf" : "#87b37a";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, h * 0.58, w * 0.06, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawRedGateSignalIcon(ctx, w, h, seed) {
@@ -6229,6 +7240,10 @@ function isPlaceholderAssetRequest({ key = "", kind = "", metadata = {}, seedTex
 function assetMetadataReusable(requested, existing) {
   if (!requested) return true;
   if (!existing) return false;
+  if (requested.visual_profile_hash || requested.portrait_spec_version) {
+    return requested.visual_profile_hash === existing.visual_profile_hash
+      && requested.portrait_spec_version === existing.portrait_spec_version;
+  }
   if (requested.map_canvas?.points?.length || requested.map_canvas?.ascii?.length) {
     return stableJson(requested.map_canvas) === stableJson(existing.map_canvas || {});
   }
@@ -6244,6 +7259,11 @@ function stableJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function visualProfileHash(profile = {}) {
+  if (!profile || typeof profile !== "object" || !Object.keys(profile).length) return "";
+  return Math.abs(hashSeed(stableJson(profile))).toString(16).slice(0, 10);
 }
 
 function drawImageToCanvas(canvas, url, fallback) {

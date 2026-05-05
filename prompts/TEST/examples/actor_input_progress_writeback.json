@@ -1,0 +1,59 @@
+{
+  "campaign_id": "campaign_TEST",
+  "player_action": "我举起油灯，照向书架后面的裂缝。",
+  "visible_story_progress_control": {
+    "current_chapter_id": "chapter_1",
+    "current_phase_id": "opening",
+    "current_node_id": "c1_n1_opening",
+    "current_node_name": "开场锚点",
+    "node_goal": "确认主角处境、随身物和第一条线索。",
+    "beat_targets_this_turn": ["c1_n1_b2", "c1_n1_b3"],
+    "pace_command": "normal",
+    "legal_next_nodes": ["c1_n2_clue"],
+    "must_not_repeat": []
+  },
+  "visible_memory": {
+    "campaign_profile": {
+      "language": "zh",
+      "genre": "现代都市神秘",
+      "tone": "悬疑、探索、略带超现实"
+    },
+    "player_state": {
+      "player": {
+        "character_card": {
+          "identity": {
+            "name": "LEE",
+            "role": "旧书店临时看守"
+          },
+          "profile": {
+            "background": "LEE 继承了一批来源不明的旧书和一枚会发热的三角吊坠。"
+          }
+        }
+      }
+    }
+  },
+  "pressure_pack": {
+    "turn_type": "investigation",
+    "pressure_pack": {
+      "core_accident_or_change": "油灯照到书架裂缝时，吊坠发热，裂缝里露出旧地图边角。",
+      "enemy_or_mystery_pressure": "裂缝后的纸张像是被人最近翻动过。",
+      "resource_or_time_pressure": "油灯火苗不稳，照明时间有限。"
+    },
+    "choice_requirement": {
+      "need_choice": false,
+      "choice_level": "minor",
+      "choice_style": "natural_stop"
+    },
+    "forbidden_this_turn": ["不要说明吊坠真实来源", "不要直接揭露幕后人物"],
+    "progress_control": {
+      "current_node_id": "c1_n1_opening",
+      "beat_targets_this_turn": ["c1_n1_b2", "c1_n1_b3"],
+      "legal_next_nodes": ["c1_n2_clue"]
+    },
+    "output_requests": {
+      "inventory": { "mode": "none", "trigger": "none", "reason": "" },
+      "map": { "mode": "none", "trigger": "none", "reason": "" },
+      "dossier": { "mode": "update", "trigger": "clue_found", "reason": "发现旧地图边角" }
+    }
+  }
+}

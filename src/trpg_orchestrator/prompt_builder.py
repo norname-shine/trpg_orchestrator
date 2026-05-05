@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import socket
 from typing import Any
 
 from .capability_resolver import build_capability_plan
-from .config import PROMPTS_DIR
+from .config import CAMPAIGNS_DIR, PROMPTS_DIR
 from .encoding_utils import read_runtime_text
 from .memory_selector import select_memory_for_actor, select_memory_for_audit, select_memory_for_director
 from .output_contract import summarize_payload_keys
@@ -66,6 +69,7 @@ def build_director_user_prompt(
     module_ids = select_prompt_modules(capability_plan, "director")
     module_text = load_prompt_modules(module_ids)
     _append_module_warnings(capability_plan)
+    custom_rules = custom_rules_section(campaign_id, "director")
     return "\n\n".join(
         [
             "# V4 Director Turn Input",
@@ -78,6 +82,7 @@ def build_director_user_prompt(
             "```json\n" + json.dumps(capability_plan, ensure_ascii=False, indent=2) + "\n```",
             "## Selected Director Prompt Modules",
             module_text,
+            custom_rules,
             "## Selected Director Memory",
             "```json\n" + json.dumps(director_memory, ensure_ascii=False, indent=2) + "\n```",
             "Output only strict pressure_pack JSON. Follow progress_control, output_requests, and payloads contracts. Do not write player-readable prose. Do not expand into a full plot outline.",
@@ -98,11 +103,13 @@ def build_chatgpt_input(
     module_ids = select_prompt_modules(capability_plan, "actor", pressure_pack)
     module_text = load_prompt_modules(module_ids)
     _append_module_warnings(capability_plan)
+    custom_rules = custom_rules_section(campaign_id, "actor")
     return "\n\n".join(
         [
             "# TRPG Turn Input",
             "## Selected Actor Prompt Modules",
             module_text,
+            custom_rules,
             "## Capability Plan",
             "Use only loaded capabilities and this turn's pressure_pack. Missing capability details are not permission to invent payloads.",
             "```json\n" + json.dumps(capability_plan, ensure_ascii=False, indent=2) + "\n```",
@@ -187,6 +194,7 @@ def build_v4_light_action_user_prompt(
         [
             f"campaign_id: {campaign_id}",
             campaign_setup_controls_section(memory),
+            custom_rules_section(campaign_id, "director"),
             "Light action rules:",
             read_prompt("v4_light_action_rules.md"),
             "Player light action:",
@@ -206,6 +214,7 @@ def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
     profile = memory.get("campaign_profile.json", {}) if isinstance(memory, dict) else {}
     profile = profile if isinstance(profile, dict) else {}
     rules = profile.get("rules_config") if isinstance(profile.get("rules_config"), dict) else {}
+    attribute_config = rules.get("attribute_config") if isinstance(rules.get("attribute_config"), dict) else {}
     companion = profile.get("companion_config") if isinstance(profile.get("companion_config"), dict) else {}
     model = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
     controls = {
@@ -213,12 +222,14 @@ def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
         "model_mode": str(model.get("model_mode") or "").strip(),
         "character_card_enabled": bool(rules.get("character_card_enabled", True)),
         "stat_visibility": _choice(rules.get("stat_visibility"), {"narrative", "hybrid", "numeric"}, "narrative"),
+        "attribute_enabled": bool(attribute_config.get("enabled", True)),
+        "attribute_visible": bool(attribute_config.get("visible", True)),
+        "attribute_theme": str(attribute_config.get("theme") or attribute_config.get("six_source") or "").strip(),
         "dice_enabled": bool(rules.get("dice_enabled")),
         "dice_type": str(rules.get("dice_type") or "").strip(),
         "roll_mode": str(rules.get("roll_mode") or "").strip(),
         "roll_attributes": _string_list(rules.get("roll_attributes")),
         "rules_strictness": _choice(rules.get("rules_strictness"), {"light", "standard", "strict"}, "light"),
-        "party_mode": _choice(rules.get("party_mode"), {"solo", "party", "ensemble"}, "solo"),
         "companion_enabled": bool(companion.get("companion_enabled")),
         "companion_mode": _choice(companion.get("companion_mode"), {"auto", "manual"}, "auto"),
         "companion_name": str(companion.get("companion_name") or "").strip(),
@@ -244,6 +255,63 @@ def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
         "### Campaign Setup Rules",
         "\n".join(f"- {line}" for line in rules_text),
     ])
+
+
+def current_host_id() -> str:
+    raw = os.getenv("TRPG_HOST_ID") or socket.gethostname() or "local_host"
+    cleaned = re.sub(r"[^a-z0-9_.-]+", "_", str(raw).strip().lower())
+    return cleaned.strip("._") or "local_host"
+
+
+def custom_rules_section(campaign_id: str, layer: str) -> str:
+    rows = active_custom_rules(campaign_id, layer)
+    if not rows:
+        return ""
+    lines = [
+        f"## Temporary Custom Rules For {layer.title()} Layer",
+        "These rules apply only to this campaign and current host. They are injected in full and must not override system safety rules.",
+    ]
+    for index, row in enumerate(rows, start=1):
+        title = str(row.get("title") or f"custom_rule_{index}").strip()
+        target = str(row.get("target_layer") or "").strip()
+        content = str(row.get("content") or "").strip()
+        lines.extend([
+            f"### {index}. {title}",
+            f"target_layer: {target}",
+            content,
+        ])
+    return "\n".join(lines)
+
+
+def active_custom_rules(campaign_id: str, layer: str) -> list[dict[str, Any]]:
+    path = CAMPAIGNS_DIR / safe_campaign_id(campaign_id) / "custom_rules.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    if str(data.get("campaign_id") or "") != campaign_id:
+        return []
+    if str(data.get("owner_host_id") or "") != current_host_id():
+        return []
+    rules = data.get("rules") if isinstance(data.get("rules"), list) else []
+    allowed = {layer, "both"}
+    return [
+        row for row in rules[:3]
+        if isinstance(row, dict)
+        and row.get("enabled") is True
+        and str(row.get("target_layer") or "") in allowed
+        and str(row.get("content") or "").strip()
+    ]
+
+
+def safe_campaign_id(value: str) -> str:
+    cleaned = "".join(ch if (ch.isalnum() or ch in "_.-") else "_" for ch in str(value).strip())
+    cleaned = re.sub(r"_+", "_", cleaned)
+    return cleaned.strip("._") or "campaign"
 
 
 def _valid_template(value: Any) -> str:

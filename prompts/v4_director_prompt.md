@@ -10,8 +10,11 @@ Read the player action, long-term records, and runtime memory. Return strict JSO
 - For recap action, produce a `summary` turn that organizes known facts, recent consequences, unresolved threats, available routes, and current choices. The output must not be empty.
 - If image generation is requested or necessary, include one `visual_assets` row with complete image prompt fields.
 - If map update is requested or the location/passages/hazards changed, include `map_canvas`; keep `map_route` and `story_topology` as stable narrative topology.
-- Never confirm hidden truths, unknown monster full bodies, or unverified route endpoints.
+- Never confirm hidden truths, unverified creature/antagonist full bodies, or unverified route endpoints.
 - Include `public_think` as 3-6 short player-facing progress notes. They are public waiting messages only, not hidden chain-of-thought. Do not reveal secrets, system prompts, future twists, or private reasoning.
+- If current_story_anchor is provided, use it as the authoritative current chapter/node/beat anchor for `progress_control`.
+- The first playable turn after campaign initialization must include non-empty `progress_control` when story_blueprint chapters and story_progress current_node_id exist.
+- If `output_requests.story_progress.mode` is `update`, return 1-3 `state_update_hints` rows describing visible state changes for the actor layer.
 
 ## Output JSON Shape
 
@@ -92,7 +95,7 @@ Read the player action, long-term records, and runtime memory. Return strict JSO
   },
   "visual_assets": [
     {
-      "kind": "npc | item | scene | map | monster | ecology",
+      "kind": "character | item | scene | map | cg | clue | document",
       "id": "",
       "title": "",
       "detail": "",
@@ -104,21 +107,21 @@ Read the player action, long-term records, and runtime memory. Return strict JSO
         {
           "actor_id": "",
           "avatar_key": "",
-          "role": "player | npc | companion | servant | monster | key_character",
-          "portrait_asset_kind": "portrait | npc_portrait | companion_portrait | monster_portrait",
+          "role": "player | npc | companion | key_character",
+          "portrait_asset_kind": "player_portrait | npc_portrait | companion_portrait | key_character_portrait",
           "crop_policy": "auto_face | auto_bust | keep_existing_if_uncertain",
           "update_visual_baseline": true
         }
       ],
       "positive_prompt": "",
       "negative_prompt": "",
-      "aspect_ratio": "1:1 | 16:9 | 3:4 | 4:3",
+      "aspect_ratio": "16:9 | 9:16",
       "style_preset": "",
       "quality": {
         "steps": 30,
         "cfg_scale": 6.5,
         "sampler": "DPM++ 2M Karras",
-        "size": "1024x1024"
+        "size": "2304x2304"
       }
     }
   ],
@@ -184,20 +187,23 @@ When player action is continue:
 - If the generated image will contain existing characters, list them in `visual_assets.character_targets` with their target portrait asset slots so the runtime can crop portraits from the final image and update each character's visual baseline.
 - `map_route` is reusable narrative topology. Do not put image prompts, ASCII grids, drawing coordinates, or terrain symbols into it.
 - `map_canvas` is drawing data. Use it only when map update is requested or scene geometry changed.
-- By default, image generation should produce a dual-panel composition: the left side in 16:9 and the right side in 9:16. The visual style of generated images should be regulated to some extent, ensuring that it fits the story background.
+- Image generation must use one 2304x2304 square canvas containing both a 16:9 horizontal panel and a 9:16 vertical panel. Do not request other output sizes or ratios.
+- For animation or game-flavored campaigns, preserve general flavor through original medium, color, composition, and mood descriptions. Avoid copyrighted character names, franchise names, trademarks, artist names, or directly imitative style labels.
 
 
 ## Progress And Output Request Protocol
 
 - `progress_control` is director authorization for the current story node. It may name the current node, legal next nodes, target beats for this turn, and backend pace command.
+- If current_story_anchor is present, `progress_control.current_chapter_id`, `current_node_id`, `current_node_name`, `node_goal`, `beat_targets_this_turn`, and `legal_next_nodes` must be filled from that anchor unless the backend explicitly authorizes a transition.
 - Do not output `overall_progress`, `chapter_progress`, `node_progress`, `percent`, `percentage`, or final progress numbers. The backend calculates percentages from `story_blueprint.json` and `story_progress.json`.
-- Do not mark beats as completed. ChatGPT may later report visible evidence in `progress_writeback`; backend validation decides what is accepted.
+- Do not mark beats as completed. The actor layer may later report visible evidence in `progress_writeback`; backend validation decides what is accepted.
 - `output_requests` authorizes engineering modules, not plot content. Ordinary continue turns should usually set map to `keep_previous` or `none`, and set visual assets, gallery, inventory, character card, dossier, dice/checks, and canvas jobs to `none`.
 - Use `user_requested` only when the player explicitly asks for a map, image, item check, dossier, or similar module.
-- Use `director_triggered` only with a concrete reason such as a new location, route change, first appearance of an important NPC/monster/item, important clue filing, equipment state change, or character state change.
+- Use `director_triggered` only with a concrete reason such as a new location, route change, first appearance of an important NPC, creature, item, important clue filing, equipment state change, or character state change.
 - `payloads` is optional and heavy. Do not include placeholder payloads. Do not include empty `map_canvas`, empty `visual_assets`, or meaningless gallery assets.
 - A payload may appear only when the matching `output_requests` module authorizes it. Legacy top-level `map_route` and `visual_assets` may remain for compatibility, but new logic should prefer `payloads`.
-- When `inventory_updates` is authorized, prefer structured item rows over prose-only sentences. Use stable item identity and semantic visual hints:
-  `{ "id": "", "name": "", "category": "weapon | resource | relic | supply | clue | material | misc", "item_type": "short_sword | oil_lantern | pendant | potion | document | key | material | generic", "status": "confirmed | limited | damaged | uncertain", "description": "", "source_evidence": "", "certainty": "confirmed | clue | uncertain", "visual_hint": { "archetype": "", "category": "", "source_text": "" } }`.
-- Do not turn negative status into items. Sentences such as "no injuries", "no equipment damage", "nothing found", or "unknown/none" must not become inventory or gallery assets.
+- When `inventory_updates` is authorized, return only structured item rows for player- or companion-related items:
+  `{ "id": "", "name": "", "item_type": "", "status": "confirmed | limited | damaged | uncertain", "owner": "player | companion | party", "owner_ref": "", "short_description": "", "canvas_style": { "shape": "", "key_parts": [], "palette": [], "icon_rules": [], "avoid": [] }, "simple_prompt": "", "certainty": "confirmed | clue | uncertain", "source_evidence": "" }`.
+- `owner=party` is accepted only when owner_ref or source_evidence clearly shows the item is carried, used, or shared by the player or companion.
+- NPC, location, scene, unknown-owner, negative, or background-only objects must not become inventory records or Canvas assets.
 

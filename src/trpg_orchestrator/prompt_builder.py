@@ -58,6 +58,283 @@ def _pick(memory: dict[str, Any], filenames: list[str]) -> dict[str, Any]:
     return {name: memory.get(name, {}) for name in filenames}
 
 
+MODEL_INPUT_OMIT_KEYS = {
+    "model_config",
+    "model_mode",
+    "model_slots",
+    "director_model",
+    "actor_model",
+    "single_model",
+    "custom_api_key_received",
+    "api_key",
+    "api_key_ref",
+    "ai_mode",
+}
+
+ACTOR_BACKEND_OMIT_KEYS = {
+    "asset_key",
+    "asset_seed",
+    "audit",
+    "cached_url",
+    "cache_policy",
+    "canvas",
+    "canvas_spec",
+    "canvas_style",
+    "coordinates",
+    "created_at",
+    "debug",
+    "diagnostics",
+    "display_zone",
+    "edges",
+    "generator_version",
+    "icon_rules",
+    "image_prompt",
+    "legend",
+    "manifest",
+    "map_canvas",
+    "map_route",
+    "metadata",
+    "missing_capabilities",
+    "mode",
+    "negative_prompt",
+    "output_requests",
+    "payload_fulfillment",
+    "payload_patch",
+    "payloads",
+    "points",
+    "positive_prompt",
+    "prompt_modules",
+    "protocol_warnings",
+    "public_think",
+    "quality",
+    "reason",
+    "routes",
+    "source_object_id",
+    "style_preset",
+    "trigger",
+    "trigger_image_generation",
+    "visual_assets",
+    "visual_prompt",
+    "warnings",
+}
+
+ACTOR_BACKEND_KEY_TOKENS = (
+    "cache",
+    "canvas",
+    "debug",
+    "diagnostic",
+    "manifest",
+    "payload_fulfillment",
+    "source_object",
+)
+
+ACTOR_SCENE_KEYS = {
+    "campaign_id",
+    "turn_type",
+    "current_situation",
+    "pressure_pack",
+    "player_pressure_point",
+    "npc_direction",
+    "scene_boundaries",
+    "forbidden_items",
+    "required_choices",
+    "choice_requirements",
+    "state_update_hints",
+    "progress_control",
+    "current_scene",
+    "consequences",
+    "risks",
+    "summary",
+    "human_readable_note",
+}
+
+ACTOR_VISIBLE_CAPABILITY_PREFIXES = (
+    "base_actor",
+    "character",
+    "choice",
+    "clue",
+    "dialogue",
+    "dice",
+    "dossier",
+    "equipment",
+    "inventory",
+    "item",
+    "location",
+    "map",
+    "npc",
+    "recent_context",
+    "story_progress",
+)
+
+
+def sanitize_model_input(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key) in MODEL_INPUT_OMIT_KEYS:
+                continue
+            if str(key) == "setup_controls" and isinstance(item, list):
+                item = [row for row in item if "model" not in str(row).lower()]
+            cleaned[key] = sanitize_model_input(item)
+        return cleaned
+    if isinstance(value, list):
+        return [sanitize_model_input(item) for item in value]
+    if isinstance(value, str):
+        return sanitize_model_terms(value)
+    return value
+
+
+def sanitize_model_terms(text: str) -> str:
+    replacements = {
+        "DeepSeek V4": "导演层",
+        "deepseek_v4": "director",
+        "V4": "导演层",
+        "ChatGPT": "演员层",
+        "chatgpt": "actor",
+        "GPT": "演员层",
+        "Codex": "本地后台",
+        "CODEX": "本地后台",
+    }
+    result = str(text)
+    for old, new in replacements.items():
+        result = result.replace(old, new)
+    result = re.sub(r"(?im)^.*model_(?:mode|slots)=[^\n]*\n?", "", result)
+    result = re.sub(r"(?im)^.*(?:director_model|actor_model|single_model)[^\n]*\n?", "", result)
+    return result
+
+
+def sanitize_actor_prompt_value(value: Any) -> Any:
+    cleaned = _actor_clean_value(sanitize_model_input(value))
+    return cleaned if cleaned is not None else {}
+
+
+def build_actor_capability_view(capability_plan: dict[str, Any]) -> dict[str, Any]:
+    loaded = capability_plan.get("loaded_capabilities", []) if isinstance(capability_plan, dict) else []
+    capabilities = []
+    for capability in loaded if isinstance(loaded, list) else []:
+        text = str(capability or "").strip()
+        if text and text.startswith(ACTOR_VISIBLE_CAPABILITY_PREFIXES):
+            capabilities.append(text)
+    return sanitize_actor_prompt_value({
+        "visible_capabilities": capabilities,
+        "contract": "Actor layer receives only prose-relevant visible capabilities. Backend routing and module debug are omitted.",
+    })
+
+
+def build_actor_scene_control(pressure_pack: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(pressure_pack, dict):
+        return {}
+    scene = {key: pressure_pack.get(key) for key in ACTOR_SCENE_KEYS if key in pressure_pack}
+    output_requests = pressure_pack.get("output_requests") if isinstance(pressure_pack.get("output_requests"), dict) else {}
+    writeback_targets = []
+    for name, request in output_requests.items():
+        if not isinstance(request, dict):
+            continue
+        mode = str(request.get("mode") or "").strip()
+        if mode and mode != "none":
+            writeback_targets.append({"target": name, "mode": mode})
+    if writeback_targets:
+        scene["required_writeback_targets"] = writeback_targets
+    payloads = pressure_pack.get("payloads") if isinstance(pressure_pack.get("payloads"), dict) else {}
+    for key in ("state_update_hints", "npc_direction", "choice_requirements", "required_choices"):
+        if key not in scene and key in payloads:
+            scene[key] = payloads.get(key)
+    return sanitize_actor_prompt_value(scene)
+
+
+def _actor_clean_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        seen_values: set[str] = set()
+        for key, item in value.items():
+            key_text = str(key)
+            if _actor_should_prune_key(key_text):
+                continue
+            cleaned = _actor_clean_value(item)
+            if _actor_is_empty(cleaned):
+                continue
+            signature = _stable_compact_json(cleaned)
+            if signature in seen_values:
+                continue
+            seen_values.add(signature)
+            clean[key_text] = cleaned
+        return clean or None
+    if isinstance(value, list):
+        rows = []
+        seen_items: set[str] = set()
+        for item in value:
+            cleaned = _actor_clean_value(item)
+            if _actor_is_empty(cleaned):
+                continue
+            signature = _stable_compact_json(cleaned)
+            if signature in seen_items:
+                continue
+            seen_items.add(signature)
+            rows.append(cleaned)
+        return rows or None
+    if isinstance(value, str):
+        text = sanitize_model_terms(value).strip()
+        return text or None
+    return value
+
+
+def _actor_should_prune_key(key: str) -> bool:
+    lowered = key.lower()
+    if lowered in ACTOR_BACKEND_OMIT_KEYS:
+        return True
+    return any(token in lowered for token in ACTOR_BACKEND_KEY_TOKENS)
+
+
+def _actor_is_empty(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _stable_compact_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return str(value)
+
+
+def current_story_anchor(memory: dict[str, Any]) -> dict[str, Any]:
+    blueprint = memory.get("story_blueprint.json", {}) if isinstance(memory, dict) else {}
+    progress = memory.get("story_progress.json", {}) if isinstance(memory, dict) else {}
+    chapters = blueprint.get("chapters") if isinstance(blueprint, dict) and isinstance(blueprint.get("chapters"), list) else []
+    current_node_id = str(progress.get("current_node_id") or "") if isinstance(progress, dict) else ""
+    current_chapter_id = str(progress.get("current_chapter_id") or "") if isinstance(progress, dict) else ""
+    current_chapter: dict[str, Any] = {}
+    current_node: dict[str, Any] = {}
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        nodes = chapter.get("nodes") if isinstance(chapter.get("nodes"), list) else []
+        if current_chapter_id and str(chapter.get("chapter_id") or "") == current_chapter_id:
+            current_chapter = chapter
+        for node in nodes:
+            if isinstance(node, dict) and current_node_id and str(node.get("node_id") or "") == current_node_id:
+                current_node = node
+                current_chapter = current_chapter or chapter
+                break
+        if current_node:
+            break
+    if not current_node:
+        first_chapter = next((chapter for chapter in chapters if isinstance(chapter, dict) and isinstance(chapter.get("nodes"), list) and chapter.get("nodes")), {})
+        current_chapter = first_chapter if isinstance(first_chapter, dict) else {}
+        current_node = current_chapter.get("nodes", [{}])[0] if isinstance(current_chapter.get("nodes"), list) and current_chapter.get("nodes") else {}
+    beats = current_node.get("beat_checklist") if isinstance(current_node.get("beat_checklist"), list) else []
+    next_nodes = current_node.get("next_nodes") if isinstance(current_node.get("next_nodes"), list) else []
+    return sanitize_model_input({
+        "current_chapter_id": current_chapter.get("chapter_id", ""),
+        "current_chapter_name": current_chapter.get("title") or current_chapter.get("name") or "",
+        "current_node_id": current_node.get("node_id", ""),
+        "current_node_name": current_node.get("title") or current_node.get("name") or "",
+        "node_goal": current_node.get("goal") or current_node.get("summary") or "",
+        "beat_targets_this_turn": [str((beats[0] if isinstance(beats[0], dict) else {}).get("beat_id") or "")] if beats else [],
+        "legal_next_nodes": [str(item) for item in next_nodes if str(item)],
+        "pace_command": str((progress if isinstance(progress, dict) else {}).get("pace_command") or "normal"),
+    })
+
+
 def build_director_user_prompt(
     campaign_id: str,
     player_action: str,
@@ -65,21 +342,24 @@ def build_director_user_prompt(
     capability_plan: dict[str, Any] | None = None,
 ) -> str:
     capability_plan = capability_plan or build_capability_plan(campaign_id, player_action, memory)
-    director_memory = select_memory_for_director(memory, capability_plan)
+    director_memory = sanitize_model_input(select_memory_for_director(memory, capability_plan))
     module_ids = select_prompt_modules(capability_plan, "director")
-    module_text = load_prompt_modules(module_ids)
+    module_text = sanitize_model_terms(load_prompt_modules(module_ids))
     _append_module_warnings(capability_plan)
     custom_rules = custom_rules_section(campaign_id, "director")
     return "\n\n".join(
         [
-            "# V4 Director Turn Input",
+            "# Director Turn Input",
             f"campaign_id: {campaign_id}",
             campaign_setup_controls_section(memory),
             "## Player Action",
             player_action,
+            "## Current Story Anchor",
+            "Use this anchor for progress_control when it is non-empty.",
+            "```json\n" + json.dumps(current_story_anchor(memory), ensure_ascii=False, indent=2) + "\n```",
             "## Capability Plan",
             "This is local orchestration context. It does not decide story direction.",
-            "```json\n" + json.dumps(capability_plan, ensure_ascii=False, indent=2) + "\n```",
+            "```json\n" + json.dumps(sanitize_model_input(capability_plan), ensure_ascii=False, indent=2) + "\n```",
             "## Selected Director Prompt Modules",
             module_text,
             custom_rules,
@@ -98,10 +378,12 @@ def build_chatgpt_input(
     capability_plan: dict[str, Any] | None = None,
 ) -> str:
     capability_plan = capability_plan or build_capability_plan(campaign_id, player_action, memory)
-    visible_memory = select_memory_for_actor(memory, capability_plan, pressure_pack)
+    visible_memory = sanitize_actor_prompt_value(select_memory_for_actor(memory, capability_plan, pressure_pack))
     visible_story_progress = visible_memory.get("actor_visible_story_progress", build_actor_visible_story_progress(memory, pressure_pack))
+    actor_capability_view = build_actor_capability_view(capability_plan)
+    actor_scene_control = build_actor_scene_control(pressure_pack)
     module_ids = select_prompt_modules(capability_plan, "actor", pressure_pack)
-    module_text = load_prompt_modules(module_ids)
+    module_text = sanitize_model_terms(load_prompt_modules(module_ids))
     _append_module_warnings(capability_plan)
     custom_rules = custom_rules_section(campaign_id, "actor")
     return "\n\n".join(
@@ -110,9 +392,9 @@ def build_chatgpt_input(
             "## Selected Actor Prompt Modules",
             module_text,
             custom_rules,
-            "## Capability Plan",
-            "Use only loaded capabilities and this turn's pressure_pack. Missing capability details are not permission to invent payloads.",
-            "```json\n" + json.dumps(capability_plan, ensure_ascii=False, indent=2) + "\n```",
+            "## Visible Capability Summary",
+            "Use only these prose-relevant capabilities. Backend routing, prompt module debug, and missing payload diagnostics are intentionally omitted.",
+            "```json\n" + json.dumps(actor_capability_view, ensure_ascii=False, indent=2) + "\n```",
             "## campaign_id",
             campaign_id,
             campaign_setup_controls_section(memory),
@@ -122,11 +404,11 @@ def build_chatgpt_input(
             "These records are only for performance consistency. Do not expand unconfirmed content. Do not invent long-term setting.",
             "```json\n" + json.dumps(visible_memory, ensure_ascii=False, indent=2) + "\n```",
             "## Visible Story Progress Control",
-            "This is a sanitized current-node summary derived from V4 progress_control. It is not a full story blueprint.",
+            "This is a sanitized current-node summary derived from director progress_control. It is not a full story blueprint.",
             "```json\n" + json.dumps(visible_story_progress, ensure_ascii=False, indent=2) + "\n```",
-            "## Scene Control Pack",
-            "Follow this turn's pressure, boundaries, NPC direction, forbidden items, and choice requirements. Do not copy its structure directly.",
-            "```json\n" + json.dumps(pressure_pack, ensure_ascii=False, indent=2) + "\n```",
+            "## Actor Scene Control",
+            "Follow this turn's visible pressure, boundaries, NPC direction, forbidden items, choice requirements, and required writeback targets. Backend generation and routing fields have been removed.",
+            "```json\n" + json.dumps(actor_scene_control, ensure_ascii=False, indent=2) + "\n```",
             "Output strict JSON only: blocks, summary, and state_writeback. No text outside JSON.",
         ]
     )
@@ -145,7 +427,7 @@ def build_chatgpt_image_input(
         "negative_prompt": "low quality, blurry, text artifacts, watermark, logo, extra limbs, malformed hands, incoherent layout",
         "aspect_ratio": "16:9",
         "style_preset": "cinematic anime urban horror, Fate-inspired, controlled lighting",
-        "quality": {"steps": 30, "cfg_scale": 6.5, "sampler": "DPM++ 2M Karras", "size": "1280x720"},
+        "quality": {"steps": 30, "cfg_scale": 6.5, "sampler": "DPM++ 2M Karras", "size": "2304x2304"},
     }]
     return "\n\n".join(
         [
@@ -153,14 +435,14 @@ def build_chatgpt_image_input(
             "This is a separate image-only conversation pass. Do not continue the story and do not output state writeback JSON.",
             "Generate exactly one image for the first visual asset below. If multiple assets are listed, use only the first one.",
             "Do not include new plot facts. Do not reveal unknown canon details. Use only confirmed or visible scene details.",
-            "For cross-device CG previews, prefer a PC-first 16:9 composition. If a dual preview template is explicitly requested, place a 16:9 PC crop on the left and a 9:16 mobile crop on the right, with the main subject inside both safe areas.",
+            "Generate one 2304x2304 square image containing both a 16:9 horizontal panel and a 9:16 vertical panel for the same scene. Use original descriptive style language and avoid copyrighted names, trademarks, artist names, or directly imitative style labels.",
             f"campaign_id: {campaign_id}",
             "Player action that triggered the image pass:",
             player_action,
             "Image asset instruction:",
-            "```json\n" + json.dumps(rows[0], ensure_ascii=False, indent=2) + "\n```",
+            "```json\n" + json.dumps(sanitize_model_input(rows[0]), ensure_ascii=False, indent=2) + "\n```",
             "Reference control pack for context only:",
-            "```json\n" + json.dumps(pressure_pack, ensure_ascii=False, indent=2) + "\n```",
+            "```json\n" + json.dumps(sanitize_model_input(pressure_pack), ensure_ascii=False, indent=2) + "\n```",
             "Generate one image now. No story prose, no choices, no state writeback.",
         ]
     )
@@ -216,10 +498,8 @@ def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
     rules = profile.get("rules_config") if isinstance(profile.get("rules_config"), dict) else {}
     attribute_config = rules.get("attribute_config") if isinstance(rules.get("attribute_config"), dict) else {}
     companion = profile.get("companion_config") if isinstance(profile.get("companion_config"), dict) else {}
-    model = profile.get("model_config") if isinstance(profile.get("model_config"), dict) else {}
     controls = {
         "template": _valid_template(profile.get("template")),
-        "model_mode": str(model.get("model_mode") or "").strip(),
         "character_card_enabled": bool(rules.get("character_card_enabled", True)),
         "stat_visibility": _choice(rules.get("stat_visibility"), {"narrative", "hybrid", "numeric"}, "narrative"),
         "attribute_enabled": bool(attribute_config.get("enabled", True)),
@@ -288,7 +568,7 @@ def active_custom_rules(campaign_id: str, layer: str) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(read_runtime_text(path))
     except Exception:
         return []
     if not isinstance(data, dict):

@@ -190,6 +190,39 @@ def validate_payloads_against_output_requests(payloads: dict[str, Any], output_r
     _validate_payload_mode(output_requests, payloads, "canvas_jobs", "canvas_jobs", list)
     if _has_payload(payloads.get("canvas_jobs")):
         validate_canvas_jobs(payloads["canvas_jobs"])
+    if _has_payload(payloads.get("inventory_updates")):
+        validate_inventory_updates(payloads["inventory_updates"])
+
+
+def _inventory_owner_allowed(owner: str, owner_ref: str, evidence: str) -> bool:
+    value = str(owner or "").strip().lower()
+    if value in {"player", "companion"}:
+        return True
+    if value != "party":
+        return False
+    relation = f"{owner_ref} {evidence}".lower()
+    return any(token in relation for token in ("player", "protagonist", "companion", "主角", "玩家", "伙伴", "同伴", "随身", "携带", "持有", "共用"))
+
+
+def validate_inventory_updates(items: Any) -> None:
+    if not isinstance(items, list):
+        raise SchemaValidationError("inventory_updates must be a list")
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise SchemaValidationError(f"inventory_updates[{index}] must be an object")
+        prefix = f"inventory_updates[{index}]"
+        for key in ("id", "name", "item_type", "status", "owner", "short_description", "simple_prompt", "certainty", "source_evidence"):
+            _require_nonempty_string(item, key, prefix)
+        if item.get("status") not in {"confirmed", "limited", "damaged", "uncertain"}:
+            raise SchemaValidationError(f"{prefix}.status invalid: {item.get('status')}")
+        if item.get("certainty") not in {"confirmed", "clue", "uncertain"}:
+            raise SchemaValidationError(f"{prefix}.certainty invalid: {item.get('certainty')}")
+        if not _inventory_owner_allowed(str(item.get("owner") or ""), str(item.get("owner_ref") or ""), str(item.get("source_evidence") or "")):
+            raise SchemaValidationError(f"{prefix}.owner must be player/companion, or party clearly tied to player/companion")
+        if "canvas_style" not in item or not isinstance(item.get("canvas_style"), dict):
+            raise SchemaValidationError(f"{prefix}.canvas_style must be an object")
+        if len(str(item.get("simple_prompt") or "")) > 260:
+            raise SchemaValidationError(f"{prefix}.simple_prompt too long")
 
 
 def validate_payload_patch(data: dict[str, Any]) -> None:
@@ -351,6 +384,10 @@ def validate_chatgpt_blocks(blocks: list[dict[str, Any]]) -> None:
         raise SchemaValidationError("ChatGPT blocks must be a list")
     if not blocks:
         raise SchemaValidationError("ChatGPT blocks must not be empty")
+    first_type = str((blocks[0] or {}).get("type") or "").strip() if isinstance(blocks[0], dict) else ""
+    first_actor = str((blocks[0] or {}).get("actor_kind") or "").strip() if isinstance(blocks[0], dict) else ""
+    if first_type != "player_action" or first_actor != "player":
+        raise SchemaValidationError("blocks[0] must be the submitted player_action with actor_kind=player")
 
     narrative_count = 0
     choice_prompt_count = 0

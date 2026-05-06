@@ -16,7 +16,7 @@ Prose rules:
 Choice rules:
 
 - Major choices must be offered to the player.
-- Small actions, small progress, and small judgments may be handled naturally by the host.
+- Small actions, small progress, and small judgments must be handled naturally by the host without stopping for a formal choice prompt.
 - Choice points must not look like game buttons and must not provide an obvious optimal answer.
 - Major choices may list 2-4 options, and each option must carry cost, risk, or unknown information.
 - Urgent scenes may stop at a pressure point without listing options.

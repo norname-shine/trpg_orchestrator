@@ -2326,56 +2326,115 @@ def frontend_quests(state: dict[str, Any]) -> list[dict[str, Any]]:
     return rows[:12]
 
 
+def inventory_owner_allowed(owner: Any, owner_ref: Any = "", evidence: Any = "") -> bool:
+    owner_value = str(owner or "").strip().lower()
+    if owner_value in {"player", "companion"}:
+        return True
+    if owner_value != "party":
+        return False
+    relation_text = f"{owner_ref} {evidence}".lower()
+    return any(token in relation_text for token in ("player", "protagonist", "companion", "主角", "玩家", "伙伴", "同伴", "随身", "携带", "持有", "共用"))
+
+
+def short_director_item_prompt(value: Any, limit: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def stable_director_inventory_id(item: dict[str, Any]) -> str:
+    base = f"{item.get('owner') or 'player'}:{item.get('item_type') or 'item'}:{item.get('name') or item.get('title') or 'item'}"
+    return safe_segment(base.lower())
+
+
+def normalize_director_inventory_item(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    value = item.get("value") if isinstance(item.get("value"), dict) else item
+    if not isinstance(value, dict):
+        return {}
+    name = stringify_brief(value.get("name") or value.get("title") or value.get("display_name"), 80)
+    item_type = safe_segment(str(value.get("item_type") or value.get("type") or "generic").lower()) or "generic"
+    owner = str(value.get("owner") or "").strip().lower()
+    owner_ref = stringify_brief(value.get("owner_ref") or value.get("holder") or "", 80)
+    evidence = stringify_brief(value.get("source_evidence") or value.get("evidence") or value.get("short_description") or value.get("description") or "", 220)
+    if not name or not inventory_owner_allowed(owner, owner_ref, evidence):
+        return {}
+    status = str(value.get("status") or "confirmed").strip().lower()
+    if status not in {"confirmed", "limited", "damaged", "uncertain"}:
+        status = "confirmed"
+    certainty = str(value.get("certainty") or "confirmed").strip().lower()
+    if certainty not in {"confirmed", "clue", "uncertain"}:
+        certainty = "confirmed"
+    category = safe_segment(str(value.get("category") or "item").lower()) or "item"
+    canvas_style = value.get("canvas_style") if isinstance(value.get("canvas_style"), dict) else {}
+    visual_hint = value.get("visual_hint") if isinstance(value.get("visual_hint"), dict) else {}
+    simple_prompt = short_director_item_prompt(value.get("simple_prompt") or value.get("prompt") or visual_hint.get("source_text") or evidence)
+    return {
+        "id": safe_segment(str(value.get("id") or stable_director_inventory_id({"owner": owner, "item_type": item_type, "name": name}))),
+        "name": name,
+        "category": category,
+        "item_type": item_type,
+        "status": status,
+        "owner": owner,
+        "owner_ref": owner_ref,
+        "short_description": stringify_brief(value.get("short_description") or value.get("description") or evidence, 180),
+        "canvas_style": canvas_style,
+        "visual_hint": visual_hint,
+        "simple_prompt": simple_prompt,
+        "certainty": certainty,
+        "source_evidence": evidence,
+    }
+
+
 def frontend_inventory(state: dict[str, Any]) -> list[dict[str, Any]]:
     equipment = state.get("equipment", {}) if isinstance(state.get("equipment"), dict) else {}
-    recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
-    source = []
+    source: list[dict[str, Any]] = []
     items = equipment.get("items") if isinstance(equipment.get("items"), dict) else {}
     for item_id, item in items.items():
         if not isinstance(item, dict):
             continue
-        confirmed = item.get("confirmed") if isinstance(item.get("confirmed"), dict) else {}
-        uncertain = item.get("uncertain") if isinstance(item.get("uncertain"), list) else []
-        detail = "；".join(str(x) for x in [
-            confirmed.get("observed_reaction"),
-            confirmed.get("appearance"),
-            confirmed.get("current_status"),
-            *uncertain[:2],
-        ] if x)
-        source.append({
-            "title": str(item.get("display_name") or item.get("name") or item_id),
-            "detail": detail,
-            "tag": str(item.get("category") or "物品"),
-        })
-    source.extend(normalize_memory_rows(equipment.get("equipment_updates")) + normalize_memory_rows(equipment.get("facts")))
-    scene = recent.get("short_term_state", {}) if isinstance(recent.get("short_term_state"), dict) else {}
-    for key in ("resources",):
-        if scene.get(key):
-            source.extend(split_clause_rows(scene.get(key), "物品"))
-    keywords = re.compile(r"手机|信号|拨号|屏幕|电话|斧|剑|药|瓶|盒|匣|钥匙|书|信|照片|骨|素材|装备|物件|货车|泥|痕|油灯|登记册|任务板|缰绳|行囊|鳞|补给|样本|碎片")
+        normalized = normalize_director_inventory_item({**item, "id": item.get("id") or item_id})
+        if normalized:
+            source.append(normalized)
+    for key in ("inventory_updates", "structured_inventory_updates"):
+        for item in equipment.get(key, []) if isinstance(equipment.get(key), list) else []:
+            normalized = normalize_director_inventory_item(item)
+            if normalized:
+                source.append(normalized)
     merged: dict[str, dict[str, Any]] = {}
-    for item in [row for row in source if keywords.search(row["title"] + row["detail"]) and is_inventory_candidate(row)]:
-        analysis = analyze_inventory_item(item["title"], item["detail"])
-        if analysis["category"] == "misc" and analysis["role"] == "record":
-            continue
-        entity_id = stable_inventory_entity_id(item["title"], item["detail"], analysis)
-        detail = item["detail"] or item["title"]
+    for item in source:
+        entity_id = str(item.get("id") or stable_director_inventory_id(item))
+        detail = str(item.get("short_description") or item.get("description") or item.get("source_evidence") or item.get("name") or "")
         if entity_id in merged:
             merged[entity_id]["detail"] = merge_detail_text(merged[entity_id]["detail"], detail)
-            merged[entity_id]["raw_name"] = merge_detail_text(merged[entity_id]["raw_name"], item["title"])
             continue
+        category = str(item.get("category") or "item")
+        item_type = str(item.get("item_type") or "generic")
         merged[entity_id] = {
             "id": entity_id,
-            "raw_name": item["title"],
-            "short_name": analysis["short_name"],
-            "category": analysis["category"],
-            "role": analysis["role"],
+            "raw_name": str(item.get("name") or entity_id),
+            "short_name": stringify_brief(item.get("name") or entity_id, 40),
+            "category": category,
+            "role": "player_companion_item",
             "detail": detail,
-            "visual_prompt": analysis["visual_prompt"],
+            "visual_prompt": {
+                "type": item_type,
+                "category": category,
+                "simple_prompt": item.get("simple_prompt") or "",
+                "canvas_style": item.get("canvas_style") if isinstance(item.get("canvas_style"), dict) else {},
+                "visual_hint": item.get("visual_hint") if isinstance(item.get("visual_hint"), dict) else {},
+                "source_text": stringify_brief(item.get("source_evidence") or detail, 160),
+            },
             "asset_key": f"item:{safe_segment(entity_id)}",
+            "item_type": item_type,
+            "owner": item.get("owner", ""),
+            "owner_ref": item.get("owner_ref", ""),
+            "status": item.get("status", ""),
+            "certainty": item.get("certainty", ""),
         }
     return list(merged.values())[:16]
-
 
 def frontend_dossier(state: dict[str, Any]) -> list[dict[str, Any]]:
     clues = state.get("clues", {}) if isinstance(state.get("clues"), dict) else {}
@@ -2454,20 +2513,14 @@ def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, 
                 npc_row_by_id[actor_id]["detail"] = merge_detail_text(npc_row_by_id[actor_id].get("detail", ""), detail)
                 npc_row_by_id[actor_id]["meta"] = asset.get("certainty") or npc_row_by_id[actor_id].get("meta") or "NPC"
                 continue
-        row = {"kind": kind, "key": f"v4:{kind}:{asset.get('id') or index}", "title": title, "meta": asset.get("certainty") or kind, "detail": detail, "image_prompt": asset.get("image_prompt", {})}
+        row = {"kind": kind, "key": f"director:{kind}:{asset.get('id') or index}", "title": title, "meta": asset.get("certainty") or kind, "detail": detail, "image_prompt": asset.get("image_prompt", {})}
         if kind in {"item", "clue", "document", "anomaly"}:
-            analysis = analyze_inventory_item(title, detail)
-            entity_id = stable_inventory_entity_id(title, detail, analysis)
-            if entity_id in inventory_row_by_id:
-                inventory_row_by_id[entity_id]["detail"] = merge_detail_text(inventory_row_by_id[entity_id].get("detail", ""), detail)
+            normalized_item = normalize_director_inventory_item(asset)
+            entity_id = str(normalized_item.get("id") or "")
+            if not entity_id or entity_id not in inventory_row_by_id:
                 continue
-            row["kind"] = "item" if kind in {"clue", "document", "anomaly"} else kind
-            if row["kind"] == "item" and str(asset.get("kind") or "").lower() == "scene":
-                row["meta"] = "视觉记录"
-                row["visual_prompt"] = analyze_scene_visual_asset(title, detail)
-            else:
-                row["meta"] = analysis["category"] if analysis["category"] != "misc" else row["meta"]
-                row["visual_prompt"] = analysis["visual_prompt"]
+            inventory_row_by_id[entity_id]["detail"] = merge_detail_text(inventory_row_by_id[entity_id].get("detail", ""), detail)
+            continue
         rows.append(row)
     for asset in assets:
         identity = resolve_entity_role(asset, context, asset)
@@ -2508,27 +2561,57 @@ def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, 
     return {"filters": filters, "taxonomy": taxonomy, "assets": mark_frontend_scene_archive_state(dedupe_frontend_assets(rows))[:120]}
 
 
+def copyright_safe_prompt_text(text: str) -> str:
+    result = str(text or "")
+    blocked = [
+        "Fate",
+        "FATE",
+        "DND",
+        "D&D",
+        "Monster Hunter",
+        "Zelda",
+        "Nintendo",
+        "Disney",
+        "Pixar",
+        "Ghibli",
+        "Marvel",
+        "DC Comics",
+    ]
+    for token in blocked:
+        result = re.sub(re.escape(token), "original fantasy-adventure", result, flags=re.I)
+    return result
+
+
 def normalize_visual_asset_prompt(asset: Any) -> dict[str, Any]:
     row = dict(asset) if isinstance(asset, dict) else {}
     title = str(row.get("title") or row.get("id") or "visual asset")
     detail = str(row.get("detail") or row.get("source_memory") or "")
-    style = str(row.get("style_preset") or row.get("style") or "cinematic anime urban horror, Fate-inspired, controlled lighting")
+    style = copyright_safe_prompt_text(str(row.get("style_preset") or row.get("style") or "original illustrated TRPG scene, controlled lighting"))
     positive = str(row.get("positive_prompt") or row.get("prompt") or "").strip()
     if not positive:
         positive = concise_text(f"{title}, {detail}, {style}, clear subject, coherent composition, readable scene details", 420)
+    positive = copyright_safe_prompt_text(positive)
     negative = str(row.get("negative_prompt") or "").strip()
     if not negative:
-        negative = "low quality, blurry, text artifacts, watermark, logo, extra limbs, malformed hands, incoherent layout, overexposed, underexposed"
+        negative = "low quality, blurry, text artifacts, watermark, logo, trademark, franchise character, extra limbs, malformed hands, incoherent layout, overexposed, underexposed"
     row["positive_prompt"] = positive
     row["negative_prompt"] = negative
-    row["aspect_ratio"] = str(row.get("aspect_ratio") or ("16:9" if row.get("display_zone") == "map" or row.get("kind") in {"scene", "map"} else "1:1"))
+    ratio = str(row.get("aspect_ratio") or ("16:9" if row.get("display_zone") == "map" or row.get("kind") in {"scene", "map", "cg"} else "9:16"))
+    row["aspect_ratio"] = ratio if ratio in {"16:9", "9:16"} else "16:9"
     row["style_preset"] = style
     quality = row.get("quality")
-    row["quality"] = quality if isinstance(quality, dict) else {
+    normalized_quality = dict(quality) if isinstance(quality, dict) else {
         "steps": 30,
         "cfg_scale": 6.5,
         "sampler": "DPM++ 2M Karras",
-        "size": "1280x720" if row["aspect_ratio"] == "16:9" else "1024x1024",
+        "size": "2304x2304",
+    }
+    normalized_quality["size"] = "2304x2304"
+    row["quality"] = normalized_quality
+    row["canvas_spec"] = {
+        "size": "2304x2304",
+        "panels": ["16:9", "9:16"],
+        "instruction": "Single square canvas containing one horizontal 16:9 panel and one vertical 9:16 panel.",
     }
     row["image_prompt"] = {
         "positive_prompt": row["positive_prompt"],
@@ -2536,6 +2619,7 @@ def normalize_visual_asset_prompt(asset: Any) -> dict[str, Any]:
         "aspect_ratio": row["aspect_ratio"],
         "style_preset": row["style_preset"],
         "quality": row["quality"],
+        "canvas_spec": row["canvas_spec"],
     }
     return row
 
@@ -3043,15 +3127,11 @@ def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> di
     root = CAMPAIGNS_DIR / safe_segment(campaign_id)
     profile = read_json(root / "campaign_profile.json") if (root / "campaign_profile.json").exists() else {}
     profile = profile if isinstance(profile, dict) else {}
+    campaign_taxonomy = normalize_campaign_taxonomy(profile.get("campaign_taxonomy") if isinstance(profile.get("campaign_taxonomy"), dict) else {})
     taxonomy = profile.get("gallery_taxonomy") if isinstance(profile.get("gallery_taxonomy"), dict) else {}
     core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
     if not core:
-        core = [
-            {"id": "cg", "label": "CG", "locked": True},
-            {"id": "npc", "label": "NPC", "locked": True},
-            {"id": "scene", "label": "Scene", "locked": True},
-            {"id": "item", "label": "Item", "locked": True},
-        ]
+        core = campaign_taxonomy.get("asset_categories", [])
     campaign_rows = []
     for row in taxonomy.get("campaign_categories", []) if isinstance(taxonomy.get("campaign_categories"), list) else []:
         normalized = normalize_gallery_taxonomy_row(row, "campaign_profile")
@@ -3070,24 +3150,11 @@ def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> di
         normalized = normalize_gallery_taxonomy_row(row, "rules_config")
         if normalized:
             campaign_rows.append(normalized)
-    template = str(profile.get("template") or state.get("template") or "").lower()
-    if template in {"coc", "call_of_cthulhu"}:
-        campaign_rows.extend([
-            {"id": "clue", "label": "Clue", "source": "template"},
-            {"id": "document", "label": "Document", "source": "template"},
-            {"id": "location", "label": "Location", "source": "template"},
-        ])
-    elif template in {"dnd", "dnd5e"}:
-        campaign_rows.extend([
-            {"id": "monster", "label": "Monster", "source": "template"},
-            {"id": "location", "label": "Location", "source": "template"},
-            {"id": "magic_item", "label": "Magic Item", "source": "template"},
-        ])
-    elif template in {"fate"}:
-        campaign_rows.extend([
-            {"id": "master", "label": "Master", "source": "template"},
-            {"id": "servant", "label": "Servant", "source": "template"},
-        ])
+    campaign_rows.extend([
+        {"id": row.get("id"), "label": row.get("label"), "source": "campaign_taxonomy"}
+        for row in campaign_taxonomy.get("item_types", [])
+        if isinstance(row, dict) and row.get("id")
+    ])
     campaign_rows = dedupe_taxonomy_rows(campaign_rows, {row.get("id") for row in core if isinstance(row, dict)})
     return {
         "core_categories": dedupe_taxonomy_rows([normalize_gallery_taxonomy_row(row, "system") for row in core], set()),
@@ -3409,7 +3476,7 @@ def run_command_streaming(command: list[str], env: dict[str, str]) -> None:
         env=env,
         text=True,
         encoding="utf-8",
-        errors="replace",
+        errors="strict",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=1,
@@ -3460,7 +3527,7 @@ def maybe_update_stream_from_line(line: str) -> None:
     if not encoded:
         return
     try:
-        decoded = base64.b64decode(encoded.encode("ascii")).decode("utf-8", errors="replace")
+        decoded = base64.b64decode(encoded.encode("ascii")).decode("utf-8", errors="strict")
     except Exception:
         return
     JOB.update_stream_text(decoded)
@@ -3560,63 +3627,62 @@ def default_rule_bundle() -> dict[str, Any]:
     categories = [
         {
             "rule_id": "story_progress_rules",
-            "title_zh": "故事与进度规则",
+            "title_zh": "???????",
             "title_en": "Story and Progress Rules",
-            "desc_zh": "控制故事篇幅、章节节奏、当前节点推进和不要过早揭露的信息。",
+            "desc_zh": "?????????????????????????????",
             "desc_en": "Controls story length, chapter pacing, node progress, and information that should not be revealed too early.",
             "files": ["story_progress_rules.md", "v4_campaign_context_prompt.md"],
         },
         {
             "rule_id": "character_attribute_rules",
-            "title_zh": "角色卡与属性规则",
+            "title_zh": "????????",
             "title_en": "Character Card and Attribute Rules",
-            "desc_zh": "控制主角资料、属性值、角色卡显示和状态写回。",
+            "desc_zh": "??????????????????????",
             "desc_en": "Controls protagonist profile, attributes, character-card display, and state writeback.",
             "files": ["character_card_json_rules.md", "dice_check_rules_CN.md"],
         },
         {
             "rule_id": "style_rules",
-            "title_zh": "正文风格规则",
+            "title_zh": "??????",
             "title_en": "Prose Style Rules",
-            "desc_zh": "控制叙事口吻、对白风格、画面感和避免 AI 味的写法。",
+            "desc_zh": "?????????????????? AI ?????",
             "desc_en": "Controls prose tone, dialogue style, vivid scene writing, and anti-AI-flavor constraints.",
             "files": ["chatgpt_style_rules.md", "chatgpt_host_prompt.md"],
         },
         {
-            "rule_id": "npc_monster_rules",
-            "title_zh": "NPC / 怪物规则",
-            "title_en": "NPC and Monster Rules",
-            "desc_zh": "控制 NPC 行为、怪物生态、阵营关系和长期资料一致性。",
-            "desc_en": "Controls NPC behavior, monster ecology, factions, and long-term dossier consistency.",
-            "files": ["chatgpt_npc_voice_rules.md", "chatgpt_monster_rules.md"],
+            "rule_id": "npc_character_rules",
+            "title_zh": "NPC / ??????",
+            "title_en": "NPC and Key Character Rules",
+            "desc_zh": "?? NPC???????????????????????????????????",
+            "desc_en": "Controls NPCs, companions, key characters, factions, and dossier consistency. Specific types come from campaign initialization.",
+            "files": ["chatgpt_npc_voice_rules.md"],
         },
         {
             "rule_id": "image_gallery_rules",
-            "title_zh": "图像与资料规则",
+            "title_zh": "???????",
             "title_en": "Image and Gallery Rules",
-            "desc_zh": "控制地图、头像、CG、资料夹条目和可视化资产的生成与展示。",
+            "desc_zh": "????????CG???????????????????",
             "desc_en": "Controls maps, portraits, CGs, dossiers, and visual asset display.",
             "files": ["chatgpt_image_rules.md", "visual_asset_protocol.md", "gallery_asset_rules.md"],
         },
         {
             "rule_id": "safety_rules",
-            "title_zh": "安全边界规则",
+            "title_zh": "??????",
             "title_en": "Safety Boundary Rules",
-            "desc_zh": "控制禁忌内容、淡化内容、玩家边界和不可越过的叙事限制。",
+            "desc_zh": "???????????????????????????",
             "desc_en": "Controls forbidden content, softened content, player boundaries, and hard narrative limits.",
             "files": ["forbidden_changes.json", "v4_audit_prompt.md"],
         },
         {
             "rule_id": "memory_writeback_rules",
-            "title_zh": "记忆与写回规则",
+            "title_zh": "???????",
             "title_en": "Memory and Writeback Rules",
-            "desc_zh": "控制哪些事实可以长期记忆、哪些内容需要保持未确认，以及回合结束后的状态写入。",
+            "desc_zh": "??????????????????????????????????????",
             "desc_en": "Controls durable facts, uncertain information, and end-of-turn state writeback.",
             "files": ["state_writeback_schema.md", "v4_audit_prompt.md"],
         },
     ]
     return {"categories": categories}
-
 
 def bool_payload(payload: dict[str, Any], key: str, default: bool = False) -> bool:
     value = payload.get(key, default)
@@ -3670,6 +3736,47 @@ def resolve_story_config(story_length: Any) -> dict[str, Any]:
         "target_chapters": row["target_chapters"],
         "target_nodes": row["target_nodes"],
     }
+
+
+def default_campaign_taxonomy(template: str = "custom", analysis: dict[str, Any] | None = None) -> dict[str, Any]:
+    analysis = analysis if isinstance(analysis, dict) else {}
+    return {
+        "character_roles": [
+            {"id": "player", "label": "主角", "base_role": "player"},
+            {"id": "npc", "label": "NPC", "base_role": "npc"},
+            {"id": "companion", "label": "同伴", "base_role": "companion"},
+            {"id": "key_character", "label": "关键角色", "base_role": "key_character"},
+        ],
+        "asset_categories": [
+            {"id": "character", "label": "角色"},
+            {"id": "item", "label": "物品"},
+            {"id": "scene", "label": "场景"},
+            {"id": "map", "label": "地图"},
+            {"id": "cg", "label": "CG"},
+            {"id": "clue", "label": "线索"},
+            {"id": "document", "label": "文档"},
+        ],
+        "item_types": [],
+        "visual_style": {
+            "medium": stringify_brief(analysis.get("genre") or template or "original text TRPG", 80),
+            "palette": [],
+            "composition": ["2304x2304 square canvas", "16:9 horizontal panel", "9:16 vertical panel"],
+            "mood": [stringify_brief(analysis.get("tone"), 80)] if analysis.get("tone") else [],
+            "copyright_avoid": ["no copyrighted character names", "no franchise names", "no trademarks", "no artist-name imitation"],
+        },
+    }
+
+
+def normalize_campaign_taxonomy(value: Any, template: str = "custom", analysis: dict[str, Any] | None = None) -> dict[str, Any]:
+    base = default_campaign_taxonomy(template, analysis)
+    if not isinstance(value, dict):
+        return base
+    for key in ("character_roles", "asset_categories", "item_types"):
+        if isinstance(value.get(key), list):
+            base[key] = value.get(key)[:40]
+    visual = value.get("visual_style") if isinstance(value.get("visual_style"), dict) else {}
+    base["visual_style"].update({k: v for k, v in visual.items() if k in {"medium", "palette", "composition", "mood", "copyright_avoid"}})
+    return base
 
 
 def split_chapter_seed(seed: Any, index: int) -> tuple[str, str]:
@@ -4306,7 +4413,26 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             {"stage": "理解故事设定", "text": "正在确认世界观、主角处境和故事开场压力。"},
             {"stage": "整理初始化记忆", "text": "正在把角色、伙伴、安全边界和故事规划整理成可写入数据。"},
         ],
-        "analysis": {"genre": "", "tone": "", "premise": "", "source": "deepseek_v4_campaign_setup"},
+        "analysis": {"genre": "", "tone": "", "premise": "", "source": "director_campaign_setup"},
+        "campaign_taxonomy": {
+            "character_roles": [
+                {"id": "player", "label": "主角"},
+                {"id": "npc", "label": "NPC"},
+                {"id": "companion", "label": "同伴"},
+                {"id": "key_character", "label": "关键角色"}
+            ],
+            "asset_categories": [
+                {"id": "character", "label": "角色"},
+                {"id": "item", "label": "物品"},
+                {"id": "scene", "label": "场景"},
+                {"id": "map", "label": "地图"},
+                {"id": "cg", "label": "CG"},
+                {"id": "clue", "label": "线索"},
+                {"id": "document", "label": "文档"}
+            ],
+            "item_types": [],
+            "visual_style": {"medium": "", "palette": [], "composition": [], "mood": [], "copyright_avoid": []},
+        },
         "campaign_direction": {
             "core_concept": "",
             "opening_situation": "",
@@ -4316,7 +4442,28 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             "secrets_not_to_reveal_early": [],
             "director_notes": [],
         },
-        "story_blueprint_patch": {"notes": [], "chapter_seeds": []},
+        "story_blueprint_patch": {
+            "notes": [],
+            "chapter_seeds": [],
+            "chapters": [
+                {
+                    "chapter_id": "chapter_1",
+                    "title": "",
+                    "goal": "",
+                    "summary": "",
+                    "nodes": [
+                        {
+                            "node_id": "c1_n1_opening",
+                            "title": "",
+                            "goal": "",
+                            "target_chars": 3000,
+                            "next_nodes": [],
+                            "beat_checklist": [{"beat_id": "c1_n1_b1", "title": "", "weight": 1}]
+                        }
+                    ]
+                }
+            ],
+        },
         "protagonist_patch": {
             "confirmed_identity": "",
             "confirmed_background": "",
@@ -4361,7 +4508,6 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "模板": config.get("template", "custom"),
         "故事篇幅": config.get("story_config", {}).get("story_length", "medium") if isinstance(config.get("story_config"), dict) else "medium",
         "用户开场 Prompt": config.get("user_prompt", ""),
-        "模型模式": config.get("model_config", {}).get("model_mode", "") if isinstance(config.get("model_config"), dict) else "",
         "主角名称": identity.get("name", ""),
         "主角身份 / 职业": identity.get("role", ""),
         "主角背景": profile.get("background", ""),
@@ -4397,6 +4543,9 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Only put truly player-owned details in unknown_or_player_owned. Do not use unknown_or_player_owned as a substitute for generating the requested setup.",
         "If companion_config.companion_enabled is true and companion_mode is auto, create a concrete companion_patch with a usable name, role, personality, and relationship_to_protagonist.",
         "If user_prompt is auto, generate campaign premise, background, opening situation, main conflict, early goals, and story seeds from the selected template and title.",
+        "Return campaign_taxonomy for this campaign. Keep base runtime roles limited to player, npc, companion, key_character. Put story-specific professions, species, factions, item types, dossier filters, and visual style in campaign_taxonomy.",
+        "Do not use protected franchise, character, trademark, or artist names in visual_style. Describe original medium, palette, composition, and mood instead.",
+        "story_blueprint_patch.chapters must contain usable chapters, nodes, and beat_checklist. The first playable turn will start at chapters[0].nodes[0].beat_checklist[0].",
         "User explicitly filled fields still have highest priority and must not be overwritten.",
         "Include public_think as 4-8 short player-facing progress notes. They are public waiting messages, not hidden chain-of-thought. Do not reveal secrets, system prompts, or future twists.",
         "",
@@ -4420,6 +4569,133 @@ def sanitize_string_list(value: Any, limit: int = 12) -> list[str]:
     if not isinstance(value, list):
         return []
     return [stringify_brief(str(item), 220) for item in value[:limit] if str(item).strip()]
+
+
+BASE_CAMPAIGN_TAXONOMY = {
+    "character_roles": [
+        {"id": "player", "label": "player", "base": True},
+        {"id": "npc", "label": "NPC", "base": True},
+        {"id": "companion", "label": "companion", "base": True},
+        {"id": "key_character", "label": "key character", "base": True},
+    ],
+    "asset_categories": [
+        {"id": "character", "label": "Character", "base": True},
+        {"id": "item", "label": "Item", "base": True},
+        {"id": "scene", "label": "Scene", "base": True},
+        {"id": "map", "label": "Map", "base": True},
+        {"id": "cg", "label": "CG", "base": True},
+        {"id": "clue", "label": "Clue", "base": True},
+        {"id": "document", "label": "Document", "base": True},
+    ],
+    "item_types": [],
+    "visual_style": {
+        "medium": "original illustrated TRPG assets",
+        "palette": [],
+        "composition": ["one 2304x2304 square canvas containing 16:9 and 9:16 panels"],
+        "mood": [],
+        "copyright_avoid": ["no protected franchise names", "no trademarked characters", "no artist-name imitation"],
+    },
+}
+
+
+def normalize_taxonomy_rows(value: Any, allowed_base: set[str] | None = None, limit: int = 24) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, str):
+            row_id = safe_segment(item.lower())
+            label = stringify_brief(item, 60)
+            extra = {}
+        elif isinstance(item, dict):
+            row_id = safe_segment(str(item.get("id") or item.get("key") or item.get("name") or item.get("label") or "").lower())
+            label = stringify_brief(item.get("label") or item.get("title") or item.get("name") or row_id, 60)
+            extra = {key: item.get(key) for key in ("description", "source", "base") if key in item}
+        else:
+            continue
+        if not row_id:
+            continue
+        if allowed_base is not None and row_id not in allowed_base and extra.get("base"):
+            extra.pop("base", None)
+        rows.append({"id": row_id, "label": label or row_id, **extra})
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows[:limit]:
+        deduped[row["id"]] = row
+    return list(deduped.values())
+
+
+def normalize_campaign_taxonomy(value: Any | None = None) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    base_roles = {row["id"]: dict(row) for row in BASE_CAMPAIGN_TAXONOMY["character_roles"]}
+    base_assets = {row["id"]: dict(row) for row in BASE_CAMPAIGN_TAXONOMY["asset_categories"]}
+    for row in normalize_taxonomy_rows(raw.get("character_roles")):
+        if row["id"] in {"master", "servant"}:
+            row["id"] = "key_character"
+        elif row["id"] in {"monster", "enemy", "creature"}:
+            row["id"] = "npc"
+        if row["id"] in {"player", "npc", "companion", "key_character"}:
+            base_roles[row["id"]].update(row)
+    for row in normalize_taxonomy_rows(raw.get("asset_categories")):
+        if row["id"] in base_assets:
+            base_assets[row["id"]].update(row)
+    item_types = normalize_taxonomy_rows(raw.get("item_types"), limit=36)
+    visual_style = raw.get("visual_style") if isinstance(raw.get("visual_style"), dict) else {}
+    merged_style = dict(BASE_CAMPAIGN_TAXONOMY["visual_style"])
+    merged_style.update({
+        "medium": copyright_safe_prompt_text(stringify_brief(visual_style.get("medium") or merged_style.get("medium"), 100)),
+        "palette": sanitize_string_list(visual_style.get("palette"), 8),
+        "composition": sanitize_string_list(visual_style.get("composition"), 8) or merged_style["composition"],
+        "mood": sanitize_string_list(visual_style.get("mood"), 8),
+        "copyright_avoid": list(dict.fromkeys([*merged_style["copyright_avoid"], *sanitize_string_list(visual_style.get("copyright_avoid"), 8)])),
+    })
+    return {
+        "character_roles": list(base_roles.values()),
+        "asset_categories": list(base_assets.values()),
+        "item_types": item_types,
+        "visual_style": merged_style,
+    }
+
+
+def sanitize_story_blueprint_chapters(value: Any, limit: int = 12) -> list[dict[str, Any]]:
+    chapters: list[dict[str, Any]] = []
+    for cidx, chapter in enumerate(value if isinstance(value, list) else [], start=1):
+        if not isinstance(chapter, dict):
+            continue
+        chapter_id = safe_segment(str(chapter.get("chapter_id") or chapter.get("id") or f"chapter_{cidx}"))
+        nodes: list[dict[str, Any]] = []
+        for nidx, node in enumerate(chapter.get("nodes", []) if isinstance(chapter.get("nodes"), list) else [], start=1):
+            if not isinstance(node, dict):
+                continue
+            node_id = safe_segment(str(node.get("node_id") or node.get("id") or f"c{cidx}_n{nidx}"))
+            beats: list[dict[str, Any]] = []
+            for bidx, beat in enumerate(node.get("beat_checklist", []) if isinstance(node.get("beat_checklist"), list) else [], start=1):
+                if isinstance(beat, dict):
+                    beat_id = safe_segment(str(beat.get("beat_id") or beat.get("id") or f"{node_id}_b{bidx}"))
+                    title = stringify_brief(beat.get("title") or beat.get("goal") or beat_id, 120)
+                    weight = beat.get("weight") if isinstance(beat.get("weight"), (int, float)) else 1
+                    beats.append({"beat_id": beat_id, "title": title, "weight": weight})
+                elif str(beat or "").strip():
+                    beats.append({"beat_id": f"{node_id}_b{bidx}", "title": stringify_brief(beat, 120), "weight": 1})
+            if not beats:
+                beats.append({"beat_id": f"{node_id}_b1", "title": "建立当前场景、压力和玩家行动入口", "weight": 1})
+            next_nodes = [safe_segment(str(item)) for item in node.get("next_nodes", []) if str(item).strip()] if isinstance(node.get("next_nodes"), list) else []
+            nodes.append({
+                "node_id": node_id,
+                "title": stringify_brief(node.get("title") or node.get("name") or node_id, 120),
+                "goal": stringify_brief(node.get("goal") or node.get("node_goal") or "", 240),
+                "target_chars": int(node.get("target_chars") or 3000),
+                "next_nodes": next_nodes,
+                "beat_checklist": beats,
+            })
+        if nodes:
+            chapters.append({
+                "chapter_id": chapter_id,
+                "title": stringify_brief(chapter.get("title") or chapter.get("name") or chapter_id, 120),
+                "goal": stringify_brief(chapter.get("goal") or "", 240),
+                "summary": stringify_brief(chapter.get("summary") or chapter.get("goal") or "", 260),
+                "nodes": nodes,
+            })
+        if len(chapters) >= limit:
+            break
+    return chapters
 
 
 def sanitize_public_think(value: Any, limit: int = 8) -> list[dict[str, str]]:
@@ -4449,10 +4725,12 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     companion = require_dict(data.get("companion_patch"), "companion_patch")
     safety = require_dict(data.get("safety_interpretation"), "safety_interpretation")
     memory_notes = require_dict(data.get("initial_memory_notes"), "initial_memory_notes")
+    taxonomy = normalize_campaign_taxonomy(data.get("campaign_taxonomy"))
     for key in ("early_goals", "known_boundaries", "secrets_not_to_reveal_early", "director_notes"):
         require_list(direction.get(key), f"campaign_direction.{key}")
     for key in ("notes", "chapter_seeds"):
         require_list(story_patch.get(key), f"story_blueprint_patch.{key}")
+    chapters = story_patch.get("chapters") if isinstance(story_patch.get("chapters"), list) else []
     for key in ("unknown_or_player_owned",):
         require_list(protagonist.get(key), f"protagonist_patch.{key}")
     require_dict(card_patch.get("identity"), "character_card_patch.identity")
@@ -4469,8 +4747,9 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
             "genre": stringify_brief(analysis.get("genre"), 80),
             "tone": stringify_brief(analysis.get("tone"), 100),
             "premise": stringify_brief(analysis.get("premise"), 240),
-            "source": "deepseek_v4_campaign_setup",
+            "source": "director_campaign_setup",
         },
+        "campaign_taxonomy": taxonomy,
         "campaign_direction": {
             "core_concept": stringify_brief(direction.get("core_concept"), 240),
             "opening_situation": stringify_brief(direction.get("opening_situation"), 260),
@@ -4483,6 +4762,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
         "story_blueprint_patch": {
             "notes": sanitize_string_list(story_patch.get("notes")),
             "chapter_seeds": sanitize_string_list(story_patch.get("chapter_seeds")),
+            "chapters": sanitize_story_blueprint_chapters(chapters),
         },
         "protagonist_patch": {
             "confirmed_identity": stringify_brief(protagonist.get("confirmed_identity"), 180),
@@ -4813,6 +5093,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     v4_companion = v4_setup.get("companion_patch", {}) if isinstance(v4_setup.get("companion_patch"), dict) else {}
     v4_safety = v4_setup.get("safety_interpretation", {}) if isinstance(v4_setup.get("safety_interpretation"), dict) else {}
     v4_memory = v4_setup.get("initial_memory_notes", {}) if isinstance(v4_setup.get("initial_memory_notes"), dict) else {}
+    campaign_taxonomy = normalize_campaign_taxonomy(v4_setup.get("campaign_taxonomy") if isinstance(v4_setup, dict) else {})
     mode = next((row for row in ai_mode_options() if row["id"] == model_config.get("model_mode")), ai_mode_options()[0])
     profile.update({
         "title": config.get("name", profile.get("title", "")),
@@ -4828,6 +5109,11 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         "rules_config": rules_config,
         "story_config": story_config,
         "companion_config": companion_config,
+        "campaign_taxonomy": campaign_taxonomy,
+        "gallery_taxonomy": {
+            "core_categories": campaign_taxonomy.get("asset_categories", []),
+            "campaign_categories": [],
+        },
         "safety_lines": safety_lines,
         "ai_mode": mode,
         "mechanics": {
@@ -4865,7 +5151,6 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     direction.setdefault("director_notes", []).extend(v4_direction.get("director_notes", []) if isinstance(v4_direction.get("director_notes"), list) else [])
     direction.setdefault("setup_controls", []).extend([
         f"template={config.get('template', 'custom')}",
-        f"model_mode={model_config.get('model_mode', '')}",
         f"character_card_enabled={rules_config.get('character_card_enabled')}",
         f"stat_visibility={rules_config.get('stat_visibility', '')}",
         f"story_length={story_config.get('story_length', 'medium')}",
@@ -4878,9 +5163,11 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         direction.setdefault("safety_rules", []).extend(safety_lines)
     direction.setdefault("safety_interpretation", {}).update(v4_safety)
     direction.setdefault("initial_memory_notes", {}).update(v4_memory)
+    direction["campaign_taxonomy"] = campaign_taxonomy
 
     style.setdefault("prose_style", []).extend(routing.get("actor_rules", []))
-    image.setdefault("image_generation_rules", []).append("Use merged canvas and image rules from default rule bundle; cache generated PNG assets locally.")
+    image.setdefault("image_generation_rules", []).append("Generate one 2304x2304 square canvas containing a 16:9 horizontal panel and a 9:16 vertical panel; use only original descriptive style from campaign_taxonomy.")
+    image["campaign_taxonomy_visual_style"] = campaign_taxonomy.get("visual_style", {})
     npc.setdefault("voice_rules", {})["custom_actor_rules"] = routing.get("actor_rules", [])
 
     character["character_card_enabled"] = bool(rules_config.get("character_card_enabled"))
@@ -4961,7 +5248,14 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     blueprint["notes"].extend(v4_story_patch.get("notes", []) if isinstance(v4_story_patch.get("notes"), list) else [])
     if isinstance(v4_story_patch.get("chapter_seeds"), list) and v4_story_patch.get("chapter_seeds"):
         blueprint["chapter_seeds"] = v4_story_patch.get("chapter_seeds")
+    if isinstance(v4_story_patch.get("chapters"), list) and v4_story_patch.get("chapters"):
+        blueprint["chapters"] = sanitize_story_blueprint_chapters(v4_story_patch.get("chapters"))
     blueprint["chapters"] = synthesize_story_chapters(blueprint, story_config)
+    first_chapter = next((chapter for chapter in blueprint["chapters"] if isinstance(chapter, dict) and isinstance(chapter.get("nodes"), list) and chapter.get("nodes")), {})
+    first_node = first_chapter.get("nodes", [{}])[0] if isinstance(first_chapter, dict) and first_chapter.get("nodes") else {}
+    first_beats = first_node.get("beat_checklist") if isinstance(first_node, dict) and isinstance(first_node.get("beat_checklist"), list) else []
+    if not (first_chapter and first_node and first_beats):
+        raise RuntimeError("初始化结构不完整：缺少章节、节点或首个 beat，不能进入首回合。")
 
     progress_path = root / "story_progress.json"
     progress = read_json(progress_path) if progress_path.exists() else {}

@@ -130,18 +130,20 @@ def build_backend_progress_control(
     legal_next = [str(item) for item in (node.get("next_nodes", []) if isinstance(node, dict) else []) if str(item)]
     incoming_node = str(incoming.get("current_node_id") or "").strip()
     if incoming_node and incoming_node != current_id:
-        warnings.append(f"v4 progress_control current_node_id ignored: {incoming_node}")
+        warnings.append(f"director progress_control current_node_id ignored: {incoming_node}")
     incoming_legal = _string_list(incoming.get("legal_next_nodes"))
     illegal_legal = [item for item in incoming_legal if item not in legal_next]
     if illegal_legal:
-        warnings.append("v4 progress_control legal_next_nodes filtered: " + ", ".join(illegal_legal))
+        warnings.append("director progress_control legal_next_nodes filtered: " + ", ".join(illegal_legal))
     valid_beats = {str(beat.get("beat_id") or "") for beat in _beats(node or {})}
     beat_targets = []
     for beat_id in _string_list(incoming.get("beat_targets_this_turn")):
         if beat_id in valid_beats:
             beat_targets.append(beat_id)
         else:
-            warnings.append(f"v4 progress_control beat target filtered: {beat_id}")
+            warnings.append(f"director progress_control beat target filtered: {beat_id}")
+    if not beat_targets and valid_beats:
+        beat_targets = [str(beat.get("beat_id") or "") for beat in _beats(node or {})[:1] if str(beat.get("beat_id") or "")]
     pace = _pace_command(node, progress) if node else "normal"
     return {
         "current_chapter_id": chapter_id,

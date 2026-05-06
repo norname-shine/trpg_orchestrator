@@ -22,12 +22,12 @@ If the user asks for image generation, prose must still follow the current campa
 ## Portrait Feedback From Final Images
 
 - A newly introduced character may initially use a local Canvas portrait. This is only a temporary UI image.
-- When a formal image-generation pass produces a complete scene image and that image contains existing player characters, NPCs, companions, servants, monsters, or key characters, the runtime should treat the generated image as the visual source of truth.
-- The runtime should identify each character region in the complete image, crop an avatar or bust crop for each recognized character, and replace the matching player, NPC, companion/servant, or monster portrait slot.
+- When a formal image-generation pass produces a complete scene image and that image contains existing player characters, NPCs, companions, or key characters, the runtime should treat the generated image as the visual source of truth.
+- The runtime should identify each character region in the complete image, crop an avatar or bust crop for each recognized character, and replace the matching player, NPC, companion, or key character portrait slot.
 - In multi-character scene images, do not overwrite those character portraits with default Canvas drawing logic. Canvas remains a fallback only when no formal generated image is available.
-- After cropping, persist each character's visual traits, style mood, face shape, facial feature style, clothing tone, and reusable visual anchors into that character's dedicated player/NPC/companion/monster configuration.
+- After cropping, persist each character's visual traits, style mood, face shape, facial feature style, clothing tone, and reusable visual anchors into that character's dedicated player/NPC/companion/key-character configuration.
 - Later avatar, portrait, half-body, or full-body generation for the same character should automatically reuse the saved traits to keep face, style, mood, and clothing flavor consistent.
-- This rule must work across wasteland, Monster Hunter, Fate, COC, DND, and original campaigns without hard-coding one campaign type.
+- This rule must work across campaign types without hard-coding one game or setting type.
 
 ## Dual Device Composition Preview Template
 
@@ -39,3 +39,11 @@ If the user asks for image generation, prose must still follow the current campa
 - When caching this result, the runtime uses the left 16:9 PC crop as the default story CG and also caches the right 9:16 mobile crop.
 
 Image trigger, map update, local Canvas drawing, asset caching, and gallery rendering are external control/runtime operations. Do not decide them in prose.
+
+## Current Image Specification
+
+- Image generation must use one 2304x2304 square canvas.
+- The square canvas must contain two sub-compositions: one 16:9 horizontal panel and one 9:16 vertical panel.
+- New image requests may only use 16:9 and 9:16 ratio semantics. Do not request 1:1, 3:4, 4:3, 1024x1024, or 1280x720 outputs.
+- The director layer should provide concrete style prompts from this campaign's visual style. For animation or game-flavored campaigns, preserve general flavor through original medium, color, composition, and mood descriptions.
+- Avoid copyrighted character names, franchise names, trademarks, artist names, or directly imitative style labels. Use original descriptive wording.

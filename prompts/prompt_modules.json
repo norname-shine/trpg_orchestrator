@@ -1,77 +1,139 @@
 {
-  "base_contract": {
-    "path": "model_layer_contract_rules.md",
-    "always": true,
-    "layers": ["director", "actor", "audit"]
-  },
   "v4_director_core": {
     "path": "v4_director_prompt.md",
     "always": true,
-    "layers": ["director"]
+    "layers": [
+      "director"
+    ]
   },
   "chatgpt_host_core": {
     "path": "chatgpt_host_prompt.md",
     "always": true,
-    "layers": ["actor"]
+    "layers": [
+      "actor"
+    ]
   },
   "lazy_context_rules": {
     "path": "lazy_context_rules.md",
     "always": true,
-    "layers": ["director", "actor", "audit"]
+    "layers": [
+      "director",
+      "actor",
+      "audit"
+    ]
   },
   "output_contract_rules": {
     "path": "output_contract_rules.md",
     "always": true,
-    "layers": ["director", "actor", "audit"]
+    "layers": [
+      "director",
+      "actor",
+      "audit"
+    ]
   },
   "v4_campaign_context": {
     "path": "v4_campaign_context_prompt.md",
-    "layers": ["director"],
-    "triggers": ["base_director"]
+    "layers": [
+      "director"
+    ],
+    "triggers": [
+      "base_director"
+    ]
   },
   "style_core": {
     "path": "chatgpt_style_rules.md",
-    "layers": ["actor"],
-    "triggers": ["base_actor", "always_actor"]
+    "layers": [
+      "actor"
+    ],
+    "triggers": [
+      "base_actor",
+      "always_actor"
+    ]
   },
   "image_rules": {
     "path": "chatgpt_image_rules.md",
-    "layers": ["actor"],
-    "triggers": ["user_requested_image", "director_requested_visual_asset", "visual_assets"]
+    "layers": [
+      "actor"
+    ],
+    "triggers": [
+      "user_requested_image",
+      "director_requested_visual_asset",
+      "visual_assets"
+    ]
   },
   "map_rules": {
     "path": "chatgpt_map_rules.md",
-    "layers": ["actor", "director"],
-    "triggers": ["user_requested_map", "director_requested_map_update", "map"]
-  },
-  "monster_rules": {
-    "path": "chatgpt_monster_rules.md",
-    "layers": ["actor"],
-    "triggers": ["monster_present", "monster_first_reveal", "monster_combat", "enemy_or_mystery"]
+    "layers": [
+      "actor",
+      "director"
+    ],
+    "triggers": [
+      "user_requested_map",
+      "director_requested_map_update",
+      "map"
+    ]
   },
   "npc_voice_rules": {
     "path": "chatgpt_npc_voice_rules.md",
-    "layers": ["actor"],
-    "triggers": ["npc_present", "dialogue_expected", "npc_voice"]
+    "layers": [
+      "actor"
+    ],
+    "triggers": [
+      "npc_present",
+      "dialogue_expected",
+      "npc_voice"
+    ]
   },
   "character_card_rules": {
     "path": "character_card_json_rules.md",
-    "layers": ["actor"],
-    "triggers": ["character_card_update", "frontend_character_render", "character_card"]
+    "layers": [
+      "actor"
+    ],
+    "triggers": [
+      "character_card_update",
+      "frontend_character_render",
+      "character_card"
+    ]
   },
   "dice_rules": {
     "path": "dice_check_rules.md",
-    "layers": ["actor", "director"],
-    "triggers": ["dice_check_requested", "campaign_uses_dice", "dice_possible"]
+    "layers": [
+      "actor",
+      "director"
+    ],
+    "triggers": [
+      "dice_check_requested",
+      "campaign_uses_dice",
+      "dice_possible"
+    ]
   },
   "inventory_rules": {
     "path": "inventory_rules.md",
-    "layers": ["actor", "director"],
-    "triggers": ["inventory_update", "equipment_changed", "item_used", "item_gained", "item_lost", "inventory"]
+    "layers": [
+      "actor",
+      "director"
+    ],
+    "triggers": [
+      "inventory_update",
+      "equipment_changed",
+      "item_used",
+      "item_gained",
+      "item_lost",
+      "inventory"
+    ]
   },
   "dossier_rules": {
     "path": "dossier_rules.md",
-    "layers": ["actor", "director"],
-    "triggers": ["clue_found", "npc_revealed", "document_found", "location_recorded", "dossier"]
+    "layers": [
+      "actor",
+      "director"
+    ],
+    "triggers": [
+      "clue_found",
+      "npc_revealed",
+      "document_found",
+      "location_recorded",
+      "dossier"
+    ]
   }
 }

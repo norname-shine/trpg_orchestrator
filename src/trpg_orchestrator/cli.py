@@ -23,6 +23,7 @@ from .output_parser import parse_chatgpt_output, public_output, visible_prose_ch
 from .output_contract import summarize_payload_keys
 from .payload_fulfillment import build_payload_fulfillment_input, defer_unfulfilled_requests, diff_requested_capabilities, finalize_capability_plan, merge_payload_patch, skipped_payload_patch
 from .prompt_builder import build_audit_user_prompt, build_chatgpt_image_input, build_chatgpt_input, build_director_user_prompt, build_v4_light_action_user_prompt, read_prompt, selected_memory_debug, selected_prompt_modules_debug
+from .prompt_sync import prompt_sync_report
 from .rewrite_manager import build_chatgpt_rewrite_input, build_v4_rewrite_user_prompt
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_chatgpt_blocks, validate_payload_patch, validate_pressure_pack, validate_writeback
 from .story_progress import build_backend_progress_control, validate_story_blueprint
@@ -66,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     sub.add_parser("validate-memory")
     sub.add_parser("validate-encoding")
+    sync_prompts = sub.add_parser("sync-prompts")
+    sync_mode = sync_prompts.add_mutually_exclusive_group(required=True)
+    sync_mode.add_argument("--check", action="store_true")
+    sync_mode.add_argument("--apply", action="store_true")
     sub.add_parser("migrate-memory")
     sub.add_parser("rewrite-plan")
     sub.add_parser("memory-report")
@@ -129,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_validate_memory()
         if args.command == "validate-encoding":
             return cmd_validate_encoding()
+        if args.command == "sync-prompts":
+            return cmd_sync_prompts(args.apply)
         if args.command == "migrate-memory":
             return cmd_migrate_memory()
         if args.command == "rewrite-plan":
@@ -178,6 +185,12 @@ def cmd_status() -> int:
     for campaign_id, meta in campaigns.items():
         print(f"- {campaign_id}: {meta.get('name', '')} [{meta.get('status', '')}]")
     return 0
+
+
+def cmd_sync_prompts(apply: bool = False) -> int:
+    report = prompt_sync_report(apply=apply)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report.get("ok") else 1
 
 
 def cmd_init_campaign(campaign_id: str, name: str) -> int:
@@ -358,7 +371,7 @@ def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: boo
     })
     write_json(outbox_dir / "state_writeback.json", writeback)
     if skip_v4_audit:
-        audit_result = {"decision": "accept", "reason": "V4 light action direct path", "approved_writeback": writeback, "memory_files_to_update": [], "warnings": ["ChatGPT actor layer skipped for fixed light action"]}
+        audit_result = {"decision": "accept", "reason": "director light action direct path", "approved_writeback": writeback, "memory_files_to_update": [], "warnings": ["actor layer skipped for fixed light action"]}
     else:
         audit_result = extract_json_object(DeepSeekClient().complete_json(
             read_prompt("v4_audit_prompt.md"),
@@ -391,9 +404,9 @@ def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: boo
     if touched:
         store.backup_files(resolved, touched)
         store.write_memory_updates(resolved, updates)
-    log_path = store.write_log(resolved, _log_payload(action, pressure_pack, raw_output, {"severity": "pass", "path": "v4_light_action"}, audit_result, updates, outbox_dir, capability_plan=capability_plan))
+    log_path = store.write_log(resolved, _log_payload(action, pressure_pack, raw_output, {"severity": "pass", "path": "director_light_action"}, audit_result, updates, outbox_dir, capability_plan=capability_plan))
     mirror_to_global_outbox(outbox_dir)
-    print(f"V4 light action path: {action}")
+    print(f"director light action path: {action}")
     print(f"updated files: {', '.join(touched) if touched else '(none)'}")
     print(f"log: {log_path}")
     print("\n" + public_output(parsed))
@@ -404,7 +417,7 @@ def web_client(campaign_id: str | None = None) -> ChatGPTWebClient:
     store = MemoryStore()
     resolved = store.resolve_campaign_id(campaign_id)
     memory = store.load_campaign_memory(resolved)
-    return ChatGPTWebClient(memory["campaign_profile.json"])
+    return ChatGPTWebClient(memory["campaign_profile.json"], memory)
 
 
 def cmd_send(campaign_id: str | None) -> int:
@@ -460,7 +473,7 @@ def cmd_send_image(campaign_id: str | None) -> int:
         "image_artifact_path": str(outbox_dir / "chatgpt_image_raw_output.png"),
         "image_artifact_exists": (outbox_dir / "chatgpt_image_raw_output.png").exists(),
         "asset": saved_asset,
-        "note": "Image generation completed as a separate ChatGPT pass; backend/frontend may attach the image artifact to gallery display.",
+        "note": "Image generation completed as a separate actor image pass; backend/frontend may attach the image artifact to gallery display.",
     })
     mirror_to_global_outbox(outbox_dir, ["chatgpt_image_input.md", "chatgpt_image_raw_output.md", "chatgpt_image_raw_output.png", "image_job.json"])
     print(f"sent image pass and captured {outbox_dir / 'chatgpt_image_raw_output.md'}")
@@ -772,9 +785,9 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     decision = audit_result.get("decision")
     if decision == "reject":
         store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, {}, outbox_dir, capability_plan=capability_plan))
-        raise RuntimeError(f"V4 rejected writeback: {audit_result.get('reason', '')}")
+        raise RuntimeError(f"Director rejected writeback: {audit_result.get('reason', '')}")
     if decision not in {"accept", "revise"}:
-        raise RuntimeError(f"invalid V4 audit decision: {decision}")
+        raise RuntimeError(f"invalid director audit decision: {decision}")
 
     approved = audit_result.get("approved_writeback") or parsed.writeback
     validate_writeback(approved)
@@ -881,7 +894,7 @@ def cmd_audit_writeback(campaign_id: str | None) -> int:
     validate_audit_result(audit_result)
     write_json(outbox_dir / "v4_audit_result.json", audit_result)
     mirror_to_global_outbox(outbox_dir, ["pressure_pack.json", "state_writeback.json", "v4_audit_result.json"])
-    print(f"V4 audit decision: {audit_result.get('decision')}")
+    print(f"director audit decision: {audit_result.get('decision')}")
     print(audit_result.get("reason", ""))
     return 0
 
@@ -1137,7 +1150,7 @@ def _offline_pressure_pack(campaign_id: str, action: str, memory: dict) -> dict:
         "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
         "map_canvas": {"canvas": {}, "legend": {}, "ascii": [], "points": [], "routes": [], "hazards": []},
         "story_topology": {"nodes": [], "edges": [], "fixed_fields": {}},
-        "human_readable_note": "offline development placeholder pressure pack; use DeepSeek V4 for formal play.",
+        "human_readable_note": "offline development placeholder pressure pack; use director layer for formal play.",
     }
 
 
@@ -1146,7 +1159,7 @@ def _light_action_pressure_pack(campaign_id: str, action: str) -> dict:
         "campaign_id": campaign_id,
         "turn_type": "light_action",
         "creation_mode": {
-            "label": "v4-direct",
+            "label": "director-direct",
             "director_only": True,
             "actor_layer_skipped": True,
             "reason": "fixed lightweight operation",
@@ -1154,7 +1167,7 @@ def _light_action_pressure_pack(campaign_id: str, action: str) -> dict:
         "current_situation": {
             "player_action": action,
             "mode": "fixed_light_action",
-            "immediate_context": "Return concise operational information without ChatGPT actor-layer expansion.",
+            "immediate_context": "Return concise operational information without actor-layer expansion.",
         },
         "pressure_pack": {
             "core_accident_or_change": "",
@@ -1186,7 +1199,7 @@ def _light_action_pressure_pack(campaign_id: str, action: str) -> dict:
         "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
         "map_canvas": {"canvas": {}, "legend": {}, "ascii": [], "points": [], "routes": [], "hazards": []},
         "story_topology": {"nodes": [], "edges": [], "fixed_fields": {}},
-        "human_readable_note": "V4 light action direct path; ChatGPT actor layer skipped.",
+        "human_readable_note": "Director light action direct path; actor layer skipped.",
     }
 
 

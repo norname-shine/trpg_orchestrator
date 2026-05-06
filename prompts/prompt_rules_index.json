@@ -1,0 +1,42 @@
+{
+  "schema": "trpg_orchestrator.prompt_rules_index.v1",
+  "description": "Machine-readable prompt rule index. Keep synchronized with prompt_rules_index.md and prompt_rules_index_CN.md.",
+  "layers": {
+    "director": [
+      { "file": "v4_director_prompt.md", "cn_file": "v4_director_prompt_CN.md", "runtime_injected": true, "purpose": "Director pressure-pack contract and macro turn decisions." },
+      { "file": "v4_campaign_context_prompt.md", "cn_file": "v4_campaign_context_prompt_CN.md", "runtime_injected": true, "purpose": "Long-term director context rules." },
+      { "file": "v4_payload_fulfillment_prompt.md", "cn_file": "v4_payload_fulfillment_prompt_CN.md", "runtime_injected": true, "purpose": "Director payload fulfillment pass." },
+      { "file": "v4_light_action_rules.md", "cn_file": "v4_light_action_rules_CN.md", "runtime_injected": true, "purpose": "Lightweight director-direct action output." },
+      { "file": "visual_asset_protocol.md", "cn_file": "visual_asset_protocol_CN.md", "runtime_injected": true, "purpose": "Semantic visual and map payload contract." },
+      { "file": "dice_check_rules.md", "cn_file": "dice_check_rules_CN.md", "runtime_injected": true, "purpose": "Dice checks when campaign mechanics need them." },
+      { "file": "inventory_rules.md", "cn_file": "inventory_rules_CN.md", "runtime_injected": true, "purpose": "Structured inventory update rules." },
+      { "file": "dossier_rules.md", "cn_file": "dossier_rules_CN.md", "runtime_injected": true, "purpose": "Clue and dossier update rules." }
+    ],
+    "actor": [
+      { "file": "chatgpt_host_prompt.md", "cn_file": "chatgpt_host_prompt_CN.md", "runtime_injected": true, "purpose": "Actor JSON output and story block contract." },
+      { "file": "chatgpt_style_rules.md", "cn_file": "chatgpt_style_rules_CN.md", "runtime_injected": true, "purpose": "Prose performance style." },
+      { "file": "chatgpt_npc_voice_rules.md", "cn_file": "chatgpt_npc_voice_rules_CN.md", "runtime_injected": true, "purpose": "NPC dialogue performance." },
+      { "file": "chatgpt_image_rules.md", "cn_file": "chatgpt_image_rules_CN.md", "runtime_injected": true, "purpose": "Actor-side image boundary rules." },
+      { "file": "chatgpt_map_rules.md", "cn_file": "chatgpt_map_rules_CN.md", "runtime_injected": true, "purpose": "Player-visible map narration boundary." },
+      { "file": "character_card_json_rules.md", "cn_file": "character_card_json_rules_CN.md", "runtime_injected": true, "purpose": "Character-card writeback rules." }
+    ],
+    "backend": [
+      { "file": "codex_system_architecture_rules.md", "cn_file": "codex_system_architecture_rules_CN.md", "runtime_injected": false, "purpose": "Local backend architecture." },
+      { "file": "codex_computer_use_prompt.md", "cn_file": "codex_computer_use_prompt_CN.md", "runtime_injected": false, "purpose": "Browser automation boundary." },
+      { "file": "encoding_rules.md", "cn_file": "encoding_rules_CN.md", "runtime_injected": false, "purpose": "Encoding and bilingual prompt policy." },
+      { "file": "campaign_data_lifecycle_rules.md", "cn_file": "campaign_data_lifecycle_rules_CN.md", "runtime_injected": false, "purpose": "Campaign-scoped persistence lifecycle." },
+      { "file": "frontend_interaction_rules.md", "cn_file": "frontend_interaction_rules_CN.md", "runtime_injected": false, "purpose": "Frontend display and interaction rules." },
+      { "file": "asset_cache_lifecycle_rules.md", "cn_file": "asset_cache_lifecycle_rules_CN.md", "runtime_injected": false, "purpose": "Asset cache lifecycle safety." },
+      { "file": "canvas_asset_generation_rules.md", "cn_file": "canvas_asset_generation_rules_CN.md", "runtime_injected": false, "purpose": "Local Canvas asset generation." },
+      { "file": "ai_flavor_check_rules.md", "cn_file": "ai_flavor_check_rules_CN.md", "runtime_injected": false, "purpose": "Local output QA and rewrite triggers." }
+    ],
+    "hotload": [
+      { "file": "prompt_modules.json", "cn_file": "", "runtime_injected": true, "purpose": "Prompt module layer and trigger registry." },
+      { "file": "lazy_context_rules.md", "cn_file": "lazy_context_rules_CN.md", "runtime_injected": true, "purpose": "Capability-based prompt and memory loading." },
+      { "file": "output_contract_rules.md", "cn_file": "output_contract_rules_CN.md", "runtime_injected": true, "purpose": "Shared output contract boundaries." },
+      { "file": "prompt_language_sync.json", "cn_file": "", "runtime_injected": false, "purpose": "Bilingual package sync baseline." },
+      { "file": "prompt_rules_index.md", "cn_file": "prompt_rules_index_CN.md", "runtime_injected": false, "purpose": "Human prompt rule index." },
+      { "file": "actor_prompt_pruned_fields.md", "cn_file": "actor_prompt_pruned_fields_CN.md", "runtime_injected": false, "purpose": "Archive of actor prompt pruned fields." }
+    ]
+  }
+}

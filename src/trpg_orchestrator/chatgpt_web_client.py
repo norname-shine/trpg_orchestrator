@@ -9,12 +9,13 @@ import sys
 import threading
 import time
 import uuid
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT, SCRIPTS_DIR
 from .env_loader import load_project_env
-from .encoding_utils import read_runtime_text
+from .encoding_utils import read_runtime_text, write_text_utf8
 from .output_parser import missing_markers
 
 
@@ -25,11 +26,27 @@ class ChatGPTWebClient:
     TRPG_CHATGPT_AUTOMATION=playwright.
     """
 
-    def __init__(self, campaign_profile: dict[str, Any]) -> None:
+    def __init__(self, campaign_profile: dict[str, Any], campaign_memory: dict[str, Any] | None = None) -> None:
         load_project_env()
+        self.campaign_profile = campaign_profile if isinstance(campaign_profile, dict) else {}
+        self.campaign_memory = campaign_memory if isinstance(campaign_memory, dict) else {}
         binding = campaign_profile.get("chatgpt_conversation_binding", {})
-        self.project_name = binding.get("project_name", "")
-        self.conversation_name = binding.get("conversation_name", "")
+        story_name = str(self.campaign_profile.get("title") or self.campaign_profile.get("name") or "").strip()
+        binding_project = str(binding.get("project_name") or "").strip()
+        binding_conversation = str(binding.get("conversation_name") or "").strip()
+        self.project_name = story_name or binding_project
+        self.conversation_name = self._conversation_title(story_name, binding_conversation)
+
+    def _conversation_title(self, story_name: str, fallback: str = "") -> str:
+        progress = self.campaign_memory.get("story_progress.json", {})
+        chapter = progress.get("current_chapter") if isinstance(progress, dict) else {}
+        if isinstance(chapter, dict):
+            title = str(chapter.get("name") or chapter.get("title") or "").strip()
+            if title:
+                return title
+        if story_name:
+            return f"{story_name} 固定对话"
+        return fallback
 
     def validate_binding(self) -> None:
         if use_browser_worker():
@@ -77,7 +94,14 @@ class ChatGPTWebClient:
         if not user_data_dir:
             raise RuntimeError("TRPG_BROWSER_USER_DATA_DIR is required when TRPG_CHATGPT_AUTOMATION=playwright.")
         if use_browser_worker() and not capture_only:
-            run_via_browser_worker(chatgpt_input_path, output_path, mode=mode)
+            run_via_browser_worker(
+                chatgpt_input_path,
+                output_path,
+                mode=mode,
+                project_name=self.project_name,
+                conversation_name=self.conversation_name,
+                campaign_id=str(self.campaign_profile.get("campaign_id") or ""),
+            )
             return
         script = SCRIPTS_DIR / "chatgpt_web_send.mjs"
         npx = shutil.which("npx.cmd") or shutil.which("npx.exe") or shutil.which("npx")
@@ -136,7 +160,7 @@ def run_playwright_streaming(command: list[str]) -> subprocess.CompletedProcess[
         cwd=str(SCRIPTS_DIR.parent),
         text=True,
         encoding="utf-8",
-        errors="replace",
+        errors="strict",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         bufsize=1,
@@ -178,7 +202,14 @@ def worker_root() -> Path:
     return Path(os.getenv("TRPG_CHATGPT_WORKER_DIR") or (PROJECT_ROOT / ".runtime" / "chatgpt_worker"))
 
 
-def run_via_browser_worker(input_path: Path, output_path: Path, mode: str = "text") -> None:
+def run_via_browser_worker(
+    input_path: Path,
+    output_path: Path,
+    mode: str = "text",
+    project_name: str = "",
+    conversation_name: str = "",
+    campaign_id: str = "",
+) -> None:
     root = worker_root()
     tasks = root / "tasks"
     tasks.mkdir(parents=True, exist_ok=True)
@@ -193,9 +224,13 @@ def run_via_browser_worker(input_path: Path, output_path: Path, mode: str = "tex
         "output_path": str(output_path),
         "mode": mode,
         "capture_only": False,
+        "project_name": project_name,
+        "conversation_name": conversation_name,
+        "auto_create": True,
+        "campaign_id": campaign_id,
         "created_at": time.time(),
     }
-    task_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_utf8(task_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     deadline = time.time() + float(os.getenv("TRPG_CHATGPT_WORKER_TIMEOUT", "900"))
     last_status = ""
     while time.time() < deadline:
@@ -209,11 +244,28 @@ def run_via_browser_worker(input_path: Path, output_path: Path, mode: str = "tex
                 return
             if state == "failed":
                 raise RuntimeError(str(status.get("error") or "ChatGPT browser worker failed."))
+            updated_at = float(status.get("updated_at") or 0) / 1000
+            stale_seconds = time.time() - updated_at if updated_at else 0
+            if stale_seconds > 45 and not worker_alive(root):
+                reset_worker_task(task_path, task_id)
+                ensure_browser_worker(root)
             last_status = json.dumps(status, ensure_ascii=False)
         elif not worker_alive(root):
+            reset_worker_task(task_path, task_id)
             ensure_browser_worker(root)
         time.sleep(0.8)
     raise RuntimeError(f"ChatGPT browser worker timed out. Last status: {last_status}")
+
+
+def reset_worker_task(task_path: Path, task_id: str) -> None:
+    data = read_worker_status(task_path)
+    if not data or str(data.get("id") or "") != task_id:
+        return
+    if str(data.get("state") or "") in {"complete", "failed"}:
+        return
+    data["state"] = "pending"
+    data["requeued_at"] = time.time()
+    write_text_utf8(task_path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
 def ensure_browser_worker(root: Path) -> None:
@@ -251,6 +303,8 @@ def worker_alive(root: Path) -> bool:
     updated_at = float(status.get("updated_at") or 0) / 1000
     if not pid or (updated_at and time.time() - updated_at > 120):
         return False
+    if not cdp_alive(str(status.get("cdp_url") or os.getenv("TRPG_BROWSER_CDP_URL") or "http://127.0.0.1:9222")):
+        return False
     if os.name == "nt":
         return windows_pid_alive(pid)
     try:
@@ -276,9 +330,17 @@ def windows_pid_alive(pid: int) -> bool:
     return f'"{pid}"' in output or f",{pid}," in output or f" {pid} " in output
 
 
+def cdp_alive(cdp_url: str) -> bool:
+    try:
+        with urllib.request.urlopen(cdp_url.rstrip("/") + "/json/version", timeout=3) as response:
+            return 200 <= int(getattr(response, "status", 0) or 0) < 300
+    except Exception:
+        return False
+
+
 def read_worker_status(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(read_runtime_text(path))
     except Exception:
         return {}
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from typing import Any
 
 from .output_contract import is_optional_writeback_authorized
@@ -180,10 +181,66 @@ def apply_inventory_writeback(memory: dict[str, Any], payload: Any, updates: dic
     if payload in (None, "", [], {}):
         return
     target = deepcopy(updates.get("equipment_history.json") or memory.get("equipment_history.json", {}))
-    target.setdefault("equipment_updates", [])
+    target.setdefault("inventory_updates", [])
     for item in as_list(payload):
-        append_unique(target, "equipment_updates", make_entry("optional_inventory_update", item))
+        normalized = normalize_inventory_update_item(item)
+        if normalized:
+            append_plain_unique(target["inventory_updates"], normalized)
     updates["equipment_history.json"] = target
+
+
+def _brief(value: Any, limit: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:limit].rstrip()
+
+
+def _safe_id(value: Any) -> str:
+    text = re.sub(r"[^0-9a-zA-Z_\-\u4e00-\u9fff]+", "_", str(value or "").strip().lower())
+    return text.strip("_") or "item"
+
+
+def _owner_allowed(owner: Any, owner_ref: Any = "", evidence: Any = "") -> bool:
+    owner_value = str(owner or "").strip().lower()
+    if owner_value in {"player", "companion"}:
+        return True
+    if owner_value != "party":
+        return False
+    relation_text = f"{owner_ref} {evidence}".lower()
+    return any(token in relation_text for token in ("player", "protagonist", "companion", "主角", "玩家", "伙伴", "同伴", "随身", "携带", "持有", "共用"))
+
+
+def normalize_inventory_update_item(item: Any) -> dict[str, Any]:
+    value = item.get("value") if isinstance(item, dict) and isinstance(item.get("value"), dict) else item
+    if not isinstance(value, dict):
+        return {}
+    name = _brief(value.get("name") or value.get("title"), 80)
+    item_type = _safe_id(value.get("item_type") or value.get("type") or "generic")
+    owner = str(value.get("owner") or "").strip().lower()
+    owner_ref = _brief(value.get("owner_ref") or value.get("holder"), 80)
+    evidence = _brief(value.get("source_evidence") or value.get("evidence") or value.get("short_description") or value.get("description"), 220)
+    if not name or not _owner_allowed(owner, owner_ref, evidence):
+        return {}
+    status = str(value.get("status") or "confirmed").strip().lower()
+    if status not in {"confirmed", "limited", "damaged", "uncertain"}:
+        status = "confirmed"
+    certainty = str(value.get("certainty") or "confirmed").strip().lower()
+    if certainty not in {"confirmed", "clue", "uncertain"}:
+        certainty = "confirmed"
+    return {
+        "id": _safe_id(value.get("id") or f"{owner}:{item_type}:{name}"),
+        "name": name,
+        "category": _safe_id(value.get("category") or "item"),
+        "item_type": item_type,
+        "status": status,
+        "owner": owner,
+        "owner_ref": owner_ref,
+        "short_description": _brief(value.get("short_description") or value.get("description") or evidence, 180),
+        "canvas_style": value.get("canvas_style") if isinstance(value.get("canvas_style"), dict) else {},
+        "visual_hint": value.get("visual_hint") if isinstance(value.get("visual_hint"), dict) else {},
+        "simple_prompt": _brief(value.get("simple_prompt") or value.get("prompt") or evidence, 180),
+        "certainty": certainty,
+        "source_evidence": evidence,
+    }
 
 
 def apply_dossier_writeback(memory: dict[str, Any], payload: Any, updates: dict[str, Any]) -> None:

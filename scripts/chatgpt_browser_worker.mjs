@@ -24,8 +24,8 @@ fs.mkdirSync(tasksDir, { recursive: true });
 writeWorkerStatus({ running: true, started_at: new Date().toISOString(), cdp_url: cdpUrl });
 setInterval(() => writeWorkerStatus({ running: true, heartbeat_at: new Date().toISOString(), cdp_url: cdpUrl }), 15_000);
 
-const browser = await openBrowser();
-const page = await chatgptPage(browser);
+let browser = await openBrowser();
+let page = await chatgptPage(browser);
 console.log(`TRPG browser worker ready: ${workerDir}`);
 
 while (true) {
@@ -35,16 +35,23 @@ while (true) {
     continue;
   }
   await handleTask(task).catch((err) => {
+    if (isRecoverableBrowserError(err) && !task.recovered_once) {
+      writeTaskStatus(task.id, { state: "running", stage: "browser_restarting", label: "Browser closed or disconnected; restarting", percent: 10, updated_at: Date.now() });
+      return restartBrowserSession()
+        .then(() => handleTask({ ...task, recovered_once: true }))
+        .catch((retryErr) => writeTaskStatus(task.id, { state: "failed", error: String(retryErr?.message || retryErr), updated_at: Date.now() }));
+    }
     writeTaskStatus(task.id, { state: "failed", error: String(err?.message || err), updated_at: Date.now() });
   });
 }
 
 async function handleTask(task) {
+  page = await readyChatGPTPage(task.id);
   writeTaskStatus(task.id, { state: "running", stage: "actor_waiting", label: "准备 ChatGPT 常驻浏览器", percent: 5, updated_at: Date.now() });
   await waitForHumanReady(page, task.id);
   if (!task.capture_only) {
     writeTaskStatus(task.id, { state: "running", stage: "actor_waiting", label: "打开新聊天", percent: 12, updated_at: Date.now() });
-    await openNewChat(page, task.id);
+    await openTaskConversation(page, task);
     writeTaskStatus(task.id, { state: "running", stage: "actor_waiting", label: "粘贴演员层输入", percent: 18, updated_at: Date.now() });
     const inputText = fs.readFileSync(task.input_path, "utf8");
     await fillComposer(page, inputText);
@@ -113,6 +120,54 @@ async function openBrowser() {
   }
 }
 
+async function readyChatGPTPage(taskId = "") {
+  writeTaskStatus(taskId, { state: "running", stage: "browser_checking", label: "Checking ChatGPT browser", percent: 6, updated_at: Date.now() });
+  if (!browser || (typeof browser.isConnected === "function" && !browser.isConnected())) {
+    browser = await openBrowser();
+  }
+  if (!page || page.isClosed()) {
+    page = await chatgptPage(browser);
+  }
+  return page;
+}
+
+async function restartBrowserSession() {
+  try {
+    if (typeof browser?.close === "function") await browser.close().catch(() => {});
+  } catch {}
+  browser = await openBrowser();
+  page = await chatgptPage(browser);
+}
+
+function isRecoverableBrowserError(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+  return [
+    "browser has been closed",
+    "page has been closed",
+    "target page",
+    "browser closed",
+    "browser disconnected",
+    "connect econnrefused",
+    "cdp",
+  ].some((term) => text.includes(term));
+}
+
+async function openTaskConversation(page, task) {
+  const projectName = String(task.project_name || "").trim();
+  const conversationName = String(task.conversation_name || "").trim();
+  const autoCreate = task.auto_create !== false;
+  if (projectName) {
+    writeTaskStatus(task.id, { state: "running", stage: "project_opening", label: "Opening ChatGPT project", percent: 12, updated_at: Date.now() });
+    await openProject(page, projectName, task.id, autoCreate);
+  }
+  if (conversationName) {
+    writeTaskStatus(task.id, { state: "running", stage: "conversation_opening", label: "Opening campaign conversation", percent: 15, updated_at: Date.now() });
+    await openConversation(page, conversationName, task.id, autoCreate);
+  } else {
+    await openNewChat(page, task.id);
+  }
+}
+
 async function chatgptPage(browser) {
   const context = browser.contexts()[0];
   if (!context) fail("Browser context not found.");
@@ -125,13 +180,14 @@ async function chatgptPage(browser) {
 }
 
 async function waitForHumanReady(page, taskId) {
-  const start = Date.now();
+  let start = Date.now();
   while (Date.now() - start < manualWaitMs) {
     const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
     const lower = `${page.url()}\n${bodyText}`.toLowerCase();
     if (await isComposerVisible(page)) return;
     if (needsHumanVerification(lower)) {
       writeTaskStatus(taskId, { state: "running", stage: "waiting_human_verification", needs_human_verification: true, label: "等待人工验证", percent: 20, updated_at: Date.now() });
+      start = Date.now();
       await sleep(1500);
       continue;
     }
@@ -139,6 +195,95 @@ async function waitForHumanReady(page, taskId) {
     await sleep(1000);
   }
   fail("ChatGPT page is still unavailable. Complete login or verification in the browser.");
+}
+
+async function openProject(page, name, taskId, allowCreate = false) {
+  await ensureSidebarOpen(page);
+  const candidates = [
+    page.getByText(name, { exact: true }).first(),
+    findByTextLoose(page, name),
+  ];
+  for (const candidate of candidates) {
+    if (await candidate.isVisible({ timeout: 2500 }).catch(() => false)) {
+      await candidate.click({ force: true });
+      await page.waitForTimeout(1200);
+      return;
+    }
+  }
+  if (allowCreate) {
+    writeTaskStatus(taskId, { state: "running", stage: "project_creating", label: "Creating ChatGPT project", percent: 13, updated_at: Date.now() });
+    await createProject(page, name);
+    return;
+  }
+  fail(`Project not found: ${name}`);
+}
+
+async function openConversation(page, name, taskId, allowCreate = false) {
+  await ensureSidebarOpen(page);
+  const candidates = [
+    page.getByText(name, { exact: true }).first(),
+    findByTextLoose(page, name),
+  ];
+  for (const candidate of candidates) {
+    if (await candidate.isVisible({ timeout: 2200 }).catch(() => false)) {
+      await candidate.click({ force: true });
+      await page.waitForTimeout(1200);
+      await waitForComposerReady(page, taskId);
+      return;
+    }
+  }
+  if (allowCreate) {
+    writeTaskStatus(taskId, { state: "running", stage: "conversation_creating", label: "Creating campaign conversation", percent: 16, updated_at: Date.now() });
+    await openNewChat(page, taskId);
+    return;
+  }
+  fail(`Conversation not found: ${name}`);
+}
+
+async function createProject(page, name) {
+  await ensureSidebarOpen(page);
+  const buttons = [
+    page.getByText("New project", { exact: true }),
+    page.getByText("Create project", { exact: true }),
+    page.locator("button").filter({ hasText: /New project|Create project/i }),
+    page.locator('button[aria-label*="project" i]'),
+  ];
+  for (const candidate of buttons) {
+    const first = candidate.first();
+    if (await first.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await first.click({ force: true });
+      await page.waitForTimeout(800);
+      const inputs = [
+        page.locator('input[name="name"]'),
+        page.locator('input[placeholder*="project" i]'),
+        page.locator('[role="dialog"] input').first(),
+        page.locator("input").last(),
+      ];
+      for (const input of inputs) {
+        if (await input.isVisible({ timeout: 1200 }).catch(() => false)) {
+          await input.fill(name);
+          break;
+        }
+      }
+      const createButtons = [
+        page.getByRole("button", { name: /Create|Done|Save/i }).last(),
+        page.locator('[role="dialog"] button').filter({ hasText: /Create|Done|Save/i }).last(),
+      ];
+      for (const createButton of createButtons) {
+        if (await createButton.isVisible({ timeout: 1200 }).catch(() => false)) {
+          await createButton.click({ force: true });
+          await page.waitForTimeout(1500);
+          return;
+        }
+      }
+    }
+  }
+  fail(`Project not found and automatic project creation was not available: ${name}`);
+}
+
+function findByTextLoose(page, text) {
+  const escaped = String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return page.locator(`text=/${escaped}/i`).first();
 }
 
 async function openNewChat(page, taskId) {

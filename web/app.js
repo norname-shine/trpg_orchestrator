@@ -33,6 +33,9 @@
   ruleFiles: [],
   selectedRule: "",
   frontendState: {},
+  storyProgressPayload: {},
+  storyProgressChapter: {},
+  storyProgressNode: {},
   streamingPreview: false,
   modulePayloadCache: {},
   assetSeed: "",
@@ -7333,4 +7336,3 @@ function drawBackground() {
 }
 
 init();
-

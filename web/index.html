@@ -273,6 +273,27 @@
       </button>
     </div>
   </div>
+  <div class="storyProgressOverlay hidden" id="storyProgressOverlay" aria-hidden="true">
+    <div class="storyProgressDialog" role="dialog" aria-modal="true" aria-labelledby="storyProgressDialogTitle">
+      <div class="storyProgressDialogHeader">
+        <div>
+          <h2 id="storyProgressDialogTitle">故事进度详情</h2>
+          <p id="storyProgressDialogHint">当前章节、节点目标、检查点和后续方向。</p>
+        </div>
+        <button id="closeStoryProgressOverlay" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="storyProgressDialogBody">
+        <section class="storyProgressDialogSummary">
+          <div><span>总进度</span><b id="storyProgressDialogOverall">0%</b></div>
+          <div><span>章节</span><b id="storyProgressDialogChapter">-</b></div>
+          <div><span>节点</span><b id="storyProgressDialogNode">-</b></div>
+          <div><span>节奏</span><b id="storyProgressDialogPace">normal</b></div>
+        </section>
+        <div class="storyProgressDialogTrack"><span id="storyProgressDialogBar"></span></div>
+        <section class="storyProgressDialogDetails" id="storyProgressDialogDetails"></section>
+      </div>
+    </div>
+  </div>
   <div class="galleryOverlay hidden" id="galleryOverlay" aria-hidden="true">
     <div class="galleryDialog" role="dialog" aria-modal="true" aria-labelledby="galleryDialogTitle">
       <div class="galleryDialogHeader">
@@ -351,4 +372,3 @@
   <script src="/app.js?v=20"></script>
 </body>
 </html>
-

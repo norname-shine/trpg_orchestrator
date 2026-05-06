@@ -1,14 +1,14 @@
 # TRPG Text Output Rules
 
-Turn the provided scene control pack and visible campaign records into player-facing TRPG text. Do not decide the main plot direction, hidden truth, map trigger, or image trigger. Do not self-describe your role or mention how the system is organized.
+Turn the provided scene brief and visible campaign records into player-facing TRPG text. Do not decide the main plot direction, hidden truth, map update, or image generation. Do not self-describe your role or mention how the system is organized.
 
 Do not reveal chain of thought. Internally self-check for stiff, artificial, or procedural writing; if it is obvious, rewrite once internally and output only the final JSON.
 
 ## Writing Rules
 
-- Follow the provided control pack for plot direction, NPC direction, forbidden items, choice pressure, image triggers, and map update triggers.
-- Do not privately change this turn's main direction, major twist, image trigger, or map update trigger.
-- Do not copy the control pack structure.
+- Follow the provided scene brief for plot direction, NPC direction, forbidden items, choice pressure, visual boundaries, and map boundaries.
+- Do not privately change this turn's main direction, major twist, visual boundary, or map boundary.
+- Do not copy the scene brief structure.
 - Do not write like a task flow.
 - Do not let NPCs sound like quest explainers.
 - Do not make dialogue read like slogans, quotes, or buttons.
@@ -99,8 +99,7 @@ Top-level JSON schema:
       "transition_request": {
         "type": "stay | advance | branch | skip | fail_forward | merge",
         "from_node_id": "",
-        "to_node_id": null,
-        "reason": ""
+        "to_node_id": null
       },
       "progress_evidence": [],
       "next_pace_instruction": ""
@@ -108,7 +107,6 @@ Top-level JSON schema:
     "capability_escalation_request": {
       "needed": false,
       "type": "",
-      "reason": "",
       "defer_to_next_turn": true
     }
   }
@@ -132,7 +130,7 @@ Top-level JSON schema:
 - `progress_writeback.beat_updates[*].evidence` must quote or summarize evidence already present in `blocks`.
 - Do not write `overall_progress`, `chapter_progress`, `node_progress`, `percent`, `percentage`, or `calculated_progress` anywhere in `state_writeback`.
 - Do not modify `story_blueprint`.
-- Do not invent `beat_id` or `node_id` values that are not provided by the visible story progress control.
-- Do not advance to a node that is not authorized by the director layer's `progress_control.legal_next_nodes`.
-- Do not generate optional writebacks or payload-like data unless the control pack's `output_requests` explicitly authorizes that module.
-- If extra capability is needed, use `capability_escalation_request` with `defer_to_next_turn=true` instead of creating unauthorized payloads.
+- Do not invent `beat_id` or `node_id` values that are not provided by the current story position.
+- Do not advance to a node that is not listed in the current story position's `legal_next_nodes`.
+- Do not generate optional writebacks or payload-like data unless the scene brief lists that state update as allowed.
+- If extra capability is needed, use `capability_escalation_request` with `defer_to_next_turn=true` instead of creating unauthorized structured data.

@@ -1,220 +1,311 @@
 {
   "schema": "trpg_orchestrator.prompt_language_sync.v1",
-  "updated_at": "2026-05-05T17:16:23Z",
+  "updated_at": "2026-05-06T09:22:10Z",
   "policy": "Manual bilingual sync baseline. --check fails when only one side changes after this baseline.",
   "standalone_md": [
     "rules_CN.md",
     "tasks_CN.md"
   ],
   "pairs": {
-    "actor_prompt_pruned_fields.md": {
-      "english": "actor_prompt_pruned_fields.md",
-      "chinese": "actor_prompt_pruned_fields_CN.md",
-      "english_sha256": "f91368bd6b79533d723a3fb13a673e6b638e0ce2bac3b8c15a2d595069cb8f33",
-      "chinese_sha256": "852ad68a455703634a0c23e33894679bbed95e4bb21ae14fa30340906a6de64c",
+    "Actor/INDEX.md": {
+      "english": "Actor/INDEX.md",
+      "chinese": "Actor/INDEX_CN.md",
+      "english_sha256": "a6c28d0f09943ef1a560d385d76df2c0af005009b7512f9410b0cd673520e6a8",
+      "chinese_sha256": "a1a88974ceb8e6bdcc910d5c4b2f9dd22554c438b8cffcdd58bf26421bb7b9a7",
       "last_sync_direction": "baseline"
     },
-    "ai_flavor_check_rules.md": {
-      "english": "ai_flavor_check_rules.md",
-      "chinese": "ai_flavor_check_rules_CN.md",
-      "english_sha256": "914417e7d44483a8670b3fcde5403fb5df6f5da98721b9dab313d59c192cf1bf",
-      "chinese_sha256": "642b020c58a525d72b7f03f179d59f6e459a65953ad8dc9dd06a0682dec0ea95",
+    "Actor/actor_character_evidence_rules.md": {
+      "english": "Actor/actor_character_evidence_rules.md",
+      "chinese": "Actor/actor_character_evidence_rules_CN.md",
+      "english_sha256": "d88690c9bd17e86a715bfdacdffd0ed52aa8e75539af52251ec379bf24551884",
+      "chinese_sha256": "3bf141202ea00f44b648c90e70f2cb9e1152fcf12e598916fa5a5d6abaaf80d2",
       "last_sync_direction": "baseline"
     },
-    "asset_cache_lifecycle_rules.md": {
-      "english": "asset_cache_lifecycle_rules.md",
-      "chinese": "asset_cache_lifecycle_rules_CN.md",
-      "english_sha256": "a7a64e6208ecc3b70eefe5385475ffcc537d5052a077bb3779a39eece82cefe9",
-      "chinese_sha256": "b9c322ded74eec6c8db56d4aa8465f9b96f85460a6fa5a5f638b293832e7d335",
+    "Actor/actor_context_rules.md": {
+      "english": "Actor/actor_context_rules.md",
+      "chinese": "Actor/actor_context_rules_CN.md",
+      "english_sha256": "34e28e421d9ab16c88ecc15bfbed64f9446f734cfa38362150797b7f8564170c",
+      "chinese_sha256": "a88b43c65b9e75e1d371b78663469708c94d3b68b323aafdcef2ad44a5194edf",
       "last_sync_direction": "baseline"
     },
-    "campaign_data_lifecycle_rules.md": {
-      "english": "campaign_data_lifecycle_rules.md",
-      "chinese": "campaign_data_lifecycle_rules_CN.md",
-      "english_sha256": "42cee529083acec5a666f9abf8063afb7bfe4bcdc5f47dd2ce34945a34efe9ef",
-      "chinese_sha256": "0c9b2eee44d33f5a8934125f5a48a4303e8a1917b2a3030777fe878f4d03a52b",
+    "Actor/actor_dice_check_rules.md": {
+      "english": "Actor/actor_dice_check_rules.md",
+      "chinese": "Actor/actor_dice_check_rules_CN.md",
+      "english_sha256": "e1398a9142285300d1f135b0a228564b5f74754000cdeeb7bfd1fa6bb073420c",
+      "chinese_sha256": "fc32e413340f56f04e5b85b101414a1216816b5026df3335026821ffdd302a7c",
       "last_sync_direction": "baseline"
     },
-    "canvas_asset_generation_rules.md": {
-      "english": "canvas_asset_generation_rules.md",
-      "chinese": "canvas_asset_generation_rules_CN.md",
-      "english_sha256": "c192035731530aedff01614d18bc8ad80c83a3ad992ed237a0abfa86c6ce5e4b",
-      "chinese_sha256": "3cb0248a36b5058a21b341f5264e488eef15b4f7d443ef9597f882cd440eba94",
+    "Actor/actor_dossier_rules.md": {
+      "english": "Actor/actor_dossier_rules.md",
+      "chinese": "Actor/actor_dossier_rules_CN.md",
+      "english_sha256": "c6bf10eaaea100a58738b1eab75653c9ac0e896060303d95768a69d9264f9373",
+      "chinese_sha256": "07e1597fa5d336e28b83bfe60cb18d0f4f0f21fb85d0442e45cefd3c466d8c1e",
       "last_sync_direction": "baseline"
     },
-    "character_card_json_rules.md": {
-      "english": "character_card_json_rules.md",
-      "chinese": "character_card_json_rules_CN.md",
+    "Actor/actor_inventory_rules.md": {
+      "english": "Actor/actor_inventory_rules.md",
+      "chinese": "Actor/actor_inventory_rules_CN.md",
+      "english_sha256": "82266280fb67040b9fe344845f2ad13b944fa81abba0d7055eb4e65603f6fa0e",
+      "chinese_sha256": "50a6e3115e14c44d6d882ccd2eb1312ba85c4910fa9d24b6d3d087187318e1a9",
+      "last_sync_direction": "baseline"
+    },
+    "Actor/actor_map_rules.md": {
+      "english": "Actor/actor_map_rules.md",
+      "chinese": "Actor/actor_map_rules_CN.md",
+      "english_sha256": "4f57d688daea5f3c31d07aee4f70ee837ad1efe102287779478cb6324b3cdf34",
+      "chinese_sha256": "b7472e55c8309ce94a5c563cdeb7b0c91e66cf75fdc111ff877b315c8d814349",
+      "last_sync_direction": "baseline"
+    },
+    "Actor/actor_writeback_rules.md": {
+      "english": "Actor/actor_writeback_rules.md",
+      "chinese": "Actor/actor_writeback_rules_CN.md",
+      "english_sha256": "44adde0cf255b5cda122379002c190664d474740d84e3ebd1f8d3950f90aba7b",
+      "chinese_sha256": "fbc2a20e998fc1f71725138198764e663d10bebb34461e6e3b081dd33010c533",
+      "last_sync_direction": "baseline"
+    },
+    "Actor/character_card_json_rules.md": {
+      "english": "Actor/character_card_json_rules.md",
+      "chinese": "Actor/character_card_json_rules_CN.md",
       "english_sha256": "04e38f52a31601e4aad19b2a16e3d7156ef5e6dab8cc30004203c4af93b6ae1d",
       "chinese_sha256": "c4ab45d55a4d7ca31b037e8efa103d52d4aa7caf5a2d8054e4e8ec55bc3fa10a",
       "last_sync_direction": "baseline"
     },
-    "chatgpt_host_prompt.md": {
-      "english": "chatgpt_host_prompt.md",
-      "chinese": "chatgpt_host_prompt_CN.md",
-      "english_sha256": "16031193779019782fd6cf198e21a584b27167b93baf3bcb1749cb4f6a9811bf",
-      "chinese_sha256": "cff6023fdcb850b7cc0e6725b17fa9a9238c822b134b2933f2a5fbc051466722",
+    "Actor/chatgpt_host_prompt.md": {
+      "english": "Actor/chatgpt_host_prompt.md",
+      "chinese": "Actor/chatgpt_host_prompt_CN.md",
+      "english_sha256": "9a7284013ceb65a832fa76072a35c0b012443ab3cfd1eab9803590dcc56a4690",
+      "chinese_sha256": "87d0a02f3ac3fc38333d24cb65578a7eef9041545bd4ffff6771e4424ab88991",
       "last_sync_direction": "baseline"
     },
-    "chatgpt_image_rules.md": {
-      "english": "chatgpt_image_rules.md",
-      "chinese": "chatgpt_image_rules_CN.md",
-      "english_sha256": "030fa44898786a6b4c3b8cd50943149ef707c7dceea712c8a5050148c26d49f5",
-      "chinese_sha256": "a748a972388a019bbc5c2fea9660743d3c0e7946720531e80b5dd6f40cc95bda",
+    "Actor/chatgpt_image_rules.md": {
+      "english": "Actor/chatgpt_image_rules.md",
+      "chinese": "Actor/chatgpt_image_rules_CN.md",
+      "english_sha256": "5c58375b6246606305a451a9788550af5e9f585b303669df00b4cbc38b8c887f",
+      "chinese_sha256": "f9f5a5738c37d4d924ab327c5b7ff1473973119c3b1d1b34d4ca5873d4e05834",
       "last_sync_direction": "baseline"
     },
-    "chatgpt_map_rules.md": {
-      "english": "chatgpt_map_rules.md",
-      "chinese": "chatgpt_map_rules_CN.md",
-      "english_sha256": "669e8c6e73048bde6a68bb843851c3383f310e039ef2aaeb0a89a8ed76f834d1",
-      "chinese_sha256": "9926c399c7bcaf36f31f4a9879179d6f7d03d519a40bd07a7c85506ba1d28dbf",
-      "last_sync_direction": "baseline"
-    },
-    "chatgpt_monster_rules.md": {
-      "english": "chatgpt_monster_rules.md",
-      "chinese": "chatgpt_monster_rules_CN.md",
+    "Actor/chatgpt_monster_rules.md": {
+      "english": "Actor/chatgpt_monster_rules.md",
+      "chinese": "Actor/chatgpt_monster_rules_CN.md",
       "english_sha256": "e1263e3381d19e271934d839c1bc979c8ac3fe685c2e13b7d4d6b021c4745940",
       "chinese_sha256": "126e7a71b4b612b90c680d8183cc828245016d8ffb1e9bbf2aa46be70f28a8c5",
       "last_sync_direction": "baseline"
     },
-    "chatgpt_npc_voice_rules.md": {
-      "english": "chatgpt_npc_voice_rules.md",
-      "chinese": "chatgpt_npc_voice_rules_CN.md",
+    "Actor/chatgpt_npc_voice_rules.md": {
+      "english": "Actor/chatgpt_npc_voice_rules.md",
+      "chinese": "Actor/chatgpt_npc_voice_rules_CN.md",
       "english_sha256": "d36be628ff69fdf777b845eac54b7288d8e8c2b10c8bcddeb78cd73ea231907f",
       "chinese_sha256": "f7c3a224e1f10e789893a078c8e722a1f3a154af302731b04db076e6ba8a7132",
       "last_sync_direction": "baseline"
     },
-    "chatgpt_style_rules.md": {
-      "english": "chatgpt_style_rules.md",
-      "chinese": "chatgpt_style_rules_CN.md",
+    "Actor/chatgpt_style_rules.md": {
+      "english": "Actor/chatgpt_style_rules.md",
+      "chinese": "Actor/chatgpt_style_rules_CN.md",
       "english_sha256": "45544b1a286b3559c45f2bf4bf0809425a4abbf354b18784331bef980ac2a2e5",
       "chinese_sha256": "05a442299101f1ec9c98164710e4333e2ec78fbdf8c69843b0ea683cb9af4de0",
       "last_sync_direction": "baseline"
     },
-    "codex_computer_use_prompt.md": {
-      "english": "codex_computer_use_prompt.md",
-      "chinese": "codex_computer_use_prompt_CN.md",
+    "Backend/INDEX.md": {
+      "english": "Backend/INDEX.md",
+      "chinese": "Backend/INDEX_CN.md",
+      "english_sha256": "0e9b544b8fe5f0b6dae9f234a133c720fe71ffe16529cc0850ea6b86fc4450d2",
+      "chinese_sha256": "c434ff4642fdd82c54d776c28e75b79871f282b7c6943f2d5de6700561fb1c1f",
+      "last_sync_direction": "baseline"
+    },
+    "Backend/ai_flavor_check_rules.md": {
+      "english": "Backend/ai_flavor_check_rules.md",
+      "chinese": "Backend/ai_flavor_check_rules_CN.md",
+      "english_sha256": "914417e7d44483a8670b3fcde5403fb5df6f5da98721b9dab313d59c192cf1bf",
+      "chinese_sha256": "642b020c58a525d72b7f03f179d59f6e459a65953ad8dc9dd06a0682dec0ea95",
+      "last_sync_direction": "baseline"
+    },
+    "Backend/asset_cache_lifecycle_rules.md": {
+      "english": "Backend/asset_cache_lifecycle_rules.md",
+      "chinese": "Backend/asset_cache_lifecycle_rules_CN.md",
+      "english_sha256": "a7a64e6208ecc3b70eefe5385475ffcc537d5052a077bb3779a39eece82cefe9",
+      "chinese_sha256": "b9c322ded74eec6c8db56d4aa8465f9b96f85460a6fa5a5f638b293832e7d335",
+      "last_sync_direction": "baseline"
+    },
+    "Backend/campaign_data_lifecycle_rules.md": {
+      "english": "Backend/campaign_data_lifecycle_rules.md",
+      "chinese": "Backend/campaign_data_lifecycle_rules_CN.md",
+      "english_sha256": "42cee529083acec5a666f9abf8063afb7bfe4bcdc5f47dd2ce34945a34efe9ef",
+      "chinese_sha256": "0c9b2eee44d33f5a8934125f5a48a4303e8a1917b2a3030777fe878f4d03a52b",
+      "last_sync_direction": "baseline"
+    },
+    "Backend/canvas_asset_generation_rules.md": {
+      "english": "Backend/canvas_asset_generation_rules.md",
+      "chinese": "Backend/canvas_asset_generation_rules_CN.md",
+      "english_sha256": "c192035731530aedff01614d18bc8ad80c83a3ad992ed237a0abfa86c6ce5e4b",
+      "chinese_sha256": "3cb0248a36b5058a21b341f5264e488eef15b4f7d443ef9597f882cd440eba94",
+      "last_sync_direction": "baseline"
+    },
+    "Backend/codex_computer_use_prompt.md": {
+      "english": "Backend/codex_computer_use_prompt.md",
+      "chinese": "Backend/codex_computer_use_prompt_CN.md",
       "english_sha256": "dafa25dfc6570afd0374a6863c371adc8b8270b1fc94f42fe4eb2f6ba9e54f22",
       "chinese_sha256": "7c6bb02afaf0f8c5ca53f449e907a93efdd3ff40f752bc8fdb79a5daf1b34ada",
       "last_sync_direction": "baseline"
     },
-    "codex_system_architecture_rules.md": {
-      "english": "codex_system_architecture_rules.md",
-      "chinese": "codex_system_architecture_rules_CN.md",
+    "Backend/codex_system_architecture_rules.md": {
+      "english": "Backend/codex_system_architecture_rules.md",
+      "chinese": "Backend/codex_system_architecture_rules_CN.md",
       "english_sha256": "c5c0607542115d0ba47e324d7e0c2da23f60519ca162635eb0fe4636490249d3",
       "chinese_sha256": "f0f0a55e0a620185982f558016d5991641674458436f45db6c099665de69b894",
       "last_sync_direction": "baseline"
     },
-    "dice_check_rules.md": {
-      "english": "dice_check_rules.md",
-      "chinese": "dice_check_rules_CN.md",
-      "english_sha256": "69a8e736040bed0575caf63d0ba5d49fc2c577c60349eeeeedd7052f6c5b7cd6",
-      "chinese_sha256": "7c6b83b7bd149982c8161bed3a603da094ccab30b92064639611e2147e5ad380",
-      "last_sync_direction": "baseline"
-    },
-    "dossier_rules.md": {
-      "english": "dossier_rules.md",
-      "chinese": "dossier_rules_CN.md",
-      "english_sha256": "720d4dca027ceac4df551e5459ddc7fdd0ad9b650d8603c94a44bea15c49fc6f",
-      "chinese_sha256": "544a71dfdcb1e00838e4739749ae375b5b353ba9b5ba3c354c1e2c22fe1c61c9",
-      "last_sync_direction": "baseline"
-    },
-    "encoding_rules.md": {
-      "english": "encoding_rules.md",
-      "chinese": "encoding_rules_CN.md",
+    "Backend/encoding_rules.md": {
+      "english": "Backend/encoding_rules.md",
+      "chinese": "Backend/encoding_rules_CN.md",
       "english_sha256": "a32011a982c78fcda68faf2885740d9355acdbd01e36dbfccc61722a54705495",
       "chinese_sha256": "d886e57600b0bfcc26ed7492458a72b88f60126050f706099345133445ec32b3",
       "last_sync_direction": "baseline"
     },
-    "frontend_interaction_rules.md": {
-      "english": "frontend_interaction_rules.md",
-      "chinese": "frontend_interaction_rules_CN.md",
+    "Backend/frontend_interaction_rules.md": {
+      "english": "Backend/frontend_interaction_rules.md",
+      "chinese": "Backend/frontend_interaction_rules_CN.md",
       "english_sha256": "ace3dfa5fcb856a1b9eca425f6d57b69e9dc5e514639a14bb066b7007b8e9d26",
       "chinese_sha256": "64d95afd23e2fe6f1a7e559b51f70d8e03b930c4a6c05b22de97af58cec96a1b",
       "last_sync_direction": "baseline"
     },
-    "gallery_asset_rules.md": {
-      "english": "gallery_asset_rules.md",
-      "chinese": "gallery_asset_rules_CN.md",
+    "Backend/gallery_asset_rules.md": {
+      "english": "Backend/gallery_asset_rules.md",
+      "chinese": "Backend/gallery_asset_rules_CN.md",
       "english_sha256": "74f77f07df2ad60922a7f6f0cd7857d39ab8bfad15595c66cf80a4f1eb5e3e88",
       "chinese_sha256": "4056be92724c8d0d8f5eaa65d626861d1956c475754f142057f4fe0a8553c0d9",
       "last_sync_direction": "baseline"
     },
-    "inventory_rules.md": {
-      "english": "inventory_rules.md",
-      "chinese": "inventory_rules_CN.md",
-      "english_sha256": "ae7fd932f3af90724d1029c5299d1bc015ebcad109bd404bf0cf8bee3ca49f6d",
-      "chinese_sha256": "a112cbecf383a6600f2cee1e97705a2610db254d485e092e8e4beed1e3fe5b0f",
-      "last_sync_direction": "baseline"
-    },
-    "lazy_context_rules.md": {
-      "english": "lazy_context_rules.md",
-      "chinese": "lazy_context_rules_CN.md",
-      "english_sha256": "d88ad2e52ef9d3fd429f25d2e42a40c9a3a07678dfba16551899c100a335cdba",
-      "chinese_sha256": "898400b121eeb0bd4a3edfe08c15d39e9a2b84d10ef588420f94b1a32e2fdc91",
-      "last_sync_direction": "baseline"
-    },
-    "model_layer_contract_rules.md": {
-      "english": "model_layer_contract_rules.md",
-      "chinese": "model_layer_contract_rules_CN.md",
+    "Backend/model_layer_contract_rules.md": {
+      "english": "Backend/model_layer_contract_rules.md",
+      "chinese": "Backend/model_layer_contract_rules_CN.md",
       "english_sha256": "17c8381ac27481c145a142807236e31050889295577de7361d7946644253f0f7",
       "chinese_sha256": "48305c5d19e9c86702e8f0e9ab462292e48671d1b8f35d86897f62b9aae54034",
       "last_sync_direction": "baseline"
     },
-    "output_contract_rules.md": {
-      "english": "output_contract_rules.md",
-      "chinese": "output_contract_rules_CN.md",
+    "Director/INDEX.md": {
+      "english": "Director/INDEX.md",
+      "chinese": "Director/INDEX_CN.md",
+      "english_sha256": "da57d7e57f34184a52a9e64ba7642e909a784e0a7f6e1a727210ceca87615190",
+      "chinese_sha256": "ea18f102f6c26d3314698f78b031f009ac7468d9fd838b488760691231cd6023",
+      "last_sync_direction": "baseline"
+    },
+    "Director/chatgpt_map_rules.md": {
+      "english": "Director/chatgpt_map_rules.md",
+      "chinese": "Director/chatgpt_map_rules_CN.md",
+      "english_sha256": "669e8c6e73048bde6a68bb843851c3383f310e039ef2aaeb0a89a8ed76f834d1",
+      "chinese_sha256": "9926c399c7bcaf36f31f4a9879179d6f7d03d519a40bd07a7c85506ba1d28dbf",
+      "last_sync_direction": "baseline"
+    },
+    "Director/dice_check_rules.md": {
+      "english": "Director/dice_check_rules.md",
+      "chinese": "Director/dice_check_rules_CN.md",
+      "english_sha256": "69a8e736040bed0575caf63d0ba5d49fc2c577c60349eeeeedd7052f6c5b7cd6",
+      "chinese_sha256": "7c6b83b7bd149982c8161bed3a603da094ccab30b92064639611e2147e5ad380",
+      "last_sync_direction": "baseline"
+    },
+    "Director/dossier_rules.md": {
+      "english": "Director/dossier_rules.md",
+      "chinese": "Director/dossier_rules_CN.md",
+      "english_sha256": "720d4dca027ceac4df551e5459ddc7fdd0ad9b650d8603c94a44bea15c49fc6f",
+      "chinese_sha256": "544a71dfdcb1e00838e4739749ae375b5b353ba9b5ba3c354c1e2c22fe1c61c9",
+      "last_sync_direction": "baseline"
+    },
+    "Director/inventory_rules.md": {
+      "english": "Director/inventory_rules.md",
+      "chinese": "Director/inventory_rules_CN.md",
+      "english_sha256": "ae7fd932f3af90724d1029c5299d1bc015ebcad109bd404bf0cf8bee3ca49f6d",
+      "chinese_sha256": "a112cbecf383a6600f2cee1e97705a2610db254d485e092e8e4beed1e3fe5b0f",
+      "last_sync_direction": "baseline"
+    },
+    "Director/v4_audit_prompt.md": {
+      "english": "Director/v4_audit_prompt.md",
+      "chinese": "Director/v4_audit_prompt_CN.md",
+      "english_sha256": "31d5c12e24d5ebe6880a71b84d11d2663586c6fd3e501d998211408bd08f1d5f",
+      "chinese_sha256": "d000f2fc698258cc30f1f49cd57e5f73306c3ab5b9b74a63784d5dab2bfd4d56",
+      "last_sync_direction": "baseline"
+    },
+    "Director/v4_campaign_context_prompt.md": {
+      "english": "Director/v4_campaign_context_prompt.md",
+      "chinese": "Director/v4_campaign_context_prompt_CN.md",
+      "english_sha256": "c2ee05ce618d4feae80915cfd11fc0e5c2b7c70b54e8b7a82e4bcb7237e53d54",
+      "chinese_sha256": "3c110e768513a298db0091903da3dec57b4ee320217129fa511027ea36b692e8",
+      "last_sync_direction": "baseline"
+    },
+    "Director/v4_director_prompt.md": {
+      "english": "Director/v4_director_prompt.md",
+      "chinese": "Director/v4_director_prompt_CN.md",
+      "english_sha256": "84a60c161010f1c0874fd61cecc695d2cc90129b79f22c3cd8d79eaaf2201576",
+      "chinese_sha256": "7f28e7851c5b529f13b6fe764ec6875a6e1b43ffe06885818b44021b77ca157d",
+      "last_sync_direction": "baseline"
+    },
+    "Director/v4_light_action_rules.md": {
+      "english": "Director/v4_light_action_rules.md",
+      "chinese": "Director/v4_light_action_rules_CN.md",
+      "english_sha256": "02272ef46947657d866435f860653a37f9a678c2c4a3278ea41c93e76366e43a",
+      "chinese_sha256": "c1037c4a3a09858bba58a0a21157e99fca2058a5f8095b0633d8b60464b6868c",
+      "last_sync_direction": "baseline"
+    },
+    "Director/v4_payload_fulfillment_prompt.md": {
+      "english": "Director/v4_payload_fulfillment_prompt.md",
+      "chinese": "Director/v4_payload_fulfillment_prompt_CN.md",
+      "english_sha256": "fb4ad492a655bd00760b858eb388749622d604636ac1ad62dd6c268a73bf8ea2",
+      "chinese_sha256": "7b835a63146c72716bc32e57bc7c17413173cbe910ff9663fe02893599cb5b81",
+      "last_sync_direction": "baseline"
+    },
+    "Director/visual_asset_protocol.md": {
+      "english": "Director/visual_asset_protocol.md",
+      "chinese": "Director/visual_asset_protocol_CN.md",
+      "english_sha256": "c6435450ac504f78929f60150c1ececeaaf058bba4fa19f38492ca4a2345b04a",
+      "chinese_sha256": "94a81b5f964303a5fffadfa7bd11db33266c0d064ebcdfe0ab5a2d54ce8b0b23",
+      "last_sync_direction": "baseline"
+    },
+    "Hotload/INDEX.md": {
+      "english": "Hotload/INDEX.md",
+      "chinese": "Hotload/INDEX_CN.md",
+      "english_sha256": "0c1e6bdf01d7f110447f4efd06f50a09841b588f10002e40067195cd29b1184e",
+      "chinese_sha256": "d532f18be94eed7ccd9ba09ba97b783bbede7a3918b698da0442e32ed5365d4c",
+      "last_sync_direction": "baseline"
+    },
+    "Hotload/actor_prompt_pruned_fields.md": {
+      "english": "Hotload/actor_prompt_pruned_fields.md",
+      "chinese": "Hotload/actor_prompt_pruned_fields_CN.md",
+      "english_sha256": "eca86466ad9f4e71b6f032cf2c8a98f2844080e7be3658bc27bb45c064f850d6",
+      "chinese_sha256": "a0fedb61d87b46e1106aeb94a1a27eaa39aa38dd963804f0d8d51e49d596b3ea",
+      "last_sync_direction": "baseline"
+    },
+    "Hotload/lazy_context_rules.md": {
+      "english": "Hotload/lazy_context_rules.md",
+      "chinese": "Hotload/lazy_context_rules_CN.md",
+      "english_sha256": "d88ad2e52ef9d3fd429f25d2e42a40c9a3a07678dfba16551899c100a335cdba",
+      "chinese_sha256": "898400b121eeb0bd4a3edfe08c15d39e9a2b84d10ef588420f94b1a32e2fdc91",
+      "last_sync_direction": "baseline"
+    },
+    "Hotload/output_contract_rules.md": {
+      "english": "Hotload/output_contract_rules.md",
+      "chinese": "Hotload/output_contract_rules_CN.md",
       "english_sha256": "c5527831ce055323bc4947ac0d8c6e57f6c4b41014563422d1bdfc60dbd8a2ba",
       "chinese_sha256": "72008baa83324814b0ade3ede0560940ea4b9043bdad288893af4d8d7e1d2728",
+      "last_sync_direction": "baseline"
+    },
+    "ReferenceSpec/INDEX.md": {
+      "english": "ReferenceSpec/INDEX.md",
+      "chinese": "ReferenceSpec/INDEX_CN.md",
+      "english_sha256": "24b8af5e6b64463e3b12ee3d61666056264a2747e2a90ca7c742fddae703abf1",
+      "chinese_sha256": "db89e698df69bde3daa111d069dfb69562aca6e350c081e69571cdabff736b27",
+      "last_sync_direction": "baseline"
+    },
+    "ReferenceSpec/reference_protocol.md": {
+      "english": "ReferenceSpec/reference_protocol.md",
+      "chinese": "ReferenceSpec/reference_protocol_CN.md",
+      "english_sha256": "38aa2e910623dc16b4b16795902fa1cbcc1fb5e40305e2336f631b88a9fbcb0c",
+      "chinese_sha256": "c98e57266b97e2a536aa8836863f207714c896fdb6d9817b635b5ebf72cdcfa2",
       "last_sync_direction": "baseline"
     },
     "prompt_rules_index.md": {
       "english": "prompt_rules_index.md",
       "chinese": "prompt_rules_index_CN.md",
-      "english_sha256": "9f5d0cf2821b3e3d788cf39f871ee714aec5503e807472c03fc720d618f3641e",
-      "chinese_sha256": "58108c96fc4c469c942549ce7fa1f99fd777fb4c693ed46099c056f98b3e029b",
-      "last_sync_direction": "baseline"
-    },
-    "v4_audit_prompt.md": {
-      "english": "v4_audit_prompt.md",
-      "chinese": "v4_audit_prompt_CN.md",
-      "english_sha256": "31d5c12e24d5ebe6880a71b84d11d2663586c6fd3e501d998211408bd08f1d5f",
-      "chinese_sha256": "d000f2fc698258cc30f1f49cd57e5f73306c3ab5b9b74a63784d5dab2bfd4d56",
-      "last_sync_direction": "baseline"
-    },
-    "v4_campaign_context_prompt.md": {
-      "english": "v4_campaign_context_prompt.md",
-      "chinese": "v4_campaign_context_prompt_CN.md",
-      "english_sha256": "c2ee05ce618d4feae80915cfd11fc0e5c2b7c70b54e8b7a82e4bcb7237e53d54",
-      "chinese_sha256": "3c110e768513a298db0091903da3dec57b4ee320217129fa511027ea36b692e8",
-      "last_sync_direction": "baseline"
-    },
-    "v4_director_prompt.md": {
-      "english": "v4_director_prompt.md",
-      "chinese": "v4_director_prompt_CN.md",
-      "english_sha256": "84a60c161010f1c0874fd61cecc695d2cc90129b79f22c3cd8d79eaaf2201576",
-      "chinese_sha256": "7f28e7851c5b529f13b6fe764ec6875a6e1b43ffe06885818b44021b77ca157d",
-      "last_sync_direction": "baseline"
-    },
-    "v4_light_action_rules.md": {
-      "english": "v4_light_action_rules.md",
-      "chinese": "v4_light_action_rules_CN.md",
-      "english_sha256": "02272ef46947657d866435f860653a37f9a678c2c4a3278ea41c93e76366e43a",
-      "chinese_sha256": "c1037c4a3a09858bba58a0a21157e99fca2058a5f8095b0633d8b60464b6868c",
-      "last_sync_direction": "baseline"
-    },
-    "v4_payload_fulfillment_prompt.md": {
-      "english": "v4_payload_fulfillment_prompt.md",
-      "chinese": "v4_payload_fulfillment_prompt_CN.md",
-      "english_sha256": "fb4ad492a655bd00760b858eb388749622d604636ac1ad62dd6c268a73bf8ea2",
-      "chinese_sha256": "7b835a63146c72716bc32e57bc7c17413173cbe910ff9663fe02893599cb5b81",
-      "last_sync_direction": "baseline"
-    },
-    "visual_asset_protocol.md": {
-      "english": "visual_asset_protocol.md",
-      "chinese": "visual_asset_protocol_CN.md",
-      "english_sha256": "c6435450ac504f78929f60150c1ececeaaf058bba4fa19f38492ca4a2345b04a",
-      "chinese_sha256": "94a81b5f964303a5fffadfa7bd11db33266c0d064ebcdfe0ab5a2d54ce8b0b23",
+      "english_sha256": "2a505704c32acda6f1af7931b9c3d9f7a73d58c0292214714486bac056301c71",
+      "chinese_sha256": "ed76ccf983b6dd4caa6b442fe19d1a9f71d0551248682bf6461db75d2de1afc3",
       "last_sync_direction": "baseline"
     }
   }

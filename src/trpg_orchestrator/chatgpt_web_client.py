@@ -34,8 +34,8 @@ class ChatGPTWebClient:
         story_name = str(self.campaign_profile.get("title") or self.campaign_profile.get("name") or "").strip()
         binding_project = str(binding.get("project_name") or "").strip()
         binding_conversation = str(binding.get("conversation_name") or "").strip()
-        self.project_name = story_name or binding_project
-        self.conversation_name = self._conversation_title(story_name, binding_conversation)
+        self.project_name = binding_project or story_name
+        self.conversation_name = binding_conversation or self._conversation_title(story_name)
 
     def _conversation_title(self, story_name: str, fallback: str = "") -> str:
         progress = self.campaign_memory.get("story_progress.json", {})

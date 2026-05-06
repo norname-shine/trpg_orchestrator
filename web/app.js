@@ -60,7 +60,8 @@
 const $ = (id) => document.getElementById(id);
 const ASSET_GENERATOR_VERSION = 19;
 const PORTRAIT_SPEC_VERSION = "story_linked_canvas_portrait.v1";
-const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v17";
+const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v18";
+const PREVIOUS_DRAG_PANEL_STORAGE_KEYS = ["trpg.dragPanels.layout2.v17"];
 const LEGACY_DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels";
 
 function init() {
@@ -227,7 +228,6 @@ function collapsePanelLabel(name) {
 function initDraggablePanels() {
   state.dragPanels = loadDragPanelState();
   [
-    { id: "story", selector: ".logPanel", handle: ".logHeader h2", label: "正文卡" },
     { id: "task", selector: ".taskPanel", handle: ".panelTitle", label: "任务物品卡" },
     { id: "memory", selector: ".memoryPanel", handle: ".panelTitle", label: "近期记忆卡" },
     { id: "gallery", selector: ".galleryPanel", handle: ".panelTitle", label: "资产夹资料卡" },
@@ -373,6 +373,7 @@ function nextFloatingZIndex() {
 function loadDragPanelState() {
   try {
     localStorage.removeItem(LEGACY_DRAG_PANEL_STORAGE_KEY);
+    PREVIOUS_DRAG_PANEL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     return JSON.parse(localStorage.getItem(DRAG_PANEL_STORAGE_KEY) || "{}") || {};
   } catch (err) {
     return {};
@@ -7332,5 +7333,4 @@ function drawBackground() {
 }
 
 init();
-
 

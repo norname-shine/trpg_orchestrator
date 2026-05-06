@@ -16,7 +16,13 @@ from .prompt_module_registry import get_prompt_module_warnings, load_prompt_modu
 
 
 def read_prompt(name: str) -> str:
-    return read_runtime_text(PROMPTS_DIR / name)
+    path = PROMPTS_DIR / name
+    if path.exists():
+        return read_runtime_text(path)
+    matches = sorted(PROMPTS_DIR.rglob(name))
+    if matches:
+        return read_runtime_text(matches[0])
+    return read_runtime_text(path)
 
 
 DIRECTOR_LAYER_FILES = [
@@ -129,10 +135,8 @@ ACTOR_BACKEND_KEY_TOKENS = (
 )
 
 ACTOR_SCENE_KEYS = {
-    "campaign_id",
     "turn_type",
     "current_situation",
-    "pressure_pack",
     "player_pressure_point",
     "npc_direction",
     "scene_boundaries",
@@ -140,12 +144,10 @@ ACTOR_SCENE_KEYS = {
     "required_choices",
     "choice_requirements",
     "state_update_hints",
-    "progress_control",
     "current_scene",
     "consequences",
     "risks",
     "summary",
-    "human_readable_note",
 }
 
 ACTOR_VISIBLE_CAPABILITY_PREFIXES = (
@@ -165,6 +167,36 @@ ACTOR_VISIBLE_CAPABILITY_PREFIXES = (
     "recent_context",
     "story_progress",
 )
+
+ACTOR_WRITEBACK_TARGET_LABELS = {
+    "story_progress": "story progress evidence for review",
+    "inventory": "inventory evidence for review",
+    "character_card": "character status evidence for review",
+    "dossier": "clue or dossier evidence for review",
+    "dice/check": "dice/check handling when allowed",
+    "dice_or_check": "dice/check handling when allowed",
+}
+
+ACTOR_IMAGE_OMIT_KEYS = {
+    "audit",
+    "debug",
+    "diagnostics",
+    "generator_version",
+    "manifest",
+    "metadata",
+    "mode",
+    "output_requests",
+    "payload_fulfillment",
+    "payload_patch",
+    "payloads",
+    "protocol_warnings",
+    "public_think",
+    "reason",
+    "source_object_id",
+    "trigger",
+    "trigger_image_generation",
+    "warnings",
+}
 
 
 def sanitize_model_input(value: Any) -> Any:
@@ -217,7 +249,7 @@ def build_actor_capability_view(capability_plan: dict[str, Any]) -> dict[str, An
             capabilities.append(text)
     return sanitize_actor_prompt_value({
         "visible_capabilities": capabilities,
-        "contract": "Actor layer receives only prose-relevant visible capabilities. Backend routing and module debug are omitted.",
+        "contract": "Use only these visible story tools for this turn.",
     })
 
 
@@ -225,21 +257,54 @@ def build_actor_scene_control(pressure_pack: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(pressure_pack, dict):
         return {}
     scene = {key: pressure_pack.get(key) for key in ACTOR_SCENE_KEYS if key in pressure_pack}
+    if "pressure_pack" in pressure_pack:
+        scene["scene_pressure"] = pressure_pack.get("pressure_pack")
     output_requests = pressure_pack.get("output_requests") if isinstance(pressure_pack.get("output_requests"), dict) else {}
-    writeback_targets = []
+    writeback_targets: list[str] = []
     for name, request in output_requests.items():
         if not isinstance(request, dict):
             continue
         mode = str(request.get("mode") or "").strip()
-        if mode and mode != "none":
-            writeback_targets.append({"target": name, "mode": mode})
+        label = ACTOR_WRITEBACK_TARGET_LABELS.get(str(name))
+        if mode and mode != "none" and label:
+            writeback_targets.append(label)
     if writeback_targets:
-        scene["required_writeback_targets"] = writeback_targets
+        scene["allowed_state_updates"] = sorted(set(writeback_targets))
     payloads = pressure_pack.get("payloads") if isinstance(pressure_pack.get("payloads"), dict) else {}
     for key in ("state_update_hints", "npc_direction", "choice_requirements", "required_choices"):
         if key not in scene and key in payloads:
             scene[key] = payloads.get(key)
     return sanitize_actor_prompt_value(scene)
+
+
+def sanitize_actor_image_asset(value: Any) -> Any:
+    cleaned = _actor_image_clean_value(sanitize_model_input(value))
+    return cleaned if cleaned is not None else {}
+
+
+def _actor_image_clean_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            if lowered in ACTOR_IMAGE_OMIT_KEYS:
+                continue
+            if lowered.endswith("_mode"):
+                continue
+            cleaned = _actor_image_clean_value(item)
+            if _actor_is_empty(cleaned):
+                continue
+            clean[key_text] = cleaned
+        return clean or None
+    if isinstance(value, list):
+        rows = [_actor_image_clean_value(item) for item in value]
+        rows = [item for item in rows if not _actor_is_empty(item)]
+        return rows or None
+    if isinstance(value, str):
+        text = sanitize_model_terms(value).strip()
+        return text or None
+    return value
 
 
 def _actor_clean_value(value: Any) -> Any:
@@ -281,6 +346,8 @@ def _actor_clean_value(value: Any) -> Any:
 def _actor_should_prune_key(key: str) -> bool:
     lowered = key.lower()
     if lowered in ACTOR_BACKEND_OMIT_KEYS:
+        return True
+    if lowered.endswith("_mode"):
         return True
     return any(token in lowered for token in ACTOR_BACKEND_KEY_TOKENS)
 
@@ -392,8 +459,8 @@ def build_chatgpt_input(
             "## Selected Actor Prompt Modules",
             module_text,
             custom_rules,
-            "## Visible Capability Summary",
-            "Use only these prose-relevant capabilities. Backend routing, prompt module debug, and missing payload diagnostics are intentionally omitted.",
+            "## Available Story Tools",
+            "Use only these visible story tools for this turn.",
             "```json\n" + json.dumps(actor_capability_view, ensure_ascii=False, indent=2) + "\n```",
             "## campaign_id",
             campaign_id,
@@ -403,11 +470,11 @@ def build_chatgpt_input(
             "## Visible Memory For This Turn",
             "These records are only for performance consistency. Do not expand unconfirmed content. Do not invent long-term setting.",
             "```json\n" + json.dumps(visible_memory, ensure_ascii=False, indent=2) + "\n```",
-            "## Visible Story Progress Control",
-            "This is a sanitized current-node summary derived from director progress_control. It is not a full story blueprint.",
+            "## Current Story Position",
+            "This is the visible current-node summary for this turn. It is not a full story blueprint.",
             "```json\n" + json.dumps(visible_story_progress, ensure_ascii=False, indent=2) + "\n```",
-            "## Actor Scene Control",
-            "Follow this turn's visible pressure, boundaries, NPC direction, forbidden items, choice requirements, and required writeback targets. Backend generation and routing fields have been removed.",
+            "## Scene Brief For This Turn",
+            "Follow this turn's visible pressure, boundaries, NPC direction, forbidden items, choice requirements, and allowed state updates.",
             "```json\n" + json.dumps(actor_scene_control, ensure_ascii=False, indent=2) + "\n```",
             "Output strict JSON only: blocks, summary, and state_writeback. No text outside JSON.",
         ]
@@ -420,30 +487,32 @@ def build_chatgpt_image_input(
     pressure_pack: dict[str, Any],
     visual_assets: list[dict[str, Any]],
 ) -> str:
-    rows = visual_assets[:1] or [{
+    rows = [sanitize_actor_image_asset(row) for row in visual_assets[:1]] or [{
         "id": "requested_image",
         "title": "本回合关键画面",
-        "positive_prompt": "Use the current TRPG scene pressure pack to generate one coherent image. Keep only confirmed visible details.",
+        "positive_prompt": "Use the current visible TRPG scene brief to generate one coherent image. Keep only confirmed visible details.",
         "negative_prompt": "low quality, blurry, text artifacts, watermark, logo, extra limbs, malformed hands, incoherent layout",
         "aspect_ratio": "16:9",
         "style_preset": "cinematic anime urban horror, Fate-inspired, controlled lighting",
         "quality": {"steps": 30, "cfg_scale": 6.5, "sampler": "DPM++ 2M Karras", "size": "2304x2304"},
     }]
+    image_asset = sanitize_actor_image_asset(rows[0])
+    scene_context = build_actor_scene_control(pressure_pack)
     return "\n\n".join(
         [
-            "# Image Generation Pass",
-            "This is a separate image-only conversation pass. Do not continue the story and do not output state writeback JSON.",
-            "Generate exactly one image for the first visual asset below. If multiple assets are listed, use only the first one.",
+            "# Actor Image Generation Pass",
+            "This is a separate actor image-only pass. Do not continue the story and do not output state_writeback JSON.",
+            "Generate exactly one image from the image instruction below.",
             "Do not include new plot facts. Do not reveal unknown canon details. Use only confirmed or visible scene details.",
             "Generate one 2304x2304 square image containing both a 16:9 horizontal panel and a 9:16 vertical panel for the same scene. Use original descriptive style language and avoid copyrighted names, trademarks, artist names, or directly imitative style labels.",
             f"campaign_id: {campaign_id}",
-            "Player action that triggered the image pass:",
+            "Player action for this image pass:",
             player_action,
-            "Image asset instruction:",
-            "```json\n" + json.dumps(sanitize_model_input(rows[0]), ensure_ascii=False, indent=2) + "\n```",
-            "Reference control pack for context only:",
-            "```json\n" + json.dumps(sanitize_model_input(pressure_pack), ensure_ascii=False, indent=2) + "\n```",
-            "Generate one image now. No story prose, no choices, no state writeback.",
+            "Actor image instruction:",
+            "```json\n" + json.dumps(image_asset, ensure_ascii=False, indent=2) + "\n```",
+            "Visible scene brief for image context:",
+            "```json\n" + json.dumps(scene_context, ensure_ascii=False, indent=2) + "\n```",
+            "Generate one image now. No story prose, no choices, no state_writeback.",
         ]
     )
 
@@ -507,23 +576,23 @@ def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
         "attribute_theme": str(attribute_config.get("theme") or attribute_config.get("six_source") or "").strip(),
         "dice_enabled": bool(rules.get("dice_enabled")),
         "dice_type": str(rules.get("dice_type") or "").strip(),
-        "roll_mode": str(rules.get("roll_mode") or "").strip(),
+        "roll_style": str(rules.get("roll_mode") or "").strip(),
         "roll_attributes": _string_list(rules.get("roll_attributes")),
         "rules_strictness": _choice(rules.get("rules_strictness"), {"light", "standard", "strict"}, "light"),
         "companion_enabled": bool(companion.get("companion_enabled")),
-        "companion_mode": _choice(companion.get("companion_mode"), {"auto", "manual"}, "auto"),
+        "companion_handling": _choice(companion.get("companion_mode"), {"auto", "manual"}, "auto"),
         "companion_name": str(companion.get("companion_name") or "").strip(),
         "companion_role": str(companion.get("companion_role") or "").strip(),
         "companion_personality": str(companion.get("companion_personality") or "").strip(),
         "safety_lines": _string_list(profile.get("safety_lines")),
     }
     rules_text = [
-        "If character_card_enabled=false, do not force character-card numbers or character_card_update payloads.",
+        "If character_card_enabled=false, do not force character-card numbers or character-card structured updates.",
         "If stat_visibility=narrative, do not expose explicit HP/SAN/AC/attribute numbers in prose or writeback.",
         "If stat_visibility=hybrid, use coarse state bands or percentages only; avoid full explicit attributes.",
         "If stat_visibility=numeric, explicit stats are allowed when supported by memory and rules.",
         "If dice_enabled=false, do not proactively ask for rolls.",
-        "If dice_enabled=true, key risky actions may request checks using dice_type, roll_mode, and roll_attributes.",
+        "If dice_enabled=true, key risky actions may request checks using dice_type, roll_style, and roll_attributes.",
         "If companion_enabled=true, the long-term companion should enter story continuity and memory.",
         "If companion_enabled=false, do not create a default companion, servant, palico, familiar, or sidekick.",
         "Always obey safety_lines.",

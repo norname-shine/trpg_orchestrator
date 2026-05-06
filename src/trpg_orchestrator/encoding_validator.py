@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,8 @@ FORBIDDEN_REPLACE_TOKENS = (
     "errors=" + "'replace'",
 )
 
+REPEATED_QUESTION_MARK_RE = re.compile(r"\?{3,}")
+
 
 def validate_repository_encoding(root: Path) -> dict[str, Any]:
     issues: list[dict[str, str]] = []
@@ -112,6 +115,7 @@ def validate_repository_encoding(root: Path) -> dict[str, Any]:
 
         if path.suffix.lower() == ".py":
             _validate_python_file(path, rel, text, issues)
+            _validate_chinese_string_literals(path, rel, text, issues)
 
         if path.suffix.lower() == ".json":
             try:
@@ -187,6 +191,29 @@ def _validate_python_file(path: Path, rel: str, text: str, issues: list[dict[str
                     "type": "raw_write_text",
                     "detail": f"line {node.lineno}: use write_text_utf8()",
                 })
+
+
+def _validate_chinese_string_literals(path: Path, rel: str, text: str, issues: list[dict[str, str]]) -> None:
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError:
+        return
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key_node, value_node in zip(node.keys, node.values):
+            if not isinstance(key_node, ast.Constant) or not isinstance(key_node.value, str):
+                continue
+            if not key_node.value.endswith("_zh"):
+                continue
+            if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str):
+                if REPEATED_QUESTION_MARK_RE.search(value_node.value):
+                    issues.append({
+                        "path": rel,
+                        "type": "mojibake",
+                        "detail": f"line {value_node.lineno}: {key_node.value} contains repeated question marks",
+                    })
 
 
 def _is_builtin_open(func: ast.expr) -> bool:

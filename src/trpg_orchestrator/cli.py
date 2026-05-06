@@ -25,6 +25,7 @@ from .payload_fulfillment import build_payload_fulfillment_input, defer_unfulfil
 from .prompt_builder import build_audit_user_prompt, build_chatgpt_image_input, build_chatgpt_input, build_director_user_prompt, build_v4_light_action_user_prompt, read_prompt, selected_memory_debug, selected_prompt_modules_debug
 from .prompt_sync import prompt_sync_report
 from .rewrite_manager import build_chatgpt_rewrite_input, build_v4_rewrite_user_prompt
+from .runtime_hygiene import pre_upload_clean
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_chatgpt_blocks, validate_payload_patch, validate_pressure_pack, validate_writeback
 from .story_progress import build_backend_progress_control, validate_story_blueprint
 from .quality_gate import quality_gate, is_quality_pass
@@ -67,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     sub.add_parser("validate-memory")
     sub.add_parser("validate-encoding")
+    pre_upload = sub.add_parser("pre-upload-clean")
+    pre_upload.add_argument("--check-only", action="store_true")
     sync_prompts = sub.add_parser("sync-prompts")
     sync_mode = sync_prompts.add_mutually_exclusive_group(required=True)
     sync_mode.add_argument("--check", action="store_true")
@@ -134,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_validate_memory()
         if args.command == "validate-encoding":
             return cmd_validate_encoding()
+        if args.command == "pre-upload-clean":
+            return cmd_pre_upload_clean(args.check_only)
         if args.command == "sync-prompts":
             return cmd_sync_prompts(args.apply)
         if args.command == "migrate-memory":
@@ -189,6 +194,12 @@ def cmd_status() -> int:
 
 def cmd_sync_prompts(apply: bool = False) -> int:
     report = prompt_sync_report(apply=apply)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report.get("ok") else 1
+
+
+def cmd_pre_upload_clean(check_only: bool = False) -> int:
+    report = pre_upload_clean(check_only=check_only)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report.get("ok") else 1
 

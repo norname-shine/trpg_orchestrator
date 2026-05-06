@@ -12,6 +12,7 @@ from .json_utils import read_json, write_json
 
 SYNC_MANIFEST = PROMPTS_DIR / "prompt_language_sync.json"
 STANDALONE_MD = {"rules_CN.md", "tasks_CN.md"}
+EXCLUDED_DIRS = {"TEST"}
 
 
 def prompt_sync_report(apply: bool = False) -> dict[str, Any]:
@@ -24,29 +25,31 @@ def prompt_sync_report(apply: bool = False) -> dict[str, Any]:
 
     for english_path in sorted(_english_prompt_files()):
         chinese_path = english_path.with_name(f"{english_path.stem}_CN.md")
-        pair_key = english_path.name
+        pair_key = english_path.relative_to(PROMPTS_DIR).as_posix()
         if not chinese_path.exists():
             if apply:
                 _create_counterpart(chinese_path, english_path, "zh")
-                actions.append({"type": "created_counterpart", "path": chinese_path.name})
+                actions.append({"type": "created_counterpart", "path": chinese_path.relative_to(PROMPTS_DIR).as_posix()})
             else:
-                issues.append({"path": english_path.name, "type": "missing_cn", "detail": chinese_path.name})
+                issues.append({"path": pair_key, "type": "missing_cn", "detail": chinese_path.relative_to(PROMPTS_DIR).as_posix()})
                 continue
         pairs[pair_key] = _pair_state(english_path, chinese_path, old_pairs.get(pair_key, {}))
 
-    for chinese_path in sorted(PROMPTS_DIR.glob("*_CN.md")):
+    for chinese_path in sorted(PROMPTS_DIR.rglob("*_CN.md")):
+        if _is_excluded(chinese_path):
+            continue
         if chinese_path.name in STANDALONE_MD:
             continue
         english_path = chinese_path.with_name(chinese_path.name.removesuffix("_CN.md") + ".md")
         if english_path.exists():
             continue
-        pair_key = english_path.name
+        pair_key = english_path.relative_to(PROMPTS_DIR).as_posix()
         if apply:
             _create_counterpart(english_path, chinese_path, "en")
-            actions.append({"type": "created_counterpart", "path": english_path.name})
+            actions.append({"type": "created_counterpart", "path": pair_key})
             pairs[pair_key] = _pair_state(english_path, chinese_path, old_pairs.get(pair_key, {}))
         else:
-            issues.append({"path": chinese_path.name, "type": "missing_en", "detail": english_path.name})
+            issues.append({"path": chinese_path.relative_to(PROMPTS_DIR).as_posix(), "type": "missing_en", "detail": pair_key})
 
     for pair_key, state in pairs.items():
         changed_en = state.get("changed_en") is True
@@ -93,9 +96,17 @@ def prompt_sync_report(apply: bool = False) -> dict[str, Any]:
 
 def _english_prompt_files() -> list[Path]:
     return [
-        path for path in PROMPTS_DIR.glob("*.md")
-        if path.name not in STANDALONE_MD and not path.name.endswith("_CN.md")
+        path for path in PROMPTS_DIR.rglob("*.md")
+        if path.name not in STANDALONE_MD and not path.name.endswith("_CN.md") and not _is_excluded(path)
     ]
+
+
+def _is_excluded(path: Path) -> bool:
+    try:
+        relative = path.relative_to(PROMPTS_DIR)
+    except ValueError:
+        return False
+    return bool(relative.parts and relative.parts[0] in EXCLUDED_DIRS)
 
 
 def _load_manifest() -> dict[str, Any]:
@@ -115,8 +126,8 @@ def _pair_state(english_path: Path, chinese_path: Path, baseline: dict[str, Any]
     old_cn = str(baseline.get("chinese_sha256") or "")
     has_baseline = bool(old_en and old_cn)
     return {
-        "english": english_path.name,
-        "chinese": chinese_path.name,
+        "english": english_path.relative_to(PROMPTS_DIR).as_posix(),
+        "chinese": chinese_path.relative_to(PROMPTS_DIR).as_posix(),
         "english_sha256": english_hash,
         "chinese_sha256": chinese_hash,
         "has_baseline": has_baseline,

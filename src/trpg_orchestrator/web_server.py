@@ -3627,57 +3627,57 @@ def default_rule_bundle() -> dict[str, Any]:
     categories = [
         {
             "rule_id": "story_progress_rules",
-            "title_zh": "???????",
+            "title_zh": "故事与进度规则",
             "title_en": "Story and Progress Rules",
-            "desc_zh": "?????????????????????????????",
+            "desc_zh": "控制故事长度、章节节奏、节点进度，以及不应过早揭露的信息。",
             "desc_en": "Controls story length, chapter pacing, node progress, and information that should not be revealed too early.",
             "files": ["story_progress_rules.md", "v4_campaign_context_prompt.md"],
         },
         {
             "rule_id": "character_attribute_rules",
-            "title_zh": "????????",
+            "title_zh": "角色卡与属性规则",
             "title_en": "Character Card and Attribute Rules",
-            "desc_zh": "??????????????????????",
+            "desc_zh": "控制主角档案、属性、角色卡展示和状态回写。",
             "desc_en": "Controls protagonist profile, attributes, character-card display, and state writeback.",
             "files": ["character_card_json_rules.md", "dice_check_rules_CN.md"],
         },
         {
             "rule_id": "style_rules",
-            "title_zh": "??????",
+            "title_zh": "正文风格规则",
             "title_en": "Prose Style Rules",
-            "desc_zh": "?????????????????? AI ?????",
+            "desc_zh": "控制正文语气、对白风格、现场描写和反 AI 味约束。",
             "desc_en": "Controls prose tone, dialogue style, vivid scene writing, and anti-AI-flavor constraints.",
             "files": ["chatgpt_style_rules.md", "chatgpt_host_prompt.md"],
         },
         {
             "rule_id": "npc_character_rules",
-            "title_zh": "NPC / ??????",
+            "title_zh": "NPC / 关键角色规则",
             "title_en": "NPC and Key Character Rules",
-            "desc_zh": "?? NPC???????????????????????????????????",
+            "desc_zh": "控制 NPC、伙伴、关键角色、阵营和档案一致性；具体类型由跑团初始化决定。",
             "desc_en": "Controls NPCs, companions, key characters, factions, and dossier consistency. Specific types come from campaign initialization.",
             "files": ["chatgpt_npc_voice_rules.md"],
         },
         {
             "rule_id": "image_gallery_rules",
-            "title_zh": "???????",
+            "title_zh": "图像与画廊规则",
             "title_en": "Image and Gallery Rules",
-            "desc_zh": "????????CG???????????????????",
+            "desc_zh": "控制地图、头像、CG、档案和视觉资产展示。",
             "desc_en": "Controls maps, portraits, CGs, dossiers, and visual asset display.",
             "files": ["chatgpt_image_rules.md", "visual_asset_protocol.md", "gallery_asset_rules.md"],
         },
         {
             "rule_id": "safety_rules",
-            "title_zh": "??????",
+            "title_zh": "安全边界规则",
             "title_en": "Safety Boundary Rules",
-            "desc_zh": "???????????????????????????",
+            "desc_zh": "控制禁止内容、软化内容、玩家边界和硬性叙事限制。",
             "desc_en": "Controls forbidden content, softened content, player boundaries, and hard narrative limits.",
             "files": ["forbidden_changes.json", "v4_audit_prompt.md"],
         },
         {
             "rule_id": "memory_writeback_rules",
-            "title_zh": "???????",
+            "title_zh": "记忆与回写规则",
             "title_en": "Memory and Writeback Rules",
-            "desc_zh": "??????????????????????????????????????",
+            "desc_zh": "控制持久事实、不确定信息和回合结束后的状态回写。",
             "desc_en": "Controls durable facts, uncertain information, and end-of-turn state writeback.",
             "files": ["state_writeback_schema.md", "v4_audit_prompt.md"],
         },
@@ -6239,7 +6239,6 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
 
 

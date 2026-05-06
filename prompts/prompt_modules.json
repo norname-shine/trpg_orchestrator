@@ -1,38 +1,50 @@
 {
   "v4_director_core": {
-    "path": "v4_director_prompt.md",
+    "path": "Director/v4_director_prompt.md",
     "always": true,
     "layers": [
       "director"
     ]
   },
   "chatgpt_host_core": {
-    "path": "chatgpt_host_prompt.md",
+    "path": "Actor/chatgpt_host_prompt.md",
     "always": true,
     "layers": [
       "actor"
     ]
   },
   "lazy_context_rules": {
-    "path": "lazy_context_rules.md",
+    "path": "Hotload/lazy_context_rules.md",
     "always": true,
     "layers": [
       "director",
-      "actor",
       "audit"
     ]
   },
   "output_contract_rules": {
-    "path": "output_contract_rules.md",
+    "path": "Hotload/output_contract_rules.md",
     "always": true,
     "layers": [
       "director",
-      "actor",
       "audit"
     ]
   },
+  "actor_context_rules": {
+    "path": "Actor/actor_context_rules.md",
+    "always": true,
+    "layers": [
+      "actor"
+    ]
+  },
+  "actor_writeback_rules": {
+    "path": "Actor/actor_writeback_rules.md",
+    "always": true,
+    "layers": [
+      "actor"
+    ]
+  },
   "v4_campaign_context": {
-    "path": "v4_campaign_context_prompt.md",
+    "path": "Director/v4_campaign_context_prompt.md",
     "layers": [
       "director"
     ],
@@ -41,7 +53,7 @@
     ]
   },
   "style_core": {
-    "path": "chatgpt_style_rules.md",
+    "path": "Actor/chatgpt_style_rules.md",
     "layers": [
       "actor"
     ],
@@ -51,7 +63,7 @@
     ]
   },
   "image_rules": {
-    "path": "chatgpt_image_rules.md",
+    "path": "Actor/chatgpt_image_rules.md",
     "layers": [
       "actor"
     ],
@@ -62,9 +74,8 @@
     ]
   },
   "map_rules": {
-    "path": "chatgpt_map_rules.md",
+    "path": "Director/chatgpt_map_rules.md",
     "layers": [
-      "actor",
       "director"
     ],
     "triggers": [
@@ -73,8 +84,19 @@
       "map"
     ]
   },
+  "actor_map_rules": {
+    "path": "Actor/actor_map_rules.md",
+    "layers": [
+      "actor"
+    ],
+    "triggers": [
+      "user_requested_map",
+      "director_requested_map_update",
+      "map"
+    ]
+  },
   "npc_voice_rules": {
-    "path": "chatgpt_npc_voice_rules.md",
+    "path": "Actor/chatgpt_npc_voice_rules.md",
     "layers": [
       "actor"
     ],
@@ -85,7 +107,16 @@
     ]
   },
   "character_card_rules": {
-    "path": "character_card_json_rules.md",
+    "path": "Actor/character_card_json_rules.md",
+    "layers": [],
+    "triggers": [
+      "character_card_update",
+      "frontend_character_render",
+      "character_card"
+    ]
+  },
+  "actor_character_evidence_rules": {
+    "path": "Actor/actor_character_evidence_rules.md",
     "layers": [
       "actor"
     ],
@@ -96,9 +127,8 @@
     ]
   },
   "dice_rules": {
-    "path": "dice_check_rules.md",
+    "path": "Director/dice_check_rules.md",
     "layers": [
-      "actor",
       "director"
     ],
     "triggers": [
@@ -107,10 +137,20 @@
       "dice_possible"
     ]
   },
-  "inventory_rules": {
-    "path": "inventory_rules.md",
+  "actor_dice_rules": {
+    "path": "Actor/actor_dice_check_rules.md",
     "layers": [
-      "actor",
+      "actor"
+    ],
+    "triggers": [
+      "dice_check_requested",
+      "campaign_uses_dice",
+      "dice_possible"
+    ]
+  },
+  "inventory_rules": {
+    "path": "Director/inventory_rules.md",
+    "layers": [
       "director"
     ],
     "triggers": [
@@ -122,11 +162,37 @@
       "inventory"
     ]
   },
-  "dossier_rules": {
-    "path": "dossier_rules.md",
+  "actor_inventory_rules": {
+    "path": "Actor/actor_inventory_rules.md",
     "layers": [
-      "actor",
+      "actor"
+    ],
+    "triggers": [
+      "inventory_update",
+      "equipment_changed",
+      "item_used",
+      "item_gained",
+      "item_lost",
+      "inventory"
+    ]
+  },
+  "dossier_rules": {
+    "path": "Director/dossier_rules.md",
+    "layers": [
       "director"
+    ],
+    "triggers": [
+      "clue_found",
+      "npc_revealed",
+      "document_found",
+      "location_recorded",
+      "dossier"
+    ]
+  },
+  "actor_dossier_rules": {
+    "path": "Actor/actor_dossier_rules.md",
+    "layers": [
+      "actor"
     ],
     "triggers": [
       "clue_found",

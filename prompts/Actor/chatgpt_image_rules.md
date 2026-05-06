@@ -14,7 +14,7 @@ If the user asks for image generation, prose must still follow the current campa
 ## Mandatory Split For Image Generation
 
 - Image generation can return only one image per request and cannot reliably return story JSON plus an image in the same reply.
-- When image generation is triggered, the runtime must split the work into two independent turns.
+- When image generation is requested, the runtime must split the work into two independent turns.
 - First turn: story text only, strict JSON output with blocks, summary, and state_writeback. Do not generate an image in this turn.
 - Second turn: image-only request using the prepared detailed prompt. Generate exactly one image. Do not continue the story and do not output state_writeback JSON.
 - The runtime merges the text result and the image result into the frontend after both turns finish.
@@ -38,12 +38,12 @@ If the user asks for image generation, prose must still follow the current campa
 - The result should look like a professional film storyboard or AI image-composition template with Chinese UI labels and short explanatory notes.
 - When caching this result, the runtime uses the left 16:9 PC crop as the default story CG and also caches the right 9:16 mobile crop.
 
-Image trigger, map update, local Canvas drawing, asset caching, and gallery rendering are external control/runtime operations. Do not decide them in prose.
+Image generation, map update, local Canvas drawing, asset caching, and gallery rendering are external runtime operations. Do not decide them in prose.
 
 ## Current Image Specification
 
 - Image generation must use one 2304x2304 square canvas.
 - The square canvas must contain two sub-compositions: one 16:9 horizontal panel and one 9:16 vertical panel.
 - New image requests may only use 16:9 and 9:16 ratio semantics. Do not request 1:1, 3:4, 4:3, 1024x1024, or 1280x720 outputs.
-- The director layer should provide concrete style prompts from this campaign's visual style. For animation or game-flavored campaigns, preserve general flavor through original medium, color, composition, and mood descriptions.
+- Use concrete style prompts from this campaign's visual style. For animation or game-flavored campaigns, preserve general flavor through original medium, color, composition, and mood descriptions.
 - Avoid copyrighted character names, franchise names, trademarks, artist names, or directly imitative style labels. Use original descriptive wording.

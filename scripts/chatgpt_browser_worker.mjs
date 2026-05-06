@@ -199,10 +199,8 @@ async function waitForHumanReady(page, taskId) {
 
 async function openProject(page, name, taskId, allowCreate = false) {
   await ensureSidebarOpen(page);
-  const candidates = [
-    page.getByText(name, { exact: true }).first(),
-    findByTextLoose(page, name),
-  ];
+  await openProjectsSection(page);
+  const candidates = projectLinkCandidates(page, name);
   for (const candidate of candidates) {
     if (await candidate.isVisible({ timeout: 2500 }).catch(() => false)) {
       await candidate.click({ force: true });
@@ -212,7 +210,7 @@ async function openProject(page, name, taskId, allowCreate = false) {
   }
   if (allowCreate) {
     writeTaskStatus(taskId, { state: "running", stage: "project_creating", label: "Creating ChatGPT project", percent: 13, updated_at: Date.now() });
-    await createProject(page, name);
+    await createProject(page, name, taskId);
     return;
   }
   fail(`Project not found: ${name}`);
@@ -240,45 +238,113 @@ async function openConversation(page, name, taskId, allowCreate = false) {
   fail(`Conversation not found: ${name}`);
 }
 
-async function createProject(page, name) {
+async function createProject(page, name, taskId = "") {
   await ensureSidebarOpen(page);
-  const buttons = [
-    page.getByText("New project", { exact: true }),
-    page.getByText("Create project", { exact: true }),
-    page.locator("button").filter({ hasText: /New project|Create project/i }),
-    page.locator('button[aria-label*="project" i]'),
-  ];
+  await openProjectsSection(page);
+  const buttons = projectCreateButtonCandidates(page);
   for (const candidate of buttons) {
     const first = candidate.first();
     if (await first.isVisible({ timeout: 1500 }).catch(() => false)) {
       await first.click({ force: true });
       await page.waitForTimeout(800);
-      const inputs = [
-        page.locator('input[name="name"]'),
-        page.locator('input[placeholder*="project" i]'),
-        page.locator('[role="dialog"] input').first(),
-        page.locator("input").last(),
-      ];
-      for (const input of inputs) {
-        if (await input.isVisible({ timeout: 1200 }).catch(() => false)) {
-          await input.fill(name);
-          break;
-        }
-      }
-      const createButtons = [
-        page.getByRole("button", { name: /Create|Done|Save/i }).last(),
-        page.locator('[role="dialog"] button').filter({ hasText: /Create|Done|Save/i }).last(),
-      ];
-      for (const createButton of createButtons) {
-        if (await createButton.isVisible({ timeout: 1200 }).catch(() => false)) {
-          await createButton.click({ force: true });
-          await page.waitForTimeout(1500);
-          return;
-        }
-      }
+      await fillProjectName(page, name);
+      await submitProjectCreateDialog(page);
+      await waitForProjectAvailable(page, name, taskId);
+      return;
     }
   }
-  fail(`Project not found and automatic project creation was not available: ${name}`);
+  fail(`Project not found and automatic project creation control was not found: ${name}`);
+}
+
+async function openProjectsSection(page) {
+  const candidates = [
+    page.getByRole("button", { name: /Projects|项目|專案/i }),
+    page.getByRole("link", { name: /Projects|项目|專案/i }),
+    page.locator("a, button, [role='button'], [role='link']").filter({ hasText: /Projects|项目|專案/i }),
+    page.locator('[aria-label*="Projects" i], [aria-label*="项目"], [aria-label*="專案"]'),
+  ];
+  for (const candidate of candidates) {
+    const first = candidate.first();
+    if (await first.isVisible({ timeout: 800 }).catch(() => false)) {
+      await first.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(500);
+      return;
+    }
+  }
+}
+
+function projectLinkCandidates(page, name) {
+  return [
+    page.getByText(name, { exact: true }).first(),
+    page.getByRole("link", { name }).first(),
+    page.getByRole("button", { name }).first(),
+    findByTextLoose(page, name),
+  ];
+}
+
+function projectCreateButtonCandidates(page) {
+  return [
+    page.getByRole("button", { name: /New project|Create project|创建项目|新建项目|新增项目|新增專案|建立專案/i }),
+    page.getByRole("link", { name: /New project|Create project|创建项目|新建项目|新增项目|新增專案|建立專案/i }),
+    page.getByText("New project", { exact: true }),
+    page.getByText("Create project", { exact: true }),
+    page.getByText("创建项目", { exact: true }),
+    page.getByText("新建项目", { exact: true }),
+    page.locator("button, a, [role='button'], [role='link']").filter({ hasText: /New project|Create project|创建项目|新建项目|新增项目|新增專案|建立專案/i }),
+    page.locator('[data-testid*="project" i]').filter({ hasText: /New|Create|创建|新建|新增|建立/i }),
+    page.locator('[aria-label*="New project" i], [aria-label*="Create project" i], [aria-label*="创建项目"], [aria-label*="新建项目"], [aria-label*="新增项目"], [aria-label*="新增專案"], [aria-label*="建立專案"]'),
+  ];
+}
+
+async function fillProjectName(page, name) {
+  const inputs = [
+    page.locator('input[name="name"]'),
+    page.locator('input[placeholder*="project" i]'),
+    page.locator('input[placeholder*="项目"]'),
+    page.locator('input[placeholder*="專案"]'),
+    page.locator('[role="dialog"] input').first(),
+    page.locator("input").last(),
+  ];
+  for (const input of inputs) {
+    if (await input.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await input.fill(name);
+      return;
+    }
+  }
+  fail(`Project creation dialog opened but project name input was not found: ${name}`);
+}
+
+async function submitProjectCreateDialog(page) {
+  const createButtons = [
+    page.getByRole("button", { name: /Create|Done|Save|创建|建立|完成|保存|儲存/i }).last(),
+    page.locator('[role="dialog"] button').filter({ hasText: /Create|Done|Save|创建|建立|完成|保存|儲存/i }).last(),
+    page.locator("button").filter({ hasText: /Create|Done|Save|创建|建立|完成|保存|儲存/i }).last(),
+  ];
+  for (const createButton of createButtons) {
+    if (await createButton.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await createButton.click({ force: true });
+      await page.waitForTimeout(1800);
+      return;
+    }
+  }
+  fail("Project creation dialog submit button was not found.");
+}
+
+async function waitForProjectAvailable(page, name, taskId = "") {
+  for (let i = 0; i < 20; i += 1) {
+    await ensureSidebarOpen(page);
+    await openProjectsSection(page);
+    for (const candidate of projectLinkCandidates(page, name)) {
+      if (await candidate.isVisible({ timeout: 800 }).catch(() => false)) {
+        await candidate.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(1000);
+        return;
+      }
+    }
+    writeTaskStatus(taskId, { state: "running", stage: "project_creating", label: "Waiting for created ChatGPT project", percent: 14, updated_at: Date.now() });
+    await page.waitForTimeout(1000);
+  }
+  fail(`Project was submitted for creation but could not be opened: ${name}`);
 }
 
 function findByTextLoose(page, text) {

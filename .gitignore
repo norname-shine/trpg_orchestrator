@@ -4,6 +4,7 @@
 node_modules/
 outbox/
 *.log
+.tmp_*.json
 __pycache__/
 *.py[cod]
 *.pyo

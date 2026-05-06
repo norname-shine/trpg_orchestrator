@@ -332,6 +332,7 @@ def normalize_pressure_pack_compat(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         return data
     normalized = data
+    normalized.setdefault("human_readable_note", "Pressure pack normalized from an older or incomplete director output.")
     if "progress_control" not in normalized:
         normalized["progress_control"] = {
             "current_chapter_id": "",

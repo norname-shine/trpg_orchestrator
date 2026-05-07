@@ -503,82 +503,33 @@ def safe_segment(value: str) -> str:
 
 
 def asset_manifest_path(campaign_id: str) -> Path:
-    return CAMPAIGNS_DIR / safe_segment(campaign_id) / "assets" / "manifest.json"
+    from .services import assets
+
+    return assets.asset_manifest_path(campaign_id)
 
 
 def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
-    path = asset_manifest_path(campaign_id)
-    if not path.exists():
-        return {"campaign_id": campaign_id, "asset_seed": campaign_asset_seed(campaign_id), "assets": {}}
-    try:
-        data = read_json(path)
-        if isinstance(data, dict):
-            data.setdefault("campaign_id", campaign_id)
-            data.setdefault("asset_seed", campaign_asset_seed(campaign_id))
-            data.setdefault("assets", {})
-            migrated = migrateAssetKinds(data, build_actor_identity_context(campaign_id))
-            if migrated.get("_migration_changed"):
-                migrated.pop("_migration_changed", None)
-                write_json(path, migrated)
-                return migrated
-            return data
-    except Exception:
-        pass
-    return {"campaign_id": campaign_id, "asset_seed": campaign_asset_seed(campaign_id), "assets": {}}
+    from .services import assets
+
+    return assets.load_asset_manifest(campaign_id)
 
 
 def campaign_asset_seed(campaign_id: str) -> str:
-    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
-    profile_path = root / "campaign_profile.json"
-    if profile_path.exists():
-        try:
-            profile = read_json(profile_path)
-            if profile.get("asset_seed"):
-                return str(profile["asset_seed"])
-        except Exception:
-            pass
-    registry_path = CAMPAIGNS_DIR / "campaign_registry.json"
-    if registry_path.exists():
-        try:
-            registry = read_json(registry_path)
-            seed = registry.get("campaigns", {}).get(campaign_id, {}).get("asset_seed")
-            if seed:
-                return str(seed)
-        except Exception:
-            pass
-    import hashlib
-    return hashlib.sha256(f"trpg-assets:{campaign_id}".encode("utf-8")).hexdigest()[:16]
+    from .services import assets
+
+    return assets.campaign_asset_seed(campaign_id)
 
 
 def scoped_asset_key(campaign_id: str, kind: str, object_id: Any, variant: str = "default", generator_version: int = 17) -> str:
-    resolved = safe_segment(campaign_id or MemoryStore().resolve_campaign_id(None))
-    seed = campaign_asset_seed(resolved)
-    obj = safe_segment(str(object_id or "unknown"))
-    return f"{resolved}:{seed}:{safe_segment(kind)}:{obj}:{safe_segment(variant)}:v{generator_version}"
+    from .services import assets
+
+    return assets.scoped_asset_key(campaign_id, kind, object_id, variant, generator_version)
 
 
-ROLE_PRIORITY = {
-    "player": 10,
-    "companion": 20,
-    "master": 30,
-    "npc": 40,
-    "item": 50,
-    "scene": 60,
-}
+from .services import assets as assets_service
 
-ROLE_ASSET_KIND = {
-    "player": "player_portrait",
-    "companion": "companion_portrait",
-    "master": "master_portrait",
-    "npc": "npc_portrait",
-    "key_character": "npc_portrait",
-    "item": "item_icon",
-    "prop": "item_icon",
-    "scene": "scene_image",
-    "map": "map_image",
-    "monster": "monster_image",
-    "cg": "cg_image",
-}
+ROLE_PRIORITY = assets_service.ROLE_PRIORITY
+ROLE_ASSET_KIND = assets_service.ROLE_ASSET_KIND
 
 CORE_GALLERY_CATEGORIES = [
     {"id": "prop", "label": "道具", "base": True},
@@ -592,44 +543,21 @@ MAX_CAMPAIGN_GALLERY_CATEGORIES = 3
 
 ACTOR_ROLES = {"player", "companion", "master", "npc", "key_character", "monster"}
 GALLERY_VISIBLE_KINDS = {
-    "companion_portrait",
-    "master_portrait", "npc_portrait", "item_icon", "scene_image", "map_image",
-    "monster_image", "cg_image", "gallery_image",
+    *assets_service.GALLERY_VISIBLE_KINDS,
 }
 
 
 def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key: str = "") -> str:
-    raw = str(kind or "").lower()
-    metadata = metadata or {}
-    if "attribute_star" in raw or "attribute_star" in str(key).lower():
-        return "attribute_star"
-    role = infer_asset_role({"kind": raw, "key": key, "metadata": metadata})
-    if role in ROLE_ASSET_KIND:
-        return ROLE_ASSET_KIND[role]
-    if raw in ROLE_ASSET_KIND.values():
-        return raw
-    if raw in {"portrait"}:
-        return "player_portrait"
-    if raw in {"companion"}:
-        return "companion_portrait"
-    if raw in {"npc", "character"} or "npc" in raw:
-        return "npc_portrait"
-    if raw in {"item", "weapon", "supply", "material", "ritual_tool", "equipment", "document", "clue"}:
-        return "item_icon"
-    if raw in {"prop", "tool", "anomaly", "quest"}:
-        return "item_icon"
-    if raw in {"scene", "location"}:
-        return "scene_image"
-    if raw == "map" or "gallery_map" in raw:
-        return "map_image"
-    if "monster" in raw or "ecology" in raw:
-        return "monster_image"
-    if "cg" in raw or "gallery_image" in raw or "formal_cg" in raw:
-        return "cg_image" if "cg" in raw else "gallery_image"
-    return raw
+    from .services import assets
+
+    return assets.normalize_asset_kind(kind, metadata, key)
 
 
 def infer_asset_role(asset: dict[str, Any]) -> str:
+    from .services import assets
+
+    return assets.infer_asset_role(asset)
+
     metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
     explicit = str(metadata.get("role") or metadata.get("entity_role") or asset.get("role") or "").lower()
     if explicit in ROLE_PRIORITY:
@@ -668,11 +596,19 @@ def infer_asset_role(asset: dict[str, Any]) -> str:
 
 
 def asset_display_name(asset: dict[str, Any]) -> str:
+    from .services import assets
+
+    return assets.asset_display_name(asset)
+
     metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
     return str(metadata.get("display_name") or metadata.get("title") or asset.get("display_name") or asset.get("title") or "").strip()
 
 
 def entity_key_for_asset(asset: dict[str, Any]) -> str:
+    from .services import assets
+
+    return assets.entity_key_for_asset(asset)
+
     metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
     existing = str(metadata.get("entity_key") or asset.get("entity_key") or "").strip()
     if existing:
@@ -1423,137 +1359,15 @@ def require_outbox_campaign(outbox_dir: Path, campaign_id: str) -> None:
 
 
 def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
-    if not campaign_id:
-        campaign_id = MemoryStore().resolve_campaign_id(None)
-    if not key:
-        raise RuntimeError("asset key is required")
-    manifest = load_asset_manifest(campaign_id)
-    entry = manifest.get("assets", {}).get(key)
-    if not entry:
-        return {"ok": True, "exists": False}
-    if str(entry.get("campaign_id") or campaign_id) != campaign_id:
-        return {"ok": True, "exists": False}
-    rel_path = str(entry.get("path", ""))
-    try:
-        full = safe_asset_read_path(campaign_id, rel_path)
-    except Exception:
-        return {"ok": True, "exists": False}
-    if not rel_path or not full.exists():
-        return {"ok": True, "exists": False}
-    url_path = rel_path.replace("\\", "/")
-    if url_path.startswith("assets/"):
-        url_path = url_path[len("assets/"):]
-    return {
-        "ok": True,
-        "exists": True,
-        "key": key,
-        "entry": normalized_asset_entry(campaign_id, key, entry),
-        "url": f"/campaign-assets/{safe_segment(campaign_id)}/{url_path}",
-    }
+    from .services import assets
 
-
-
-def asset_entry_payload(campaign_id: str, key: str, entry: dict[str, Any]) -> dict[str, Any]:
-    entry = normalized_asset_entry(campaign_id, key, entry)
-    if entry.get("placeholder") or entry.get("metadata", {}).get("placeholder"):
-        return {}
-    rel_path = str(entry.get("path", ""))
-    try:
-        full = safe_asset_read_path(campaign_id, rel_path)
-    except Exception:
-        full = Path()
-    url_path = rel_path.replace("\\", "/")
-    if url_path.startswith("assets/"):
-        url_path = url_path[len("assets/"):]
-    return {
-        "campaign_id": campaign_id,
-        "asset_seed": entry.get("asset_seed") or campaign_asset_seed(campaign_id),
-        "key": key,
-        "kind": entry.get("kind", ""),
-        "path": rel_path,
-        "exists": bool(rel_path and full.exists()),
-        "url": f"/campaign-assets/{safe_segment(campaign_id)}/{url_path}" if rel_path else "",
-        "generator_version": entry.get("generator_version", 1),
-        "metadata": entry.get("metadata", {}),
-        "entity_key": entry.get("entity_key", ""),
-        "role": entry.get("role", ""),
-        "display_name": entry.get("display_name", ""),
-        "visible_in_gallery": entry.get("visible_in_gallery", True),
-        "debug_only": entry.get("debug_only", False),
-        **entry,
-    }
+    return assets.asset_lookup(campaign_id, key)
 
 
 def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
-    if not campaign_id:
-        campaign_id = MemoryStore().resolve_campaign_id(None)
-    manifest = load_asset_manifest(campaign_id)
-    entries = []
-    for key, entry in manifest.get("assets", {}).items():
-        if not isinstance(entry, dict):
-            continue
-        normalized = normalized_asset_entry(campaign_id, key, entry)
-        if normalized.get("campaign_id") != campaign_id:
-            continue
-        if normalized.get("placeholder") or normalized.get("metadata", {}).get("placeholder"):
-            continue
-        if is_attribute_star_asset(normalized):
-            continue
-        if normalize_asset_kind(normalized.get("kind"), normalized.get("metadata", {}), normalized.get("key", "")) == "map_image" and not is_valid_cached_map_asset(normalized):
-            continue
-        if kind and str(entry.get("kind", "")) != kind:
-            continue
-        payload = asset_entry_payload(campaign_id, key, normalized)
-        if payload:
-            entries.append(payload)
-    entries.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
-    return {"ok": True, "campaign_id": campaign_id, "assets": entries}
+    from .services import assets
 
-
-def normalized_asset_entry(campaign_id: str, key: str, entry: dict[str, Any]) -> dict[str, Any]:
-    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-    normalized = {**entry, "key": str(entry.get("key") or key), "metadata": metadata}
-    role = infer_asset_role(normalized)
-    kind = normalize_asset_kind(entry.get("kind", ""), metadata, key)
-    entity_key = str(metadata.get("entity_key") or entry.get("entity_key") or entity_key_for_asset({**normalized, "kind": kind}))
-    display_name = asset_display_name({**normalized, "kind": kind})
-    visible = entry.get("visible_in_gallery", metadata.get("visible_in_gallery", True))
-    debug_only = bool(entry.get("debug_only") or metadata.get("debug_only"))
-    runtime_role = str(metadata.get("runtime_role") or role or "").lower()
-    gallery_category = str(metadata.get("gallery_category") or normalize_frontend_gallery_kind(kind) or "").lower()
-    not_in_filters = bool(metadata.get("not_in_gallery_filters") or entry.get("not_in_gallery_filters"))
-    if runtime_role in {"player", "companion"} or gallery_category == "hidden" or not_in_filters:
-        visible = False
-    return {
-        **entry,
-        "campaign_id": str(entry.get("campaign_id") or campaign_id),
-        "asset_seed": str(entry.get("asset_seed") or campaign_asset_seed(campaign_id)),
-        "key": str(entry.get("key") or key),
-        "kind": kind,
-        "role": role,
-        "runtime_role": runtime_role,
-        "entity_key": entity_key,
-        "display_name": display_name,
-        "visible_in_gallery": bool(visible) and not debug_only,
-        "gallery_category": gallery_category,
-        "not_in_gallery_filters": not_in_filters,
-        "portrait_asset_kind": str(metadata.get("portrait_asset_kind") or kind),
-        "render_tier": str(metadata.get("render_tier") or ""),
-        "debug_only": debug_only,
-        "metadata": {
-            **metadata,
-            "role": metadata.get("role") or role,
-            "runtime_role": runtime_role or metadata.get("role") or role,
-            "entity_key": entity_key,
-            "display_name": metadata.get("display_name") or display_name,
-            "visible_in_gallery": bool(visible) and not debug_only,
-            "gallery_category": gallery_category,
-            "not_in_gallery_filters": not_in_filters,
-            "portrait_asset_kind": metadata.get("portrait_asset_kind") or kind,
-            "render_tier": metadata.get("render_tier") or "",
-            "debug_only": debug_only,
-        },
-    }
+    return assets.asset_list(campaign_id, kind)
 
 
 def module_payload_response(module_name: str, campaign_id: str = "", cursor: str = "", limit: str = "", kind: str = "") -> dict[str, Any]:
@@ -1606,18 +1420,6 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
     if module_name == "dossier":
         return {"ok": True, "campaign_id": resolved, "module": "dossier", "payload": frontend_dossier(state)}
     return {"ok": False, "error": f"unknown module: {module_name}"}
-
-
-def safe_asset_read_path(campaign_id: str, rel_path: str) -> Path:
-    if not rel_path:
-        raise RuntimeError("asset path is empty")
-    root = (CAMPAIGNS_DIR / safe_segment(campaign_id) / "assets").resolve()
-    target = (CAMPAIGNS_DIR / safe_segment(campaign_id) / rel_path).resolve()
-    if root not in target.parents and target != root:
-        raise RuntimeError("asset path escapes campaign assets")
-    if target.suffix.lower() != ".png":
-        raise RuntimeError("only PNG assets are readable")
-    return target
 
 
 def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3350,131 +3152,21 @@ def concise_text(value: Any, limit: int = 42) -> str:
     return text[:limit] + ("..." if len(text) > limit else "")
 
 def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
-    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
-    key = str(payload.get("key") or "").strip()
-    if not key:
-        raise RuntimeError("asset key is required")
-    asset_seed = str(payload.get("asset_seed") or campaign_asset_seed(campaign_id))
-    if campaign_id not in key:
-        raise RuntimeError("asset key must include campaign_id")
-    if asset_seed and asset_seed not in key:
-        raise RuntimeError("asset key must include asset_seed")
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    if is_placeholder_asset_payload(payload, metadata):
-        raise RuntimeError("placeholder assets must not be saved")
-    data_url = str(payload.get("data_url") or "")
-    prefix = "data:image/png;base64,"
-    if not data_url.startswith(prefix):
-        raise RuntimeError("asset data_url must be a PNG data URL")
-    raw = base64.b64decode(data_url[len(prefix):], validate=True)
-    if len(raw) < 128:
-        raise RuntimeError("empty PNG assets must not be saved")
-    subdir = safe_segment(str(payload.get("subdir") or payload.get("kind") or "misc"))
-    filename = safe_segment(str(payload.get("filename") or key)) + ".png"
-    rel_path = Path("assets") / subdir / filename
-    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
-    target = root / rel_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(raw)
+    from .services import assets
 
-    manifest = load_asset_manifest(campaign_id)
-    manifest.setdefault("campaign_id", campaign_id)
-    manifest.setdefault("asset_seed", campaign_asset_seed(campaign_id))
-    manifest.setdefault("assets", {})[key] = {
-        "campaign_id": campaign_id,
-        "key": key,
-        "path": rel_path.as_posix(),
-        "kind": str(payload.get("kind") or subdir),
-        "seed": str(payload.get("seed") or key),
-        "asset_seed": asset_seed,
-        "style": str(payload.get("style") or "canvas_pixel"),
-        "generator_version": int(payload.get("generator_version") or 1),
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    if isinstance(metadata, dict):
-        canonical_kind = normalize_asset_kind(payload.get("kind") or subdir, metadata, key)
-        metadata.setdefault("role", infer_asset_role({"key": key, "kind": canonical_kind, "metadata": metadata}))
-        metadata.setdefault("entity_key", entity_key_for_asset({"key": key, "kind": canonical_kind, "metadata": metadata}))
-        if metadata.get("display_name") or metadata.get("title"):
-            metadata.setdefault("visible_in_gallery", True)
-        manifest["assets"][key]["metadata"] = metadata
-        manifest["assets"][key]["kind"] = canonical_kind
-        manifest["assets"][key]["role"] = metadata.get("role", "")
-        manifest["assets"][key]["entity_key"] = metadata.get("entity_key", "")
-        manifest["assets"][key]["visible_in_gallery"] = bool(metadata.get("visible_in_gallery", True))
-    write_json(asset_manifest_path(campaign_id), manifest)
-    return asset_lookup(campaign_id, key)
-
-
-def is_placeholder_asset_payload(payload: dict[str, Any], metadata: dict[str, Any]) -> bool:
-    text = " ".join(str(payload.get(name, "")) for name in ("key", "kind", "seed", "filename", "style"))
-    text = f"{text} {metadata.get('title', '')} {metadata.get('source', '')} {metadata.get('status', '')}".lower()
-    if payload.get("placeholder") or metadata.get("placeholder") or metadata.get("fallback"):
-        return True
-    if metadata.get("cache_policy") == "placeholder":
-        return True
-    if any(token in text for token in ("placeholder", "fallback", "default_trpg", "empty_map", "base_map")):
-        return True
-    route = metadata.get("map_route")
-    if str(payload.get("kind") or "") == "map" and isinstance(route, dict) and not route.get("nodes"):
-        return True
-    return False
-
-
-
-def safe_asset_target(campaign_id: str, rel_path: str) -> Path:
-    if not rel_path:
-        raise RuntimeError("asset path is empty")
-    root = (CAMPAIGNS_DIR / safe_segment(campaign_id) / "assets").resolve()
-    target = (CAMPAIGNS_DIR / safe_segment(campaign_id) / rel_path).resolve()
-    if root not in target.parents and target != root:
-        raise RuntimeError("asset path escapes campaign assets")
-    if target.suffix.lower() != ".png":
-        raise RuntimeError("only PNG assets can be removed")
-    return target
+    return assets.save_asset(payload)
 
 
 def delete_asset(payload: dict[str, Any]) -> dict[str, Any]:
-    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
-    key = str(payload.get("key") or "").strip()
-    if not key:
-        raise RuntimeError("asset key is required")
-    manifest = load_asset_manifest(campaign_id)
-    entry = manifest.get("assets", {}).pop(key, None)
-    removed_file = False
-    warnings: list[str] = []
-    if isinstance(entry, dict) and entry.get("path"):
-        try:
-            target = safe_asset_target(campaign_id, str(entry.get("path", "")))
-            if target.exists():
-                target.unlink()
-                removed_file = True
-        except Exception as exc:
-            warnings.append(str(exc))
-    write_json(asset_manifest_path(campaign_id), manifest)
-    return {"ok": True, "campaign_id": campaign_id, "key": key, "removed_file": removed_file, "warnings": warnings}
+    from .services import assets
+
+    return assets.delete_asset(payload)
 
 
 def rebuild_assets(payload: dict[str, Any]) -> dict[str, Any]:
-    campaign_id = str(payload.get("campaign_id") or "").strip() or MemoryStore().resolve_campaign_id(None)
-    kind = str(payload.get("kind") or "").strip()
-    manifest = load_asset_manifest(campaign_id)
-    removed: list[str] = []
-    warnings: list[str] = []
-    for key, entry in list(manifest.get("assets", {}).items()):
-        if kind and str(entry.get("kind", "")) != kind:
-            continue
-        if isinstance(entry, dict) and entry.get("path"):
-            try:
-                target = safe_asset_target(campaign_id, str(entry.get("path", "")))
-                if target.exists():
-                    target.unlink()
-            except Exception as exc:
-                warnings.append(f"{key}: {exc}")
-        manifest.get("assets", {}).pop(key, None)
-        removed.append(key)
-    write_json(asset_manifest_path(campaign_id), manifest)
-    return {"ok": True, "campaign_id": campaign_id, "kind": kind, "removed": removed, "warnings": warnings}
+    from .services import assets
+
+    return assets.rebuild_assets(payload)
 def cli_command(parts: list[str], campaign_id: str = "") -> list[str]:
     command = [sys.executable, "-m", "trpg_orchestrator.cli", *parts]
     if campaign_id and parts[0] not in {"validate-memory", "memory-report", "rewrite-plan", "run-rewrite"}:
@@ -6565,86 +6257,9 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-_asset_manifest_path_impl = asset_manifest_path
-_load_asset_manifest_impl = load_asset_manifest
-_campaign_asset_seed_impl = campaign_asset_seed
-_scoped_asset_key_impl = scoped_asset_key
-_normalize_asset_kind_impl = normalize_asset_kind
-_infer_asset_role_impl = infer_asset_role
-_asset_lookup_impl = asset_lookup
-_asset_list_impl = asset_list
-_save_asset_impl = save_asset
-_delete_asset_impl = delete_asset
-_rebuild_assets_impl = rebuild_assets
 _audit_writeback_payload_impl = audit_writeback_payload
 _writeback_review_payload_impl = writeback_review_payload
 _apply_writeback_payload_impl = apply_writeback_payload
-
-
-def asset_manifest_path(campaign_id: str) -> Path:
-    from .services import assets
-
-    return assets.asset_manifest_path(campaign_id)
-
-
-def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
-    from .services import assets
-
-    return assets.load_asset_manifest(campaign_id)
-
-
-def campaign_asset_seed(campaign_id: str) -> str:
-    from .services import assets
-
-    return assets.campaign_asset_seed(campaign_id)
-
-
-def scoped_asset_key(campaign_id: str, kind: str, object_id: Any, variant: str = "default", generator_version: int = 17) -> str:
-    from .services import assets
-
-    return assets.scoped_asset_key(campaign_id, kind, object_id, variant, generator_version)
-
-
-def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key: str = "") -> str:
-    from .services import assets
-
-    return assets.normalize_asset_kind(kind, metadata, key)
-
-
-def infer_asset_role(asset: dict[str, Any]) -> str:
-    from .services import assets
-
-    return assets.infer_asset_role(asset)
-
-
-def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
-    from .services import assets
-
-    return assets.asset_lookup(campaign_id, key)
-
-
-def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
-    from .services import assets
-
-    return assets.asset_list(campaign_id, kind)
-
-
-def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
-    from .services import assets
-
-    return assets.save_asset(payload)
-
-
-def delete_asset(payload: dict[str, Any]) -> dict[str, Any]:
-    from .services import assets
-
-    return assets.delete_asset(payload)
-
-
-def rebuild_assets(payload: dict[str, Any]) -> dict[str, Any]:
-    from .services import assets
-
-    return assets.rebuild_assets(payload)
 
 
 def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:

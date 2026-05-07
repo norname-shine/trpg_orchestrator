@@ -77,6 +77,18 @@ def test_assets_infer_role_without_web_impl(monkeypatch):
     assert role == "npc"
 
 
+def test_assets_infer_role_uses_utf8_companion_keywords():
+    role = assets.infer_asset_role({"kind": "portrait", "metadata": {"title": "同行伙伴"}})
+
+    assert role == "companion"
+
+
+def test_assets_infer_role_uses_utf8_master_keywords():
+    role = assets.infer_asset_role({"kind": "portrait", "metadata": {"title": "御主立绘"}})
+
+    assert role == "master"
+
+
 def test_asset_list_runs_from_service_without_web_impl(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_asset_list_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)

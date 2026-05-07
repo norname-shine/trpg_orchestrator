@@ -172,9 +172,9 @@ def infer_asset_role(asset: dict[str, Any]) -> str:
             metadata.get("object_id"),
         )
     ).lower()
-    if any(token in text for token in ("companion", "浼欎即", "鍚岃")):
+    if any(token in text for token in ("companion", "伙伴", "同行")):
         return "companion"
-    if any(token in text for token in ("master", "寰′富")):
+    if any(token in text for token in ("master", "御主")):
         return "master"
     kind = str(asset.get("kind") or "").lower()
     if "attribute_star" in kind or "attribute_star" in str(asset.get("key") or "").lower():

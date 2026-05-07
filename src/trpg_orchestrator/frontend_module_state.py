@@ -56,7 +56,7 @@ def _request(output_requests: dict[str, Any], module: str, default_mode: str = "
 
 def _map_module(request: dict[str, Any], payloads: dict[str, Any], assets: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
     mode = str(request.get("mode") or "keep_previous")
-    latest = next((item for item in assets if item.get("kind") == "map" or str(item.get("kind", "")).startswith("gallery_map")), {})
+    latest = next((item for item in assets if item.get("kind") in {"map", "map_image"} or str(item.get("kind", "")).startswith("gallery_map")), {})
     if mode in {"none", "no_update"}:
         return {"mode": "no_update", "state": "idle", "update_requested": False, "payload": {}, "payload_ref": "", "reason": request.get("reason", "")}
     if mode == "keep_previous":

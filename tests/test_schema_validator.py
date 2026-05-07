@@ -42,3 +42,15 @@ def test_pressure_pack_compat_fills_missing_human_readable_note():
     validate_pressure_pack(data)
 
     assert data["human_readable_note"] == "Pressure pack normalized from an older or incomplete director output."
+
+
+def test_pressure_pack_allows_visual_contract_candidates():
+    data = minimal_pressure_pack()
+    data["visual_contract_candidates"] = [{
+        "entity_key": "item:kit",
+        "entity_type": "item",
+        "display_name": "Kit",
+        "visual_identity": {"physical": {"item_type": "satchel"}},
+    }]
+
+    validate_pressure_pack(data)

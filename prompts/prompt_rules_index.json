@@ -14,6 +14,7 @@
       { "file": "Director/v4_light_action_rules.md", "cn_file": "Director/v4_light_action_rules_CN.md", "runtime_injected": true, "purpose": "Lightweight director-direct action output." },
       { "file": "Director/v4_audit_prompt.md", "cn_file": "Director/v4_audit_prompt_CN.md", "runtime_injected": true, "purpose": "Audit pass for writeback approval." },
       { "file": "Director/visual_asset_protocol.md", "cn_file": "Director/visual_asset_protocol_CN.md", "runtime_injected": true, "purpose": "Semantic visual and map payload contract." },
+      { "file": "Director/visual_contract_director_rules.md", "cn_file": "Director/visual_contract_director_rules_CN.md", "runtime_injected": true, "purpose": "Campaign-bound visual contract candidate rules." },
       { "file": "Director/chatgpt_map_rules.md", "cn_file": "Director/chatgpt_map_rules_CN.md", "runtime_injected": true, "purpose": "Director-side map-control boundary." },
       { "file": "Director/dice_check_rules.md", "cn_file": "Director/dice_check_rules_CN.md", "runtime_injected": true, "purpose": "Director-side dice/check authorization." },
       { "file": "Director/inventory_rules.md", "cn_file": "Director/inventory_rules_CN.md", "runtime_injected": true, "purpose": "Director-side inventory update authorization." },
@@ -44,6 +45,7 @@
       { "file": "Backend/campaign_data_lifecycle_rules.md", "cn_file": "Backend/campaign_data_lifecycle_rules_CN.md", "runtime_injected": false, "purpose": "Campaign-scoped persistence lifecycle." },
       { "file": "Backend/frontend_interaction_rules.md", "cn_file": "Backend/frontend_interaction_rules_CN.md", "runtime_injected": false, "purpose": "Frontend display and interaction rules." },
       { "file": "Backend/asset_cache_lifecycle_rules.md", "cn_file": "Backend/asset_cache_lifecycle_rules_CN.md", "runtime_injected": false, "purpose": "Asset cache lifecycle safety." },
+      { "file": "Backend/visual_contract_lifecycle_rules.md", "cn_file": "Backend/visual_contract_lifecycle_rules_CN.md", "runtime_injected": false, "purpose": "Campaign visual contract persistence and cache hash policy." },
       { "file": "Backend/canvas_asset_generation_rules.md", "cn_file": "Backend/canvas_asset_generation_rules_CN.md", "runtime_injected": false, "purpose": "Local Canvas asset generation." },
       { "file": "Backend/gallery_asset_rules.md", "cn_file": "Backend/gallery_asset_rules_CN.md", "runtime_injected": false, "purpose": "Gallery category and card policy." },
       { "file": "Backend/ai_flavor_check_rules.md", "cn_file": "Backend/ai_flavor_check_rules_CN.md", "runtime_injected": false, "purpose": "Local output QA and rewrite triggers." }

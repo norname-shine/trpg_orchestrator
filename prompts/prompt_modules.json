@@ -29,6 +29,14 @@
       "audit"
     ]
   },
+  "visual_contract_director_rules": {
+    "path": "Director/visual_contract_director_rules.md",
+    "always": true,
+    "layers": [
+      "director",
+      "audit"
+    ]
+  },
   "actor_context_rules": {
     "path": "Actor/actor_context_rules.md",
     "always": true,

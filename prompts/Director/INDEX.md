@@ -13,6 +13,7 @@ Director prompts decide macro scene control, pacing, boundaries, and structured 
 ## Control Modules
 
 - `visual_asset_protocol.md`: visual and map payload protocol.
+- `visual_contract_director_rules.md`: campaign-bound visual contract candidate rules.
 - `chatgpt_map_rules.md`: director-side map-control boundary.
 - `dice_check_rules.md`: director-side dice/check authorization.
 - `inventory_rules.md`: director-side inventory update authorization.

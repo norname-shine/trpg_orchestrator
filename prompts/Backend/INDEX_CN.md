@@ -17,6 +17,7 @@
 ## 资产与 QA
 
 - `asset_cache_lifecycle_rules.md`：资产缓存生命周期。
+- `visual_contract_lifecycle_rules.md`：团级视觉契约持久化与缓存 hash 策略。
 - `canvas_asset_generation_rules.md`：本地 Canvas 资产生成。
 - `gallery_asset_rules.md`：图库分类与卡片策略。
 - `ai_flavor_check_rules.md`：正文 QA 与重写触发。
@@ -26,4 +27,3 @@
 - 后台规则可以提及本地文件、缓存、渲染、自动化和校验。
 - 不得把后台实现规则注入演员层剧情 Prompt。
 - `_CN.md` 中文包必须与英文文件放在同一目录。
-

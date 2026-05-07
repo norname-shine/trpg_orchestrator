@@ -31,6 +31,15 @@ from .prompt_builder import build_audit_user_prompt, read_prompt
 from .deepseek_client import DeepSeekClient
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_writeback
 from .story_progress import build_frontend_story_progress
+from .visual_contracts import (
+    CONTRACT_FILE,
+    build_initial_visual_contract_candidates,
+    contract_public_payload,
+    default_visual_contracts,
+    find_contract,
+    merge_visual_contracts,
+    visual_prompt_from_contract,
+)
 from .writeback import apply_approved_writeback, has_applied_writeback, writeback_hash
 
 
@@ -1615,6 +1624,7 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
     root = CAMPAIGNS_DIR / safe_segment(campaign_id)
     profile_path = root / "campaign_profile.json"
     profile = read_json(profile_path) if profile_path.exists() else {}
+    visual_contracts = read_json(root / CONTRACT_FILE) if (root / CONTRACT_FILE).exists() else {}
     initial_assets = profile.get("initial_assets") if isinstance(profile.get("initial_assets"), dict) else {}
     if not initial_assets:
         return {}
@@ -1625,6 +1635,7 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
     if _setup_has_payload(initial_assets.get("map_generation_instruction")) and _setup_has_payload(map_canvas) and _valid_setup_map_route(route):
         if not any(is_valid_cached_map_asset(asset) for asset in assets):
             title = str(route.get("title") or profile.get("title") or state.get("title") or "opening map").strip()
+            map_contract = find_contract(visual_contracts, entity_type="map", display_name=title)
             map_panel = {
                 "mode": "update",
                 "state": "ready",
@@ -1634,6 +1645,9 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
                     "map_canvas": map_canvas,
                     "title": title,
                     "initialization_source": "campaign_profile.initial_assets",
+                    "visual_contract": map_contract,
+                    "visual_contract_key": map_contract.get("entity_key", ""),
+                    "visual_contract_hash": map_contract.get("visual_contract_hash", ""),
                 },
                 "payload_ref": "",
                 "reason": "campaign initialization map contract",
@@ -1648,6 +1662,9 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
                 "cache_policy": "stable",
                 "campaign_id": campaign_id,
                 "asset_seed": campaign_asset_seed(campaign_id),
+                "visual_contract": map_contract,
+                "visual_contract_key": map_contract.get("entity_key", ""),
+                "visual_contract_hash": map_contract.get("visual_contract_hash", ""),
             })
     existing_initial_item_ids = {
         str((asset.get("metadata") or {}).get("initial_asset_id") or "")
@@ -1668,6 +1685,7 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
         if not rule:
             raw_kind = str(item.get("category") or item.get("kind") or item.get("item_type") or "").strip()
             rule = item_rules.get(raw_kind) if raw_kind and isinstance(item_rules.get(raw_kind), dict) else {}
+        item_contract = find_contract(visual_contracts, entity_key=f"item:{item_id}", entity_type="item", display_name=title)
         jobs.append({
             "job_id": f"initial_{kind}_{item_id}",
             "kind": kind,
@@ -1682,6 +1700,10 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
             "detail": str(item.get("description") or item.get("detail") or ""),
             "initial_asset_id": item_id,
             "canvas_style": {**rule, **style},
+            "visual_prompt": visual_prompt_from_contract(item_contract),
+            "visual_contract": item_contract,
+            "visual_contract_key": item_contract.get("entity_key", ""),
+            "visual_contract_hash": item_contract.get("visual_contract_hash", ""),
         })
     result: dict[str, Any] = {}
     if map_panel:
@@ -1794,6 +1816,8 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
     gallery_taxonomy = gallery_taxonomy_for_campaign(campaign_id, state)
     gallery = {"filters": gallery_filters_from_taxonomy(gallery_taxonomy), "taxonomy": gallery_taxonomy, "assets": [], "payload_ref": gallery_payload_ref}
     story_progress_payload = frontend_story_progress_payload(campaign_id)
+    visual_contracts_path = CAMPAIGNS_DIR / safe_segment(campaign_id) / CONTRACT_FILE
+    visual_contracts = read_json(visual_contracts_path) if visual_contracts_path.exists() else {}
     initialization_payload = campaign_initialization_frontend_payload(campaign_id, state, assets)
     map_panel = initialization_payload.get("map_panel") if isinstance(initialization_payload.get("map_panel"), dict) else {}
     if not map_panel:
@@ -1833,6 +1857,7 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
         "last_player_action": last_player_action,
         "character_card": frontend_character_card(campaign_id, state, setup["rules_config"]),
         "companion_card": frontend_companion_card(campaign_id, state, setup["companion_config"]),
+        "visual_contracts": contract_public_payload(visual_contracts),
         "map_panel": map_panel,
         "quests": frontend_quests(state),
         "inventory": frontend_inventory(state),
@@ -1863,6 +1888,20 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
             {"id": "recap", "label": "复盘", "action": "复盘"},
         ],
     }
+
+
+def visual_contract_updates_from_pressure(memory: dict[str, Any], pressure_pack: dict[str, Any], campaign_id: str) -> dict[str, Any]:
+    candidates = pressure_pack.get("visual_contract_candidates") if isinstance(pressure_pack.get("visual_contract_candidates"), list) else []
+    payloads = pressure_pack.get("payloads") if isinstance(pressure_pack.get("payloads"), dict) else {}
+    if not candidates and isinstance(payloads.get("visual_contract_candidates"), list):
+        candidates = payloads.get("visual_contract_candidates")
+    if not candidates:
+        return {}
+    existing = memory.get(CONTRACT_FILE) if isinstance(memory.get(CONTRACT_FILE), dict) else default_visual_contracts(campaign_id)
+    merged = merge_visual_contracts(existing, candidates, campaign_id, "director_pressure_pack")
+    if merged == existing:
+        return {}
+    return {CONTRACT_FILE: merged}
 
 
 def frontend_campaign_setup(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -2027,12 +2066,16 @@ def frontend_character_card(campaign_id: str, state: dict[str, Any], rules_confi
     if not provided_vitals and isinstance(provided_attributes, dict):
         provided_vitals = build_character_vitals_from_three(provided_attributes)
     tag_source = provided.get("conditions") or provided.get("tags") or provided.get("badges")
+    visual_contracts_path = CAMPAIGNS_DIR / safe_segment(campaign_id) / CONTRACT_FILE
+    visual_contracts = read_json(visual_contracts_path) if visual_contracts_path.exists() else {}
+    visual_contract = find_contract(visual_contracts, entity_type="player", display_name=name)
     card = {
         "enabled": True,
         "stat_visibility": rules_config.get("stat_visibility", "narrative"),
         "name": name,
         "identity": identity_text,
         "visual_profile": build_player_visual_profile(campaign_id, state, provided),
+        "visual_contract": visual_contract,
         "portrait": {
             "asset_key": scoped_asset_key(campaign_id, "player_portrait", f"player:{name}"),
             "type": "player_full_body_pixel",
@@ -2085,10 +2128,13 @@ def frontend_companion_card(campaign_id: str, state: dict[str, Any], companion_c
         companion_config = frontend_campaign_setup(campaign_id, state)["companion_config"]
     if not companion_config.get("companion_enabled"):
         return {"enabled": False, "reason": "companion_disabled"}
+    visual_contracts_path = CAMPAIGNS_DIR / safe_segment(campaign_id) / CONTRACT_FILE
+    visual_contracts = read_json(visual_contracts_path) if visual_contracts_path.exists() else {}
     if companion_config.get("companion_mode") == "manual":
         name = str(companion_config.get("companion_name") or "").strip()
         if name:
             source = {"name": name, "role": companion_config.get("companion_role", ""), "personality": companion_config.get("companion_personality", ""), "source": "campaign_setup"}
+            visual_contract = find_contract(visual_contracts, entity_type="companion", display_name=name)
             return {
                 "enabled": True,
                 "pending": False,
@@ -2097,6 +2143,7 @@ def frontend_companion_card(campaign_id: str, state: dict[str, Any], companion_c
                 "archetype": "companion",
                 "portrait": {"asset_key": scoped_asset_key(campaign_id, "companion_portrait", f"companion:{name}"), "type": "companion_portrait_pixel"},
                 "visual_profile": build_companion_visual_profile(source, state, {}, {}),
+                "visual_contract": visual_contract,
                 "meta": source,
             }
     prompt = state.get("character_prompt", {}) if isinstance(state.get("character_prompt"), dict) else {}
@@ -2104,11 +2151,13 @@ def frontend_companion_card(campaign_id: str, state: dict[str, Any], companion_c
     provided = first_dict(player.get("character_card"), prompt.get("character_card"))
     identity = first_dict(provided.get("identity"), player.get("confirmed_identity"), prompt.get("confirmed_identity"))
     source = first_dict(provided.get("companion"), prompt.get("companion_card"))
+    visual_contract = {}
     if not source and isinstance(identity.get("companion"), dict):
         source = identity.get("companion")
     if not source:
         return {"enabled": True, "pending": True, "name": "伙伴待生成", "identity": "长期伙伴待生成", "archetype": "companion", "meta": {"mode": companion_config.get("companion_mode", "auto")}}
     name = str(source.get("name") or "").strip()
+    visual_contract = find_contract(visual_contracts, entity_type="companion", display_name=name)
     if not name:
         return {}
     archetype = "companion"
@@ -2121,6 +2170,7 @@ def frontend_companion_card(campaign_id: str, state: dict[str, Any], companion_c
         "archetype": archetype,
         "portrait": {"asset_key": scoped_asset_key(campaign_id, "companion_portrait", f"companion:{name}"), "type": "companion_portrait_pixel"},
         "visual_profile": build_companion_visual_profile(source, state, {}, {}),
+        "visual_contract": visual_contract,
         "meta": source,
     }
 
@@ -2255,6 +2305,7 @@ def frontend_map_panel(campaign_id: str, scene: dict[str, Any], output: dict[str
         route = pressure.get("map_route", {})
     canvas = normalize_map_canvas(canvas_raw, route, scene) if route or canvas_raw else {}
     latest = next((item for item in assets if item.get("campaign_id") == campaign_id and is_valid_cached_map_asset(item)), {})
+    latest_metadata = latest.get("metadata", {}) if isinstance(latest.get("metadata"), dict) else {}
     if map_mode not in {"update_route", "update_canvas"}:
         if latest and latest.get("url"):
             return {
@@ -2294,6 +2345,9 @@ def frontend_map_panel(campaign_id: str, scene: dict[str, Any], output: dict[str
             "map_canvas": canvas,
             "story_topology": pressure.get("story_topology", {}) if isinstance(pressure.get("story_topology"), dict) else {},
             "visual_assets": pressure.get("visual_assets", []),
+            "visual_contract": latest_metadata.get("visual_contract", {}) if isinstance(latest_metadata.get("visual_contract"), dict) else {},
+            "visual_contract_key": latest_metadata.get("visual_contract_key", ""),
+            "visual_contract_hash": latest_metadata.get("visual_contract_hash", ""),
         },
         "mode": "update",
         "state": "ready",
@@ -2303,6 +2357,9 @@ def frontend_map_panel(campaign_id: str, scene: dict[str, Any], output: dict[str
             "map_canvas": canvas,
             "title": route.get("title") or scene.get("location") or "当前区域地图",
             "visual_assets": pressure.get("visual_assets", []),
+            "visual_contract": latest_metadata.get("visual_contract", {}) if isinstance(latest_metadata.get("visual_contract"), dict) else {},
+            "visual_contract_key": latest_metadata.get("visual_contract_key", ""),
+            "visual_contract_hash": latest_metadata.get("visual_contract_hash", ""),
         },
         "payload_ref": "",
     }
@@ -4586,6 +4643,22 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             "cg_generation_instruction": "",
             "cg_prompt": {"positive": "", "negative": "", "aspect": "2304x2304 dual panel"},
         },
+        "visual_contract_candidates": [
+            {
+                "entity_key": "",
+                "entity_type": "",
+                "display_name": "",
+                "source": "campaign_initialization",
+                "memory_refs": [],
+                "visibility": "player_visible",
+                "confidence": "confirmed",
+                "visual_identity": {},
+                "render_intent": {},
+                "style_constraints": {},
+                "negative_constraints": [],
+                "update_policy": {},
+            }
+        ],
         "story_memory_seed": {
             "custom_libraries": [
                 {"id": "", "label": "", "purpose": "", "fields": [], "display_hint": {}, "asset_links": []}
@@ -4711,6 +4784,7 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
         "Return render_rules for player_portrait, companion_portrait, character_portrait, map, item, prop, and cg.",
         "Return initial_assets with map_generation_instruction, map_canvas, map_route.nodes, initial_items, item_canvas_rules, cg_generation_instruction, and cg_prompt. Missing any of these makes setup invalid.",
+        "Return visual_contract_candidates as campaign-bound visual intent for confirmed player, companion, map, item, scene, monster, or CG entities. Backend will validate and merge them into visual_contracts.json; do not make this a final image prompt or hard-code renderer-only fields.",
         "Return story_memory_seed.custom_libraries or initial_memory_notes.custom_libraries for campaign-specific content libraries. Only declare the generic resource-slot structure; do not rely on backend fixed library names.",
         "Do not use protected franchise, character, trademark, or artist names in visual_style. Describe original medium, palette, composition, and mood instead.",
         "story_blueprint_patch.chapters must contain usable chapters, nodes, and beat_checklist. The first playable turn will start at chapters[0].nodes[0].beat_checklist[0].",
@@ -5047,6 +5121,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     character_attribute_schema = sanitize_attribute_schema(data.get("character_attribute_schema"))
     render_rules = sanitize_render_rules(data.get("render_rules"))
     initial_assets = sanitize_initial_assets(data.get("initial_assets"))
+    visual_contract_candidates = data.get("visual_contract_candidates") if isinstance(data.get("visual_contract_candidates"), list) else []
     custom_libraries = sanitize_custom_libraries(story_memory_seed.get("custom_libraries", memory_notes.get("custom_libraries", [])))
     for key in ("early_goals", "known_boundaries", "secrets_not_to_reveal_early", "director_notes"):
         require_list(direction.get(key), f"campaign_direction.{key}")
@@ -5075,6 +5150,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
         "character_attribute_schema": character_attribute_schema,
         "render_rules": render_rules,
         "initial_assets": initial_assets,
+        "visual_contract_candidates": visual_contract_candidates,
         "campaign_direction": {
             "core_concept": stringify_brief(direction.get("core_concept"), 240),
             "opening_situation": stringify_brief(direction.get("opening_situation"), 260),
@@ -5613,6 +5689,39 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     equipment.setdefault("item_canvas_rules", initial_assets.get("item_canvas_rules", {}))
     equipment.setdefault("custom_rule_slots", []).extend(sanitize_string_list(v4_memory.get("custom_rule_slots")))
 
+    visual_contracts_path = root / CONTRACT_FILE
+    existing_contracts = read_json(visual_contracts_path) if visual_contracts_path.exists() else default_visual_contracts(profile.get("campaign_id", ""))
+    visual_candidates = build_initial_visual_contract_candidates(
+        profile.get("campaign_id", ""),
+        profile,
+        character_card,
+        companion_config,
+        initial_assets,
+        campaign_taxonomy,
+        v4_setup,
+    )
+    visual_contracts = merge_visual_contracts(existing_contracts, visual_candidates, profile.get("campaign_id", ""), "campaign_initialization")
+    map_contract = next((row for row in visual_contracts.get("contracts", {}).values() if isinstance(row, dict) and row.get("entity_type") == "map"), {})
+    if map_contract:
+        map_history_path = root / "map_history.json"
+        map_history = read_json(map_history_path) if map_history_path.exists() else {}
+        map_id = safe_segment(str(map_contract.get("entity_key") or map_contract.get("display_name") or "opening_map"))
+        identity = map_contract.get("visual_identity", {}) if isinstance(map_contract.get("visual_identity"), dict) else {}
+        spatial = identity.get("spatial", {}) if isinstance(identity.get("spatial"), dict) else {}
+        map_history.setdefault("campaign_id", profile.get("campaign_id", ""))
+        map_history.setdefault("scope", "maps")
+        map_history["current_map_id"] = map_id
+        map_history.setdefault("maps", {})[map_id] = {
+            "id": map_id,
+            "title": map_contract.get("display_name", ""),
+            "visual_contract_key": map_contract.get("entity_key", ""),
+            "visual_contract_hash": map_contract.get("visual_contract_hash", ""),
+            "map_route": spatial.get("map_route", {}),
+            "map_canvas": spatial.get("map_canvas", {}),
+            "source": "campaign_initialization",
+        }
+        write_json(map_history_path, map_history)
+
     blueprint_path = root / "story_blueprint.json"
     blueprint = read_json(blueprint_path) if blueprint_path.exists() else {}
     blueprint.update({
@@ -5646,6 +5755,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     write_json(direction_path, direction)
     write_json(style_path, style)
     write_json(image_path, image)
+    write_json(visual_contracts_path, visual_contracts)
     write_json(npc_path, npc)
     write_json(root / "enemy_or_monster_ecology.json", ecology)
     write_json(character_path, character)
@@ -6181,6 +6291,7 @@ def writeback_review_payload(campaign_id: str = "") -> dict[str, Any]:
             if digest and has_applied_writeback(memory, digest):
                 warnings.append(f"duplicate writeback already applied: {digest[:12]}")
         pending_updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack, prose_chars_delta=current_visible_prose_chars(resolved))
+        pending_updates.update(visual_contract_updates_from_pressure(memory, pressure_pack, resolved))
     return {
         "ok": True,
         "campaign_id": resolved,
@@ -6221,6 +6332,7 @@ def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
         if has_applied_writeback(memory, digest):
             raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
     updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack, prose_chars_delta=current_visible_prose_chars(resolved))
+    updates.update(visual_contract_updates_from_pressure(memory, pressure_pack, resolved))
     touched = list(updates.keys())
     if touched:
         store.backup_files(resolved, touched)

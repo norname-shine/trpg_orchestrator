@@ -8,6 +8,7 @@ from typing import Any
 
 from .config import CAMPAIGNS_DIR, MEMORY_FILE_NAMES, REGISTRY_PATH, CampaignPaths
 from .json_utils import read_json, write_json
+from .visual_contracts import default_visual_contracts
 
 
 def utc_stamp() -> str:
@@ -150,6 +151,7 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "image_generation_rules": [],
             "do_not_generate": [],
         },
+        "visual_contracts.json": default_visual_contracts(campaign_id),
         "player_state.json": player_memory(campaign_id),
         "npc_memory.json": base_memory(campaign_id, "npcs"),
         "world_state.json": base_memory(campaign_id, "world"),

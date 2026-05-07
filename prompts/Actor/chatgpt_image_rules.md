@@ -11,6 +11,8 @@ When prose needs visual texture:
 
 If the user asks for image generation, prose must still follow the current campaign setting and the provided control pack first.
 
+For image-only turns, use render-ready prompts derived from the campaign `visual_contracts.json` when provided. Treat those contracts as campaign-bound visual identity; do not invent conflicting character, item, map, or scene traits.
+
 ## Mandatory Split For Image Generation
 
 - Image generation can return only one image per request and cannot reliably return story JSON plus an image in the same reply.

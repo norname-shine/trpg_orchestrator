@@ -33,6 +33,7 @@
   ruleFiles: [],
   selectedRule: "",
   frontendState: {},
+  visualContracts: {},
   storyProgressPayload: {},
   storyProgressChapter: {},
   storyProgressNode: {},
@@ -582,6 +583,7 @@ function resetCampaignScopedUiState(campaignId) {
   state.transientGalleryAsset = null;
   state.currentMapAsset = null;
   state.currentPressurePack = {};
+  state.visualContracts = {};
   state.modulePayloadCache = {};
   clearImageElement("avatarImage");
   clearImageElement("companionImage");
@@ -705,6 +707,45 @@ function findCurrentCampaignAsset(predicate) {
   return (state.cachedAssets || []).find((asset) => isAssetForCurrentCampaign(asset) && predicate(asset));
 }
 
+function visualContractFor(entityKey = "", entityType = "", displayName = "") {
+  const rows = state.visualContracts || {};
+  if (entityKey && rows[entityKey]) return rows[entityKey];
+  const normalizedType = slugify(entityType || "");
+  const normalizedDisplay = slugify(displayName || "");
+  const candidateKey = normalizedType && normalizedDisplay ? `${normalizedType}:${normalizedDisplay}` : "";
+  if (candidateKey && rows[candidateKey]) return rows[candidateKey];
+  return Object.values(rows).find((row) => {
+    if (!row || typeof row !== "object") return false;
+    if (entityType && row.entity_type !== entityType) return false;
+    return normalizedDisplay && slugify(row.display_name || "") === normalizedDisplay;
+  }) || {};
+}
+
+function hasVisualContract(contract = {}) {
+  return Boolean(contract && typeof contract === "object" && Object.keys(contract).length);
+}
+
+function visualPromptFromContract(contract = {}) {
+  if (!contract || typeof contract !== "object") return {};
+  const identity = contract.visual_identity || {};
+  const physical = identity.physical || {};
+  const actor = identity.actor || {};
+  const render = contract.render_intent || {};
+  return {
+    archetype: physical.item_type || render.primary || contract.entity_type || "",
+    source_text: [
+      contract.display_name,
+      physical.description,
+      actor.role,
+      actor.relationship,
+      identity.summary,
+    ].filter(Boolean).join(" / "),
+    canvas_style: physical.canvas_rule || {},
+    style_constraints: contract.style_constraints || {},
+    negative_constraints: contract.negative_constraints || [],
+  };
+}
+
 function makeScopedAssetKey(kind, objectId, variant = "default") {
   const campaignId = state.activeCampaign || "unknown_campaign";
   const seed = state.assetSeed || campaignId;
@@ -753,6 +794,7 @@ function renderCachedMap(scene, mapPanel = {}) {
   const route = modulePayload.map_route || {};
   const mapCanvas = modulePayload.map_canvas || {};
   const routeKey = mapCanvas.title || route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
+  const visualContract = hasVisualContract(modulePayload.visual_contract) ? modulePayload.visual_contract : visualContractFor(modulePayload.visual_contract_key || "", "map", route.title || modulePayload.title || scene.location || "");
   setText("mapLabel", route.title || modulePayload.title || scene.location || "当前路线");
   if (mode === "no_update" || mode === "none") return;
   if (!updateRequested || mode === "keep_previous") {
@@ -812,6 +854,9 @@ function renderCachedMap(scene, mapPanel = {}) {
       map_canvas: mapCanvas,
       visual_assets: modulePayload.visual_assets || [],
       status: "current",
+      visual_contract_key: visualContract.entity_key || modulePayload.visual_contract_key || "",
+      visual_contract_hash: visualContract.visual_contract_hash || modulePayload.visual_contract_hash || "",
+      visual_contract: visualContract,
     },
     force: true,
   });
@@ -951,6 +996,7 @@ function renderFrontendState(frontendState, campaignState) {
   const fs = frontendState || {};
   const modules = fs.modules || {};
   state.lastCampaignState = campaignState;
+  state.visualContracts = fs.visual_contracts?.contracts || {};
   state.galleryTaxonomy = fs.gallery_taxonomy || fs.gallery?.taxonomy || {};
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
@@ -1091,7 +1137,13 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
     }
     if (job.kind === "map") {
       const mapModule = frontendState.modules?.map_panel || {};
-      const payload = mapModule.payload || {};
+      const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : visualContractFor(job.visual_contract_key || "", "map", job.title || mapModule.payload?.title || "");
+      const payload = { ...(mapModule.payload || {}) };
+      if (visualContract.entity_key) {
+        payload.visual_contract = visualContract;
+        payload.visual_contract_key = visualContract.entity_key;
+        payload.visual_contract_hash = visualContract.visual_contract_hash || "";
+      }
       const route = payload.map_route || {};
       const hasCanvas = hasSemanticMapCanvas(payload.map_canvas || campaignState?.recent?.current_scene?.map_canvas || {});
       if (!isValidMapRoute(route) && !hasCanvas) {
@@ -1104,6 +1156,7 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
     if (["portrait", "player_portrait"].includes(job.kind)) {
       const card = frontendState.modules?.character_card?.payload || frontendState.character_card || {};
       const seed = card.name || job.asset_key || state.activeCampaign || "portrait";
+      const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : hasVisualContract(card.visual_contract) ? card.visual_contract : visualContractFor(job.visual_contract_key || "", "player", card.name || seed);
       const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, campaignState || state.lastCampaignState || {});
       const visualHash = visualProfileHash(visualProfile);
       drawPixelActorPortrait(seed, {
@@ -1133,6 +1186,9 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           portrait_spec_version: PORTRAIT_SPEC_VERSION,
           visual_profile: visualProfile,
           visual_profile_hash: visualHash,
+          visual_contract_key: visualContract.entity_key || job.visual_contract_key || "",
+          visual_contract_hash: visualContract.visual_contract_hash || job.visual_contract_hash || "",
+          visual_contract: visualContract,
           variant: `vp_${visualHash}`,
           background_context: currentStoryVisualContext(),
         },
@@ -1142,6 +1198,7 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
     if (["character_portrait", "npc_portrait", "monster_portrait"].includes(job.kind)) {
       const name = job.display_name || job.title || job.asset_key || "character";
       const actorRole = job.kind === "monster_portrait" ? "monster" : "npc";
+      const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : visualContractFor(job.visual_contract_key || "", actorRole, name);
       drawPixelActorPortrait(name, {
         cache: true,
         objectId: slugify(job.asset_key || name),
@@ -1157,11 +1214,16 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           gallery_category: "character",
           visible_in_gallery: true,
           source: "director_canvas_job",
+          visual_contract_key: visualContract.entity_key || job.visual_contract_key || "",
+          visual_contract_hash: visualContract.visual_contract_hash || job.visual_contract_hash || "",
+          visual_contract: visualContract,
         },
       });
       return;
     }
     if (["item", "prop"].includes(job.kind)) {
+      const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : visualContractFor(job.visual_contract_key || "", "item", job.title || job.asset_key || "");
+      const visualPrompt = job.visual_prompt || visualPromptFromContract(visualContract);
       drawPixelItemIcon(job.asset_key || job.title || job.job_id, {
         cache: true,
         objectId: slugify(job.asset_key || job.job_id),
@@ -1170,7 +1232,8 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           title: job.title || job.asset_key,
           kind: job.kind,
           detail: job.detail || job.input_ref,
-          visualPrompt: job.visual_prompt || job.canvas_style || {},
+          visualPrompt: Object.keys(visualPrompt || {}).length ? visualPrompt : job.canvas_style || {},
+          visual_contract: visualContract,
         },
         metadata: {
           title: job.title || job.asset_key,
@@ -1182,6 +1245,10 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           source: "director_canvas_job",
           initial_asset_id: job.initial_asset_id || "",
           canvas_style: job.canvas_style || {},
+          visual_prompt: Object.keys(visualPrompt || {}).length ? visualPrompt : undefined,
+          visual_contract_key: visualContract.entity_key || job.visual_contract_key || "",
+          visual_contract_hash: visualContract.visual_contract_hash || job.visual_contract_hash || "",
+          visual_contract: visualContract,
         },
       });
       return;
@@ -1772,6 +1839,7 @@ function renderCompanionCard(companion) {
   }
   const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
   const visualHash = visualProfileHash(visualProfile);
+  const visualContract = hasVisualContract(companion.visual_contract) ? companion.visual_contract : visualContractFor("", "companion", companion.name || "");
   const resolved = resolveVisualAsset({ ...companion, visual_profile: visualProfile, type: "companion", role: "companion", portrait: companion.portrait || {} });
   if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
     showAvatarImage("companionImage", resolved.url, resolved.asset_key || "");
@@ -1810,6 +1878,9 @@ function renderCompanionCard(companion) {
       portrait_spec_version: PORTRAIT_SPEC_VERSION,
       visual_profile: visualProfile,
       visual_profile_hash: visualHash,
+      visual_contract_key: visualContract.entity_key || "",
+      visual_contract_hash: visualContract.visual_contract_hash || "",
+      visual_contract: visualContract,
       variant: `vp_${visualHash}`,
       background_context: currentStoryVisualContext(),
     },
@@ -2454,6 +2525,7 @@ function storyTurnSignature(blocks, output = {}) {
 function renderCharacterPortrait(card) {
   const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, state.lastCampaignState || {});
   const visualHash = visualProfileHash(visualProfile);
+  const visualContract = hasVisualContract(card.visual_contract) ? card.visual_contract : visualContractFor("", "player", card?.name || "");
   const resolved = resolveVisualAsset({ ...card, visual_profile: visualProfile, type: "player", role: "player", portrait: card?.portrait || {} });
   if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
     showAvatarImage("avatarImage", resolved.url, resolved.asset_key || "");
@@ -2487,6 +2559,9 @@ function renderCharacterPortrait(card) {
       portrait_spec_version: PORTRAIT_SPEC_VERSION,
       visual_profile: visualProfile,
       visual_profile_hash: visualHash,
+      visual_contract_key: visualContract.entity_key || "",
+      visual_contract_hash: visualContract.visual_contract_hash || "",
+      visual_contract: visualContract,
       variant: `vp_${visualHash}`,
       background_context: currentStoryVisualContext(),
     },
@@ -7359,6 +7434,15 @@ function isPlaceholderAssetRequest({ key = "", kind = "", metadata = {}, seedTex
 function assetMetadataReusable(requested, existing) {
   if (!requested) return true;
   if (!existing) return false;
+  if (requested.visual_contract_hash || requested.visual_contract_key) {
+    if (requested.visual_contract_key !== existing.visual_contract_key
+      || requested.visual_contract_hash !== existing.visual_contract_hash) return false;
+    if (requested.visual_profile_hash || requested.portrait_spec_version) {
+      return requested.visual_profile_hash === existing.visual_profile_hash
+        && requested.portrait_spec_version === existing.portrait_spec_version;
+    }
+    return true;
+  }
   if (requested.visual_profile_hash || requested.portrait_spec_version) {
     return requested.visual_profile_hash === existing.visual_profile_hash
       && requested.portrait_spec_version === existing.portrait_spec_version;

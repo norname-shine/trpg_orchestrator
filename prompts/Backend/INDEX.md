@@ -17,6 +17,7 @@ Backend prompt documents define local engineering, frontend, persistence, encodi
 ## Assets And QA
 
 - `asset_cache_lifecycle_rules.md`: asset cache lifecycle.
+- `visual_contract_lifecycle_rules.md`: campaign visual contract persistence and cache hash policy.
 - `canvas_asset_generation_rules.md`: local Canvas asset generation.
 - `gallery_asset_rules.md`: gallery category and card policy.
 - `ai_flavor_check_rules.md`: prose QA and rewrite triggers.
@@ -26,4 +27,3 @@ Backend prompt documents define local engineering, frontend, persistence, encodi
 - Backend rules may mention local files, caches, rendering, automation, and validation.
 - Do not inject backend implementation rules into actor story prompts.
 - Keep `_CN.md` counterparts beside English files.
-

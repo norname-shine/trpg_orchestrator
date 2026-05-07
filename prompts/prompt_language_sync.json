@@ -1,6 +1,6 @@
 {
   "schema": "trpg_orchestrator.prompt_language_sync.v1",
-  "updated_at": "2026-05-07T01:29:41Z",
+  "updated_at": "2026-05-07T08:54:43Z",
   "policy": "Manual bilingual sync baseline. --check fails when only one side changes after this baseline.",
   "standalone_md": [
     "rules_CN.md",
@@ -80,8 +80,8 @@
     "Actor/chatgpt_image_rules.md": {
       "english": "Actor/chatgpt_image_rules.md",
       "chinese": "Actor/chatgpt_image_rules_CN.md",
-      "english_sha256": "5c58375b6246606305a451a9788550af5e9f585b303669df00b4cbc38b8c887f",
-      "chinese_sha256": "f9f5a5738c37d4d924ab327c5b7ff1473973119c3b1d1b34d4ca5873d4e05834",
+      "english_sha256": "4d943d7cbd7158eba34960c3de3f517e32c37ad2db36ee5affaf27a52e2e9680",
+      "chinese_sha256": "982909ba42fa667b5cf4b075217ef8d64dc18567c6d9dba530194323b5e4e80e",
       "last_sync_direction": "baseline"
     },
     "Actor/chatgpt_monster_rules.md": {
@@ -108,8 +108,8 @@
     "Backend/INDEX.md": {
       "english": "Backend/INDEX.md",
       "chinese": "Backend/INDEX_CN.md",
-      "english_sha256": "0e9b544b8fe5f0b6dae9f234a133c720fe71ffe16529cc0850ea6b86fc4450d2",
-      "chinese_sha256": "c434ff4642fdd82c54d776c28e75b79871f282b7c6943f2d5de6700561fb1c1f",
+      "english_sha256": "3cc66f03cb89b1dd7629cb14bee9a2dda6d1d212c607e4bc3b4c9559b36ecdf6",
+      "chinese_sha256": "477c359780ae00e2ab312bcd404a41ce45f8c4f741389fad987abbe5339e06e7",
       "last_sync_direction": "baseline"
     },
     "Backend/ai_flavor_check_rules.md": {
@@ -182,11 +182,18 @@
       "chinese_sha256": "48305c5d19e9c86702e8f0e9ab462292e48671d1b8f35d86897f62b9aae54034",
       "last_sync_direction": "baseline"
     },
+    "Backend/visual_contract_lifecycle_rules.md": {
+      "english": "Backend/visual_contract_lifecycle_rules.md",
+      "chinese": "Backend/visual_contract_lifecycle_rules_CN.md",
+      "english_sha256": "66d529dcc1f623ea43025bea7e0f535c366bd42645988d467f56f491748f352d",
+      "chinese_sha256": "57b062d782f62a9a70bdd12f1bc02e28079f02852130ed243aaf49042c7129ec",
+      "last_sync_direction": "baseline"
+    },
     "Director/INDEX.md": {
       "english": "Director/INDEX.md",
       "chinese": "Director/INDEX_CN.md",
-      "english_sha256": "da57d7e57f34184a52a9e64ba7642e909a784e0a7f6e1a727210ceca87615190",
-      "chinese_sha256": "ea18f102f6c26d3314698f78b031f009ac7468d9fd838b488760691231cd6023",
+      "english_sha256": "db78ebd810d74ccca6bb710936525b5fbd0f6fc173fb8a8ea85611a968e55fdb",
+      "chinese_sha256": "026d1d042b02bd47643874a16ef5ab39d1cdfbe20be0aa64151656ce88ce2a1a",
       "last_sync_direction": "baseline"
     },
     "Director/chatgpt_map_rules.md": {
@@ -259,6 +266,13 @@
       "chinese_sha256": "6b5f20c899a48ce8387feb09645a20d8b4092a76e5e4833501257a21e64fb9ac",
       "last_sync_direction": "baseline"
     },
+    "Director/visual_contract_director_rules.md": {
+      "english": "Director/visual_contract_director_rules.md",
+      "chinese": "Director/visual_contract_director_rules_CN.md",
+      "english_sha256": "7cb802373e9ea670df43272c949fd99676ceefc7d3008e8533779e215f9868eb",
+      "chinese_sha256": "1efc4a88e15dffb6906f5af1a86b351962835a198cf48ba40e2b9ab3c7f5c0aa",
+      "last_sync_direction": "baseline"
+    },
     "Hotload/INDEX.md": {
       "english": "Hotload/INDEX.md",
       "chinese": "Hotload/INDEX_CN.md",
@@ -304,8 +318,8 @@
     "prompt_rules_index.md": {
       "english": "prompt_rules_index.md",
       "chinese": "prompt_rules_index_CN.md",
-      "english_sha256": "2a505704c32acda6f1af7931b9c3d9f7a73d58c0292214714486bac056301c71",
-      "chinese_sha256": "ed76ccf983b6dd4caa6b442fe19d1a9f71d0551248682bf6461db75d2de1afc3",
+      "english_sha256": "4091526a6dc80dd80ca345f5093a57075537b89b3eaf60db1b9cd6cbef393195",
+      "chinese_sha256": "8bb264660b6b76f36c63e78c0985e55f337651336c143cde8c5433cf410c6145",
       "last_sync_direction": "baseline"
     }
   }

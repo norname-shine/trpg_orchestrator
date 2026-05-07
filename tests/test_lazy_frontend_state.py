@@ -1,4 +1,5 @@
 from trpg_orchestrator import web_server
+from trpg_orchestrator.frontend_module_state import build_frontend_modules
 
 
 class FakeStore:
@@ -40,3 +41,16 @@ def test_gallery_module_api_pages_assets(monkeypatch):
     payload = web_server.module_payload_response("gallery", "demo", cursor="1", limit="1")
     assert len(payload["payload"]["assets"]) == 1
     assert payload["next_cursor"] == "2"
+
+
+def test_map_module_keeps_cached_map_image_asset():
+    modules = build_frontend_modules(
+        "demo",
+        {"asset_seed": "seed", "module_refs": {}},
+        {"output_requests": {"map": {"mode": "keep_previous", "trigger": "none", "reason": ""}}},
+        [{"kind": "map_image", "url": "/campaign-assets/demo/maps/opening.png"}],
+        {},
+    )
+
+    assert modules["map_panel"]["state"] == "cached"
+    assert modules["map_panel"]["payload_ref"].endswith("opening.png")

@@ -1,6 +1,7 @@
 import pytest
 
 from trpg_orchestrator import web_server
+from trpg_orchestrator.visual_contracts import build_initial_visual_contract_candidates, merge_visual_contracts
 from trpg_orchestrator.web_server import campaign_initialization_frontend_payload, validate_v4_campaign_setup
 
 
@@ -136,13 +137,47 @@ def test_initialization_payload_materializes_map_and_item_jobs_without_cg_canvas
     root = tmp_path / campaign_id
     root.mkdir(parents=True)
     initial_assets = validate_v4_campaign_setup(setup_payload())["initial_assets"]
-    profile = {"title": "Test Campaign", "asset_seed": "seed123", "initial_assets": initial_assets}
+    setup = validate_v4_campaign_setup(setup_payload())
+    contracts = merge_visual_contracts(
+        {},
+        build_initial_visual_contract_candidates(
+            campaign_id,
+            {"campaign_id": campaign_id, "title": "Test Campaign", "asset_seed": "seed123", "render_rules": setup["render_rules"]},
+            {},
+            {},
+            setup["initial_assets"],
+            setup["campaign_taxonomy"],
+            setup,
+        ),
+        campaign_id,
+        "test",
+    )
+    profile = {"campaign_id": campaign_id, "title": "Test Campaign", "asset_seed": "seed123", "initial_assets": initial_assets}
     (root / "campaign_profile.json").write_text(web_server.json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    (root / "visual_contracts.json").write_text(web_server.json.dumps(contracts, ensure_ascii=False), encoding="utf-8")
 
     result = campaign_initialization_frontend_payload(campaign_id, {"title": "Test Campaign"}, [])
 
     assert result["map_panel"]["update_requested"] is True
     assert result["map_panel"]["payload"]["map_route"]["nodes"]
+    assert result["map_panel"]["payload"]["visual_contract_key"].startswith("map:")
     kinds = {job["kind"] for job in result["canvas_jobs"]}
     assert {"map", "prop"} <= kinds
+    assert all("visual_contract_hash" in job for job in result["canvas_jobs"])
     assert "cg" not in kinds
+
+
+def test_visual_contract_candidates_are_accepted_and_generic():
+    payload = setup_payload()
+    payload["visual_contract_candidates"] = [{
+        "entity_key": "scene:opening_board",
+        "entity_type": "scene",
+        "display_name": "Opening Board",
+        "memory_refs": ["campaign_direction.json"],
+        "visual_identity": {"details": {"weather": "dusk"}},
+        "render_intent": {"primary": "scene_image"},
+    }]
+
+    result = validate_v4_campaign_setup(payload)
+
+    assert result["visual_contract_candidates"][0]["entity_key"] == "scene:opening_board"

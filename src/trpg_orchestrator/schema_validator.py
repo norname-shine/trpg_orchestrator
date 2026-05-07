@@ -140,6 +140,8 @@ def validate_pressure_pack(data: dict[str, Any], expected_campaign_id: str | Non
         raise SchemaValidationError("map_canvas must be an object")
     if "story_topology" in data and not isinstance(data.get("story_topology"), dict):
         raise SchemaValidationError("story_topology must be an object")
+    if "visual_contract_candidates" in data and not isinstance(data.get("visual_contract_candidates"), list):
+        raise SchemaValidationError("visual_contract_candidates must be a list")
 
 
 def validate_writeback(data: dict[str, Any]) -> None:

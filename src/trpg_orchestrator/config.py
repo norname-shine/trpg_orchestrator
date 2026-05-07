@@ -21,6 +21,7 @@ MEMORY_FILE_NAMES = [
     "monster_profiles.json",
     "style_profile.json",
     "image_profile.json",
+    "visual_contracts.json",
     "player_state.json",
     "npc_memory.json",
     "world_state.json",

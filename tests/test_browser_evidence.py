@@ -70,6 +70,32 @@ def test_false_browser_evidence_stops_ingest_before_writeback(tmp_path, monkeypa
     assert FakeStore.wrote_updates is False
 
 
+def test_campaign_id_mismatch_stops_ingest_before_writeback(tmp_path, monkeypatch):
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    write_text_utf8(outbox_dir / "chatgpt_raw_output.md", "not model output")
+    write_evidence(outbox_dir, campaign_id="other")
+    install_ingest_fakes(monkeypatch, outbox_dir)
+
+    with pytest.raises(RuntimeError, match="campaign_id mismatch"):
+        cli.cmd_ingest("demo", skip_v4_audit=True)
+
+    assert FakeStore.wrote_updates is False
+
+
+def test_output_hash_mismatch_stops_ingest_before_writeback(tmp_path, monkeypatch):
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    write_text_utf8(outbox_dir / "chatgpt_raw_output.md", "not model output")
+    write_evidence(outbox_dir, output_hash="not-the-current-output-hash")
+    install_ingest_fakes(monkeypatch, outbox_dir)
+
+    with pytest.raises(RuntimeError, match="output_hash mismatch"):
+        cli.cmd_ingest("demo", skip_v4_audit=True)
+
+    assert FakeStore.wrote_updates is False
+
+
 def test_true_browser_evidence_with_markers_allows_ingest_gate(tmp_path):
     outbox_dir = tmp_path / "outbox"
     outbox_dir.mkdir()

@@ -842,8 +842,9 @@ def verify_browser_evidence_before_ingest(raw_path: Path, campaign_id: str) -> N
     evidence = read_json(evidence_path)
     if not isinstance(evidence, dict):
         raise RuntimeError(f"browser evidence invalid; refusing ingest: {evidence_path}")
-    if evidence.get("campaign_id") and str(evidence.get("campaign_id")) != str(campaign_id):
-        raise RuntimeError("browser evidence campaign_id does not match active campaign; refusing ingest")
+    evidence_campaign_id = str(evidence.get("campaign_id") or "")
+    if evidence_campaign_id != str(campaign_id):
+        raise RuntimeError("browser evidence campaign_id mismatch; refusing ingest")
     mode = str(evidence.get("mode") or "")
     if mode not in {"text", "capture_only"}:
         raise RuntimeError(f"browser evidence mode is not ingest-safe: {mode or '(empty)'}")
@@ -857,7 +858,7 @@ def verify_browser_evidence_before_ingest(raw_path: Path, campaign_id: str) -> N
         raise RuntimeError("browser evidence output_hash missing; refusing ingest")
     actual_hash = sha256_file(raw_path)
     if output_hash != actual_hash:
-        raise RuntimeError("browser evidence output_hash does not match chatgpt_raw_output.md; refusing ingest")
+        raise RuntimeError("browser evidence output_hash mismatch; refusing ingest")
 
 
 def append_run_record(run_records: dict, campaign_id: str, player_action: str, parsed, outbox_dir: Path, pressure_pack: dict, audit_result: dict, final_updates: dict) -> dict:

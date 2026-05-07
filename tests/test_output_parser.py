@@ -1,0 +1,52 @@
+import pytest
+
+from trpg_orchestrator.output_parser import parse_chatgpt_output
+
+
+def valid_json_output():
+    return {
+        "turn_title": "开场",
+        "blocks": [
+            {
+                "type": "player_action",
+                "actor_kind": "player",
+                "actor_id": "Lee",
+                "avatar_key": "Lee",
+                "speaker": "Lee",
+                "body": "我检查门口。",
+            },
+            {
+                "type": "gm_narration",
+                "actor_kind": "gm",
+                "speaker": "GM",
+                "body": "门缝里有雨水和泥。",
+            },
+        ],
+        "summary": "Lee 检查了门口。",
+        "state_writeback": {
+            "short_term_state": {},
+            "long_term_memory": {},
+            "new_open_threads": [],
+            "closed_threads": [],
+        },
+    }
+
+
+def test_parse_structured_json_output():
+    import json
+
+    parsed = parse_chatgpt_output(json.dumps(valid_json_output(), ensure_ascii=False))
+
+    assert parsed.summary == "Lee 检查了门口。"
+    assert parsed.blocks[0]["type"] == "player_action"
+    assert parsed.writeback["short_term_state"] == {}
+
+
+def test_parse_structured_json_missing_state_writeback_fails():
+    import json
+
+    payload = valid_json_output()
+    payload.pop("state_writeback")
+
+    with pytest.raises(ValueError):
+        parse_chatgpt_output(json.dumps(payload, ensure_ascii=False))

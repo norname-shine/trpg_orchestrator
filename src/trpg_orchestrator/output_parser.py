@@ -95,6 +95,10 @@ def _parse_json_output(text: str) -> ParsedOutput:
     if not isinstance(data, dict):
         raise ValueError("ChatGPT JSON output must be an object")
     blocks = _normalize_blocks(data.get("blocks") or data.get("narrative_blocks") or [])
+    if not blocks:
+        raise ValueError("ChatGPT JSON output must include non-empty blocks")
+    if not any(key in data for key in ("state_writeback", "writeback", "memory_patch")):
+        raise ValueError("ChatGPT JSON output must include state_writeback")
     writeback = data.get("state_writeback") or data.get("writeback") or data.get("memory_patch") or {}
     if not isinstance(writeback, dict):
         raise ValueError("state_writeback must be an object")

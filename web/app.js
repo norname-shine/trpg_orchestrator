@@ -1,4 +1,21 @@
 ﻿const state = {
+  campaign: {
+    campaigns: [],
+    activeCampaign: "",
+    selectedCampaign: "",
+    lastCampaignState: {},
+    frontendState: {},
+    assetSeed: "",
+    streamingPreview: false,
+  },
+  story: {},
+  assets: {},
+  gallery: {},
+  map: {},
+  character: {},
+  writeback: {},
+  job: {},
+  ui: {},
   campaigns: [],
   activeCampaign: "",
   selectedCampaign: "",
@@ -60,6 +77,101 @@
     completing: false,
   },
 };
+
+const LEGACY_STATE_FIELDS = {
+  campaigns: ["campaign", "campaigns"],
+  activeCampaign: ["campaign", "activeCampaign"],
+  selectedCampaign: ["campaign", "selectedCampaign"],
+  lastCampaignState: ["campaign", "lastCampaignState"],
+  frontendState: ["campaign", "frontendState"],
+  assetSeed: ["campaign", "assetSeed"],
+  streamingPreview: ["campaign", "streamingPreview"],
+  storyTurnsByCampaign: ["story", "storyTurnsByCampaign"],
+  storyTurnSignatures: ["story", "storyTurnSignatures"],
+  currentPressurePack: ["story", "currentPressurePack"],
+  storyProgressPayload: ["story", "storyProgressPayload"],
+  storyProgressChapter: ["story", "storyProgressChapter"],
+  storyProgressNode: ["story", "storyProgressNode"],
+  assetCache: ["assets", "assetCache"],
+  cachedAssets: ["assets", "cachedAssets"],
+  canvasRules: ["assets", "canvasRules"],
+  visualContracts: ["assets", "visualContracts"],
+  modulePayloadCache: ["assets", "modulePayloadCache"],
+  galleryFilter: ["gallery", "galleryFilter"],
+  galleryFilterIds: ["gallery", "galleryFilterIds"],
+  galleryTaxonomy: ["gallery", "galleryTaxonomy"],
+  galleryAssets: ["gallery", "galleryAssets"],
+  selectedGalleryKey: ["gallery", "selectedGalleryKey"],
+  transientGalleryAsset: ["gallery", "transientGalleryAsset"],
+  renderedMapKey: ["map", "renderedMapKey"],
+  currentMapAsset: ["map", "currentMapAsset"],
+  characterProfileExpanded: ["character", "characterProfileExpanded"],
+  characterProfileCampaign: ["character", "characterProfileCampaign"],
+  lastCharacterCardForRender: ["character", "lastCharacterCardForRender"],
+  latestInventoryPayload: ["character", "latestInventoryPayload"],
+  latestDossierPayload: ["character", "latestDossierPayload"],
+  writebackReview: ["writeback", "writebackReview"],
+  polling: ["job", "polling"],
+  lastJobRunning: ["job", "lastJobRunning"],
+  runProgress: ["job", "runProgress"],
+  sideTab: ["ui", "sideTab"],
+  activePanel: ["ui", "activePanel"],
+  autoScroll: ["ui", "autoScroll"],
+  collapsedPanels: ["ui", "collapsedPanels"],
+  ruleFiles: ["ui", "ruleFiles"],
+  selectedRule: ["ui", "selectedRule"],
+  dragPanels: ["ui", "dragPanels"],
+  activeDragPanel: ["ui", "activeDragPanel"],
+  activeReferenceDrag: ["ui", "activeReferenceDrag"],
+};
+
+function partitionLegacyState() {
+  Object.entries(LEGACY_STATE_FIELDS).forEach(([field, [section, key]]) => {
+    state[section] = state[section] || {};
+    if (Object.prototype.hasOwnProperty.call(state, field)) {
+      state[section][key] = state[field];
+      delete state[field];
+    } else if (!Object.prototype.hasOwnProperty.call(state[section], key)) {
+      state[section][key] = undefined;
+    }
+    Object.defineProperty(state, field, {
+      configurable: false,
+      enumerable: false,
+      get() {
+        return state[section][key];
+      },
+      set(value) {
+        state[section][key] = value;
+      },
+    });
+  });
+}
+
+partitionLegacyState();
+
+function activeCampaignId() {
+  return state.campaign.activeCampaign || "";
+}
+
+function currentFrontendState() {
+  return state.campaign.frontendState || {};
+}
+
+function currentCampaignState() {
+  return state.campaign.lastCampaignState || {};
+}
+
+function currentAssets() {
+  return state.assets.cachedAssets || [];
+}
+
+function currentGalleryState() {
+  return state.gallery || {};
+}
+
+function currentRunProgress() {
+  return state.job.runProgress || {};
+}
 
 const $ = (id) => document.getElementById(id);
 const ASSET_GENERATOR_VERSION = 19;
@@ -489,7 +601,7 @@ async function startJob(path, payload, options = {}) {
 async function refresh() {
   try {
     const data = await api("/api/frontend-state");
-    const previousCampaign = state.activeCampaign || "";
+    const previousCampaign = activeCampaignId();
     const nextCampaign = data.active_campaign || "";
     state.frontendState = data.frontend_state || {};
     state.streamingPreview = Boolean(data.streaming_preview);
@@ -517,8 +629,8 @@ async function refresh() {
 function renderStatus(data) {
   state.campaigns = data.campaign_list || [];
   state.activeCampaign = data.active_campaign || "";
-  state.selectedCampaign = state.selectedCampaign || state.activeCampaign;
-  setText("campaignName", campaignTitle(state.activeCampaign) || "-");
+  state.selectedCampaign = state.selectedCampaign || activeCampaignId();
+  setText("campaignName", campaignTitle(activeCampaignId()) || "-");
 
   const scene = data.campaign_state?.recent?.current_scene || {};
   const chapterName = currentCampaignMeta()?.chapter || "";
@@ -575,16 +687,21 @@ function invalidateModulePayloadCache(moduleName) {
 }
 
 function resetCampaignScopedUiState(campaignId) {
-  state.renderedMapKey = "";
-  state.assetCache = {};
-  state.cachedAssets = [];
-  state.galleryAssets = [];
-  state.selectedGalleryKey = "";
-  state.transientGalleryAsset = null;
-  state.currentMapAsset = null;
-  state.currentPressurePack = {};
-  state.visualContracts = {};
-  state.modulePayloadCache = {};
+  state.map.renderedMapKey = "";
+  state.map.currentMapAsset = null;
+  state.assets.assetCache = {};
+  state.assets.cachedAssets = [];
+  state.assets.visualContracts = {};
+  state.assets.modulePayloadCache = {};
+  state.gallery.galleryAssets = [];
+  state.gallery.selectedGalleryKey = "";
+  state.gallery.transientGalleryAsset = null;
+  state.story.currentPressurePack = {};
+  state.story.storyProgressPayload = {};
+  state.story.storyProgressChapter = {};
+  state.story.storyProgressNode = {};
+  state.character.latestInventoryPayload = null;
+  state.character.latestDossierPayload = null;
   clearImageElement("avatarImage");
   clearImageElement("companionImage");
   clearImageElement("mapImage");
@@ -1103,10 +1220,32 @@ function updateMapModule(moduleState = {}, campaignState = {}) {
   renderCachedMap(campaignState?.recent?.current_scene || {}, moduleState);
 }
 
+function renderMap(moduleState = {}, campaignState = currentCampaignState()) {
+  return updateMapModule(moduleState, campaignState);
+}
+
 function updateGalleryModule(moduleState = {}, campaignState = {}) {
   if (moduleState.payload_ref && moduleState.update_requested === true) return;
   if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
   renderGallery(campaignState, { module_payload: moduleState.payload || {} }, moduleState);
+}
+
+function renderStory(output = {}) {
+  const parsed = output.parsed || {};
+  return renderStoryBlocks(parsed.blocks || [], parsed.body || output.public_text || "");
+}
+
+function renderCharacterPanel(card = {}) {
+  return renderCharacterCard(card);
+}
+
+function renderJobStatus(pipeline = {}, job = {}, output = {}) {
+  return updateRunProgressFromPipeline(pipeline, job, output);
+}
+
+function renderLayout() {
+  applyCollapseState();
+  clampFloatingPanels();
 }
 
 function updateInventoryModule(moduleState = {}) {

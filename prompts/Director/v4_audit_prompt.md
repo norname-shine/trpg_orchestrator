@@ -22,6 +22,9 @@ You may reject writeback that:
 - Writes unconfirmed clues as long-term confirmed facts.
 - Requests capability_escalation_request without defer_to_next_turn=true.
 - Attempts to trigger additional model loading or payload fulfillment in this same turn.
+- Marks observed clues, NPC claims, scene color, or temporary pressure as `confirmed_fact`.
+- Writes an NPC statement as world truth instead of `npc_claim`.
+- Persists scene-only description into long-term memory instead of `short_term_scene`.
 
 You must not:
 
@@ -29,6 +32,15 @@ You must not:
 - Add unauthorized payloads or optional_writebacks to approved_writeback.
 - Write frontend payloads directly.
 - Modify story_blueprint.
+
+When revising, downgrade unsafe entries instead of approving them as facts:
+
+- Unconfirmed clue -> `memory_type="observed_clue"`, `certainty="likely"` or `"uncertain"`.
+- NPC statement or belief -> `memory_type="npc_claim"`, `certainty="uncertain"`.
+- Temporary scene state or atmospheric description -> `memory_type="short_term_scene"`, `ttl="scene"`.
+- Visible story progress only -> `memory_type="progress_update"`.
+
+Only approve `memory_type="confirmed_fact"` with `certainty="confirmed"` when the fact is visibly confirmed or already established by approved memory.
 
 Output format:
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chromium } from "playwright";
 
 const workerDir = process.env.TRPG_CHATGPT_WORKER_DIR || path.join(process.cwd(), ".runtime", "chatgpt_worker");
@@ -37,6 +38,7 @@ while (true) {
     continue;
   }
   await handleTask(task).catch((err) => {
+    writeTaskEvidence(task, { ok: false, markers_ok: false, blocked_reason: blockedReasonFromTaskOutput(task) || "browser_automation_error", error: String(err?.message || err) });
     if (isRecoverableBrowserError(err) && !task.recovered_once) {
       writeTaskStatus(task.id, { state: "running", stage: "browser_restarting", label: "Browser closed or disconnected; restarting", percent: 10, updated_at: Date.now() });
       return restartBrowserSession()
@@ -66,9 +68,11 @@ async function handleTask(task) {
 
   if (task.mode !== "image" && !isCompleteReply(latest)) {
     fs.writeFileSync(task.output_path, latest.trim() + "\n", "utf8");
+    writeTaskEvidence(task, { ok: false, markers_ok: false, blocked_reason: blockedReasonFromTaskOutput(task) || "missing_markers", error: "Latest ChatGPT reply is incomplete or missing required markers." });
     throw new Error("Latest ChatGPT reply is incomplete or missing required markers.");
   }
   fs.writeFileSync(task.output_path, latest.trim() + "\n", "utf8");
+  writeTaskEvidence(task, { ok: true, markers_ok: true });
   writeTaskStatus(task.id, { state: "complete", stage: "actor_complete", label: "ChatGPT 正文已返回", percent: 70, output_chars: latest.length, updated_at: Date.now() });
 }
 
@@ -100,6 +104,36 @@ function isStaleClaimedTask(id) {
 function writeTaskStatus(id, data) {
   const payload = { task_id: id, ...data };
   fs.writeFileSync(path.join(tasksDir, `${id}.status.json`), JSON.stringify(payload, null, 2), "utf8");
+}
+
+function writeTaskEvidence(task, data) {
+  const evidencePath = task.evidence_path || path.join(path.dirname(task.output_path), "browser_evidence.json");
+  const payload = {
+    ok: Boolean(data.ok),
+    mode: task.capture_only ? "capture_only" : String(task.mode || "text"),
+    campaign_id: String(task.campaign_id || ""),
+    input_hash: task.capture_only ? "" : sha256File(task.input_path),
+    output_hash: sha256File(task.output_path),
+    markers_ok: Boolean(data.markers_ok),
+    blocked_reason: String(data.blocked_reason || ""),
+    error: String(data.error || ""),
+  };
+  fs.writeFileSync(evidencePath, JSON.stringify(payload, null, 2) + "\n", "utf8");
+}
+
+function sha256File(file) {
+  if (!file || !fs.existsSync(file)) return "";
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function blockedReasonFromTaskOutput(task) {
+  if (!task?.output_path || !fs.existsSync(task.output_path)) return "";
+  const text = fs.readFileSync(task.output_path, "utf8").toLowerCase();
+  const terms = ["log in", "sign in", "captcha", "verification", "verify your identity", "payment", "billing", "subscription", "security", "登录", "验证码", "安全验证", "支付", "订阅"];
+  const found = terms.find((term) => text.includes(term.toLowerCase()));
+  if (found) return `blocked browser state detected: ${found}`;
+  if (!text.trim()) return "empty_output";
+  return "";
 }
 
 function writeWorkerStatus(data) {

@@ -34,6 +34,36 @@ SCALAR_UPDATE_FIELDS = {
 }
 
 MAX_APPLIED_WRITEBACK_HASHES = 50
+MEMORY_TYPES = {"confirmed_fact", "observed_clue", "npc_claim", "short_term_scene", "progress_update"}
+CERTAINTY_LEVELS = {"confirmed", "likely", "uncertain"}
+WRITEBACK_SOURCES = {"actor", "director", "audit", "backend"}
+TTL_VALUES = {"scene", "session", "permanent"}
+WRITEBACK_METADATA_KEYS = {"memory_type", "certainty", "source", "ttl"}
+
+
+def normalize_writeback_entry(entry: Any, default_memory_type: str = "short_term_scene") -> dict[str, Any]:
+    memory_type = default_memory_type if default_memory_type in MEMORY_TYPES else "short_term_scene"
+    if isinstance(entry, dict):
+        normalized = deepcopy(entry)
+        if "value" not in normalized:
+            for key in ("text", "note", "summary", "title", "name", "description"):
+                if key in normalized:
+                    normalized["value"] = normalized.get(key)
+                    break
+            else:
+                normalized["value"] = {key: deepcopy(value) for key, value in entry.items() if key not in WRITEBACK_METADATA_KEYS}
+    else:
+        normalized = {"value": entry}
+
+    if normalized.get("memory_type") not in MEMORY_TYPES:
+        normalized["memory_type"] = memory_type
+    if normalized.get("certainty") not in CERTAINTY_LEVELS:
+        normalized["certainty"] = "uncertain"
+    if normalized.get("source") not in WRITEBACK_SOURCES:
+        normalized["source"] = "actor"
+    if normalized.get("ttl") not in TTL_VALUES:
+        normalized["ttl"] = "scene"
+    return normalized
 
 
 def apply_approved_writeback(
@@ -51,9 +81,9 @@ def apply_approved_writeback(
         value = long_term.get(field)
         if value in (None, "", [], {}):
             continue
-        target = deepcopy(updates.get(filename) or memory[filename])
-        append_unique(target, bucket, make_entry(field, value))
-        updates[filename] = target
+        for entry in as_list(value):
+            normalized = normalize_writeback_entry(entry)
+            route_general_writeback_entry(memory, updates, field, filename, bucket, normalized)
 
     npc_updates = long_term.get("npc_memory_updates")
     if isinstance(npc_updates, dict) and npc_updates:
@@ -61,7 +91,18 @@ def apply_approved_writeback(
         target.setdefault("npcs", {})
         for name, note in npc_updates.items():
             npc = target["npcs"].setdefault(name, {"facts": [], "uncertain": [], "notes": []})
-            append_unique(npc, "facts", make_entry("npc_memory_updates", note))
+            for entry in as_list(note):
+                normalized = normalize_writeback_entry(
+                    entry,
+                    default_memory_type="npc_claim" if isinstance(entry, dict) else "short_term_scene",
+                )
+                routed = make_entry("npc_memory_updates", normalized)
+                if is_confirmed_fact(normalized):
+                    append_unique(npc, "facts", routed)
+                elif normalized["memory_type"] == "npc_claim":
+                    append_unique(npc, "uncertain", routed)
+                else:
+                    append_unique(npc, "notes", routed)
         updates["npc_memory.json"] = target
 
     thread_updates = long_term.get("main_thread_updates")
@@ -69,7 +110,9 @@ def apply_approved_writeback(
         target = deepcopy(updates.get("main_threads.json") or memory["main_threads.json"])
         target.setdefault("main_threads", [])
         for item in as_list(thread_updates):
-            append_thread(target["main_threads"], item)
+            normalized = normalize_writeback_entry(item, default_memory_type="progress_update")
+            if normalized["memory_type"] in {"progress_update", "confirmed_fact"}:
+                append_thread(target["main_threads"], normalized)
         for item in as_list(approved_writeback.get("new_open_threads")):
             append_thread(target.setdefault("side_threads", []), item)
         for item in as_list(approved_writeback.get("closed_threads")):
@@ -145,6 +188,49 @@ def _writeback_prose_chars(writeback: dict[str, Any]) -> int:
     if isinstance(short, dict):
         parts.extend(str(value) for value in short.values() if isinstance(value, str))
     return len("".join(str(part) for part in parts if part))
+
+
+def is_confirmed_fact(entry: dict[str, Any]) -> bool:
+    return entry.get("memory_type") == "confirmed_fact" and entry.get("certainty") == "confirmed"
+
+
+def route_general_writeback_entry(
+    memory: dict[str, Any],
+    updates: dict[str, Any],
+    field: str,
+    filename: str,
+    bucket: str,
+    entry: dict[str, Any],
+) -> None:
+    if is_confirmed_fact(entry):
+        target = deepcopy(updates.get(filename) or memory[filename])
+        append_unique(target, bucket, make_entry(field, entry))
+        updates[filename] = target
+        return
+    if entry["memory_type"] == "observed_clue":
+        append_clue_entry(memory, updates, field, entry)
+        return
+    if entry["memory_type"] == "progress_update":
+        target = deepcopy(updates.get("main_threads.json") or memory.get("main_threads.json", {}))
+        target.setdefault("main_threads", [])
+        append_thread(target["main_threads"], entry)
+        updates["main_threads.json"] = target
+        return
+    append_recent_writeback_note(memory, updates, field, entry)
+
+
+def append_clue_entry(memory: dict[str, Any], updates: dict[str, Any], field: str, entry: dict[str, Any]) -> None:
+    target = deepcopy(updates.get("clue_history.json") or memory.get("clue_history.json", {}))
+    target.setdefault("notes", [])
+    append_plain_unique(target["notes"], make_entry(field, entry))
+    updates["clue_history.json"] = target
+
+
+def append_recent_writeback_note(memory: dict[str, Any], updates: dict[str, Any], field: str, entry: dict[str, Any]) -> None:
+    recent = deepcopy(updates.get("recent_context.json") or memory["recent_context.json"])
+    recent.setdefault("writeback_observations", [])
+    append_plain_unique(recent["writeback_observations"], make_entry(field, entry))
+    updates["recent_context.json"] = recent
 
 
 def _authorized_optional_writebacks(optional_writebacks: dict[str, Any], pressure_pack: dict[str, Any]) -> set[str]:

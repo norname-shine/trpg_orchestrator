@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .ai_flavor_checker import check_ai_flavor
 from .capability_resolver import build_capability_plan
-from .chatgpt_web_client import ChatGPTWebClient
+from .chatgpt_web_client import ChatGPTWebClient, browser_evidence_path, sha256_file
 from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT, REGISTRY_PATH
 from .deepseek_client import DeepSeekClient
 from .encoding_utils import read_runtime_text, write_text_utf8
@@ -758,6 +758,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     raw_path = outbox_dir / "chatgpt_raw_output.md"
     if not raw_path.exists():
         raise FileNotFoundError(f"missing {outbox_dir / 'chatgpt_raw_output.md'}")
+    verify_browser_evidence_before_ingest(raw_path, resolved)
     raw_output = read_runtime_text(raw_path)
     emit_public_job_status("parsing", "正在解析正文与状态回写", 76)
     gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
@@ -832,6 +833,31 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     print(f"log: {log_path}")
     print("\n" + public_output(parsed))
     return 0
+
+
+def verify_browser_evidence_before_ingest(raw_path: Path, campaign_id: str) -> None:
+    evidence_path = browser_evidence_path(raw_path)
+    if not evidence_path.exists():
+        raise RuntimeError(f"browser evidence missing; refusing ingest: {evidence_path}")
+    evidence = read_json(evidence_path)
+    if not isinstance(evidence, dict):
+        raise RuntimeError(f"browser evidence invalid; refusing ingest: {evidence_path}")
+    if evidence.get("campaign_id") and str(evidence.get("campaign_id")) != str(campaign_id):
+        raise RuntimeError("browser evidence campaign_id does not match active campaign; refusing ingest")
+    mode = str(evidence.get("mode") or "")
+    if mode not in {"text", "capture_only"}:
+        raise RuntimeError(f"browser evidence mode is not ingest-safe: {mode or '(empty)'}")
+    if evidence.get("ok") is not True:
+        reason = str(evidence.get("blocked_reason") or evidence.get("error") or "browser evidence blocked ingest")
+        raise RuntimeError(f"browser evidence blocked ingest: {reason}")
+    if evidence.get("markers_ok") is not True:
+        raise RuntimeError("browser evidence markers_ok is false; refusing ingest")
+    output_hash = str(evidence.get("output_hash") or "")
+    if not output_hash:
+        raise RuntimeError("browser evidence output_hash missing; refusing ingest")
+    actual_hash = sha256_file(raw_path)
+    if output_hash != actual_hash:
+        raise RuntimeError("browser evidence output_hash does not match chatgpt_raw_output.md; refusing ingest")
 
 
 def append_run_record(run_records: dict, campaign_id: str, player_action: str, parsed, outbox_dir: Path, pressure_pack: dict, audit_result: dict, final_updates: dict) -> dict:
@@ -955,28 +981,75 @@ def cmd_migrate_memory() -> int:
 
 
 
-def cmd_run_turn(action: str, campaign_id: str | None, offline_pressure_pack: bool, skip_v4_audit: bool, auto_rewrite: bool, rewrite_attempts: int) -> int:
+def prepare_turn(action: str, campaign_id: str | None, offline_pressure_pack: bool) -> int:
+    return cmd_prepare(action, campaign_id, offline_pressure_pack)
+
+
+def send_actor_turn(campaign_id: str | None) -> int:
+    return cmd_send(campaign_id)
+
+
+def ingest_actor_turn(campaign_id: str | None, skip_v4_audit: bool) -> int:
+    return cmd_ingest(campaign_id, skip_v4_audit)
+
+
+def run_rewrite_if_needed(campaign_id: str | None, auto_rewrite: bool, rewrite_attempts: int) -> int:
+    _ = campaign_id
+    if not auto_rewrite:
+        return 0
+    return cmd_run_rewrite(rewrite_attempts)
+
+
+def run_image_if_needed(campaign_id: str | None) -> int:
+    resolved = MemoryStore().resolve_campaign_id(campaign_id)
+    outbox_dir = campaign_outbox_dir(resolved)
+    pressure_pack = read_json(outbox_dir / "pressure_pack.json") if (outbox_dir / "pressure_pack.json").exists() else {}
+    write_json(outbox_dir / "image_job.json", {
+        "status": "skipped",
+        "reason": "lazy pipeline defers image generation to canvas_jobs or explicit asset APIs",
+        "visual_asset_count": len(image_pass_assets(pressure_pack)),
+    })
+    return 0
+
+
+def run_turn_pipeline(
+    action: str,
+    campaign_id: str | None,
+    offline_pressure_pack: bool,
+    skip_v4_audit: bool,
+    auto_rewrite: bool,
+    rewrite_attempts: int,
+) -> int:
     if is_light_director_action(action):
         return cmd_v4_light_action(action, campaign_id, skip_v4_audit=True)
     if auto_rewrite:
         print("auto rewrite disabled in lazy payload pipeline to preserve model call limits")
         auto_rewrite = False
-    cmd_prepare(action, campaign_id, offline_pressure_pack)
-    cmd_send(campaign_id)
-    try:
-        result = cmd_ingest(campaign_id, skip_v4_audit)
-    except RuntimeError as exc:
-        if auto_rewrite and "AI flavor check is heavy" in str(exc):
-            print("auto rewrite triggered")
-            cmd_run_rewrite(rewrite_attempts)
-            result = cmd_ingest(campaign_id, skip_v4_audit)
-        else:
-            raise
-    resolved = MemoryStore().resolve_campaign_id(campaign_id)
-    outbox_dir = campaign_outbox_dir(resolved)
-    pressure_pack = read_json(outbox_dir / "pressure_pack.json") if (outbox_dir / "pressure_pack.json").exists() else {}
-    write_json(outbox_dir / "image_job.json", {"status": "skipped", "reason": "lazy pipeline defers image generation to canvas_jobs or explicit asset APIs", "visual_asset_count": len(image_pass_assets(pressure_pack))})
-    return result
+
+    result = prepare_turn(action, campaign_id, offline_pressure_pack)
+    if result != 0:
+        return result
+    result = send_actor_turn(campaign_id)
+    if result != 0:
+        return result
+    result = ingest_actor_turn(campaign_id, skip_v4_audit)
+    if result != 0:
+        return result
+    result = run_rewrite_if_needed(campaign_id, auto_rewrite, rewrite_attempts)
+    if result != 0:
+        return result
+    return run_image_if_needed(campaign_id)
+
+
+def cmd_run_turn(action: str, campaign_id: str | None, offline_pressure_pack: bool, skip_v4_audit: bool, auto_rewrite: bool, rewrite_attempts: int) -> int:
+    return run_turn_pipeline(
+        action,
+        campaign_id,
+        offline_pressure_pack,
+        skip_v4_audit,
+        auto_rewrite,
+        rewrite_attempts,
+    )
 
 
 

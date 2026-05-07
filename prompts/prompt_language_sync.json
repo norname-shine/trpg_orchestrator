@@ -1,6 +1,6 @@
 {
   "schema": "trpg_orchestrator.prompt_language_sync.v1",
-  "updated_at": "2026-05-07T08:54:43Z",
+  "updated_at": "2026-05-07T14:55:43Z",
   "policy": "Manual bilingual sync baseline. --check fails when only one side changes after this baseline.",
   "standalone_md": [
     "rules_CN.md",
@@ -59,8 +59,8 @@
     "Actor/actor_writeback_rules.md": {
       "english": "Actor/actor_writeback_rules.md",
       "chinese": "Actor/actor_writeback_rules_CN.md",
-      "english_sha256": "44adde0cf255b5cda122379002c190664d474740d84e3ebd1f8d3950f90aba7b",
-      "chinese_sha256": "fbc2a20e998fc1f71725138198764e663d10bebb34461e6e3b081dd33010c533",
+      "english_sha256": "3a75147c58ee053339125c2e720747e69541b332d6a5604f0e2e4fb0bec170c1",
+      "chinese_sha256": "b9696ff7d23d2cf3e14c330f70e8cd47da6789e9a37dfd16f014cf6c38b5e239",
       "last_sync_direction": "baseline"
     },
     "Actor/character_card_json_rules.md": {
@@ -73,8 +73,8 @@
     "Actor/chatgpt_host_prompt.md": {
       "english": "Actor/chatgpt_host_prompt.md",
       "chinese": "Actor/chatgpt_host_prompt_CN.md",
-      "english_sha256": "9a7284013ceb65a832fa76072a35c0b012443ab3cfd1eab9803590dcc56a4690",
-      "chinese_sha256": "87d0a02f3ac3fc38333d24cb65578a7eef9041545bd4ffff6771e4424ab88991",
+      "english_sha256": "34158f6798fb829283ed989877d0cb17ec276a49be4656e62b95bad76e86cc30",
+      "chinese_sha256": "7a2cfd85333d73c5ef7d239647856a1ea8195147a7c3662938fc552f53acfead",
       "last_sync_direction": "baseline"
     },
     "Actor/chatgpt_image_rules.md": {
@@ -227,8 +227,8 @@
     "Director/v4_audit_prompt.md": {
       "english": "Director/v4_audit_prompt.md",
       "chinese": "Director/v4_audit_prompt_CN.md",
-      "english_sha256": "31d5c12e24d5ebe6880a71b84d11d2663586c6fd3e501d998211408bd08f1d5f",
-      "chinese_sha256": "d000f2fc698258cc30f1f49cd57e5f73306c3ab5b9b74a63784d5dab2bfd4d56",
+      "english_sha256": "7e78f85441a866cb63c81b406974fbc2c01d755e8de9504c63934b7ae9a4263c",
+      "chinese_sha256": "72cfc8cf711c27530620db03c41da143b7739470f07cb8195e69779f39922cfd",
       "last_sync_direction": "baseline"
     },
     "Director/v4_campaign_context_prompt.md": {

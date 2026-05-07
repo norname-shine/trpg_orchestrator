@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import json
 import shutil
 import subprocess
@@ -17,6 +18,63 @@ from .config import PROJECT_ROOT, SCRIPTS_DIR
 from .env_loader import load_project_env
 from .encoding_utils import read_runtime_text, write_text_utf8
 from .output_parser import missing_markers
+
+
+def sha256_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def browser_evidence_path(output_path: Path) -> Path:
+    return output_path.parent / "browser_evidence.json"
+
+
+def build_browser_evidence(
+    *,
+    ok: bool,
+    mode: str,
+    campaign_id: str,
+    input_hash: str = "",
+    output_hash: str = "",
+    markers_ok: bool = False,
+    blocked_reason: str = "",
+    error: str = "",
+) -> dict[str, Any]:
+    return {
+        "ok": bool(ok),
+        "mode": mode,
+        "campaign_id": campaign_id,
+        "input_hash": input_hash,
+        "output_hash": output_hash,
+        "markers_ok": bool(markers_ok),
+        "blocked_reason": blocked_reason,
+        "error": error,
+    }
+
+
+def write_browser_evidence(output_path: Path, evidence: dict[str, Any]) -> None:
+    write_text_utf8(browser_evidence_path(output_path), json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+
+
+def evaluate_browser_output(output_path: Path, mode: str) -> tuple[bool, bool, str, str]:
+    if not output_path.exists():
+        return False, False, "empty_output", "ChatGPT automation did not create an output file."
+    captured = read_runtime_text(output_path)
+    if not captured.strip():
+        return False, False, "empty_output", "Captured ChatGPT reply is empty."
+    safety_reason = browser_safety_stop_reason(captured)
+    if safety_reason:
+        return False, False, "blocked_browser_state", safety_reason
+    if mode != "image":
+        missing = missing_markers(captured)
+        if missing:
+            return False, False, "missing_markers", f"Captured ChatGPT reply missing markers: {', '.join(missing)}"
+    return True, True if mode != "image" else True, "", ""
 
 
 class ChatGPTWebClient:
@@ -93,16 +151,45 @@ class ChatGPTWebClient:
         user_data_dir = os.getenv("TRPG_BROWSER_USER_DATA_DIR")
         if not user_data_dir:
             raise RuntimeError("TRPG_BROWSER_USER_DATA_DIR is required when TRPG_CHATGPT_AUTOMATION=playwright.")
-        if use_browser_worker() and not capture_only:
-            run_via_browser_worker(
-                chatgpt_input_path,
-                output_path,
-                mode=mode,
-                project_name=self.project_name,
-                conversation_name=self.conversation_name,
-                campaign_id=str(self.campaign_profile.get("campaign_id") or ""),
-            )
-            return
+        campaign_id = str(self.campaign_profile.get("campaign_id") or "")
+        evidence_mode = "capture_only" if capture_only else mode
+        input_hash = "" if capture_only else sha256_file(chatgpt_input_path)
+        try:
+            if use_browser_worker() and not capture_only:
+                run_via_browser_worker(
+                    chatgpt_input_path,
+                    output_path,
+                    mode=mode,
+                    project_name=self.project_name,
+                    conversation_name=self.conversation_name,
+                    campaign_id=campaign_id,
+                )
+                ok, markers_ok, blocked_reason, error = evaluate_browser_output(output_path, mode)
+                write_browser_evidence(output_path, build_browser_evidence(
+                    ok=ok,
+                    mode=evidence_mode,
+                    campaign_id=campaign_id,
+                    input_hash=input_hash,
+                    output_hash=sha256_file(output_path),
+                    markers_ok=markers_ok,
+                    blocked_reason=blocked_reason,
+                    error=error,
+                ))
+                if not ok:
+                    raise RuntimeError(error or blocked_reason or "ChatGPT browser evidence failed.")
+                return
+        except Exception as exc:
+            write_browser_evidence(output_path, build_browser_evidence(
+                ok=False,
+                mode=evidence_mode,
+                campaign_id=campaign_id,
+                input_hash=input_hash,
+                output_hash=sha256_file(output_path),
+                markers_ok=False,
+                blocked_reason=browser_safety_stop_reason(read_runtime_text(output_path)) if output_path.exists() else "browser_automation_error",
+                error=str(exc),
+            ))
+            raise
         script = SCRIPTS_DIR / "chatgpt_web_send.mjs"
         npx = shutil.which("npx.cmd") or shutil.which("npx.exe") or shutil.which("npx")
         if not npx:
@@ -125,6 +212,7 @@ class ChatGPTWebClient:
             "--mode",
             mode,
         ]
+        command.extend(["--evidence", str(browser_evidence_path(output_path))])
         if capture_only:
             command.extend(["--capture-only", "true"])
         if os.getenv("TRPG_CHATGPT_CREATE_IF_MISSING", "0") == "1":
@@ -142,16 +230,32 @@ class ChatGPTWebClient:
 
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()
+            write_browser_evidence(output_path, build_browser_evidence(
+                ok=False,
+                mode=evidence_mode,
+                campaign_id=campaign_id,
+                input_hash=input_hash,
+                output_hash=sha256_file(output_path),
+                markers_ok=False,
+                blocked_reason=browser_safety_stop_reason(read_runtime_text(output_path)) if output_path.exists() else "browser_automation_error",
+                error=detail or f"ChatGPT Playwright automation stopped with exit code {completed.returncode}",
+            ))
             if detail:
                 raise RuntimeError(f"ChatGPT Playwright automation stopped: {detail}")
             raise RuntimeError(f"ChatGPT Playwright automation stopped with exit code {completed.returncode}")
-        if not output_path.exists():
-            raise RuntimeError("ChatGPT automation finished but did not create chatgpt_raw_output.md.")
-        captured = read_runtime_text(output_path)
-        if mode != "image":
-            missing = missing_markers(captured)
-            if missing:
-                raise RuntimeError(f"Captured ChatGPT reply missing markers: {', '.join(missing)}")
+        ok, markers_ok, blocked_reason, error = evaluate_browser_output(output_path, mode)
+        write_browser_evidence(output_path, build_browser_evidence(
+            ok=ok,
+            mode=evidence_mode,
+            campaign_id=campaign_id,
+            input_hash=input_hash,
+            output_hash=sha256_file(output_path),
+            markers_ok=markers_ok,
+            blocked_reason=blocked_reason,
+            error=error,
+        ))
+        if not ok:
+            raise RuntimeError(error or blocked_reason or "ChatGPT browser evidence failed.")
 
 
 def run_playwright_streaming(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -222,6 +326,7 @@ def run_via_browser_worker(
         "state": "pending",
         "input_path": str(input_path),
         "output_path": str(output_path),
+        "evidence_path": str(browser_evidence_path(output_path)),
         "mode": mode,
         "capture_only": False,
         "project_name": project_name,

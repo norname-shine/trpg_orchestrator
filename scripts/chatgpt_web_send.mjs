@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chromium } from "playwright";
 
 const args = parseArgs(process.argv.slice(2));
@@ -10,6 +11,7 @@ const outputPath = requiredArg(args, "output");
 const projectName = requiredArg(args, "project");
 const conversationName = requiredArg(args, "conversation");
 const mode = args.mode || "text";
+const evidencePath = args.evidence || path.join(path.dirname(outputPath), "browser_evidence.json");
 
 const captureOnly = args["capture-only"] === "true";
 const createIfMissing =
@@ -22,6 +24,7 @@ const keepBrowserOpen = process.env.TRPG_BROWSER_KEEP_OPEN !== "0";
 const manualWaitMs = Number(process.env.TRPG_BROWSER_MANUAL_WAIT_MS || 10 * 60 * 1000);
 const streamVisibleReply = process.env.TRPG_STREAM_VISIBLE_REPLY === "1";
 const directNewChat = process.env.TRPG_CHATGPT_DIRECT_NEW_CHAT !== "0";
+const inputHash = captureOnly ? "" : sha256File(inputPath);
 
 const M = {
   body: "\u3010\u6b63\u6587\u3011",
@@ -59,6 +62,7 @@ try {
     }
 
     fs.writeFileSync(outputPath, latest.trim() + "\n", "utf8");
+    writeEvidence({ ok: true, markers_ok: true });
     console.log(`Captured latest assistant reply: ${latest.length} chars`);
   } else {
     await fillComposer(page, inputText);
@@ -68,6 +72,7 @@ try {
 
     if (mode === "image") {
       fs.writeFileSync(outputPath, latest.trim() + "\n", "utf8");
+      writeEvidence({ ok: true, markers_ok: true });
       console.log(`Captured image assistant snapshot: ${latest.length} chars`);
       process.exitCode = 0;
     } else {
@@ -87,10 +92,12 @@ try {
 
       if (!isCompleteReply(latest)) {
         fs.writeFileSync(outputPath, latest.trim() + "\n", "utf8");
+        writeEvidence({ ok: false, markers_ok: false, blocked_reason: "missing_markers", error: "Latest ChatGPT reply is incomplete or missing required markers after recovery attempt." });
         fail("Latest ChatGPT reply is incomplete or missing required markers after recovery attempt.");
       }
 
       fs.writeFileSync(outputPath, latest.trim() + "\n", "utf8");
+      writeEvidence({ ok: true, markers_ok: true });
       console.log(`Captured complete assistant reply: ${latest.length} chars`);
     }
   }
@@ -779,6 +786,51 @@ function parseArgs(argv) {
   return result;
 }
 
+function sha256File(file) {
+  if (!fs.existsSync(file)) return "";
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function blockedReasonFromOutput() {
+  if (!fs.existsSync(outputPath)) return "browser_automation_error";
+  const text = fs.readFileSync(outputPath, "utf8").toLowerCase();
+  const terms = [
+    "log in",
+    "sign in",
+    "captcha",
+    "verification",
+    "verify your identity",
+    "payment",
+    "billing",
+    "subscription",
+    "security",
+    "登录",
+    "验证码",
+    "安全验证",
+    "支付",
+    "订阅",
+  ];
+  const found = terms.find((term) => text.includes(term.toLowerCase()));
+  if (found) return `blocked browser state detected: ${found}`;
+  if (!text.trim()) return "empty_output";
+  return "";
+}
+
+function writeEvidence({ ok, markers_ok, blocked_reason = "", error = "" }) {
+  const reason = blocked_reason || (!ok ? blockedReasonFromOutput() : "");
+  const payload = {
+    ok: Boolean(ok),
+    mode: captureOnly ? "capture_only" : mode,
+    campaign_id: "",
+    input_hash: inputHash,
+    output_hash: sha256File(outputPath),
+    markers_ok: Boolean(markers_ok),
+    blocked_reason: reason,
+    error,
+  };
+  fs.writeFileSync(evidencePath, JSON.stringify(payload, null, 2) + "\n", "utf8");
+}
+
 function requiredArg(parsedArgs, key) {
   if (!parsedArgs[key]) {
     fail(`missing --${key}`);
@@ -792,6 +844,7 @@ function sleep(ms) {
 }
 
 function fail(message) {
+  writeEvidence({ ok: false, markers_ok: false, blocked_reason: blockedReasonFromOutput(), error: String(message || "") });
   console.error(message);
   process.exit(1);
 }

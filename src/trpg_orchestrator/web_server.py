@@ -1021,7 +1021,7 @@ def resolve_entity_role(entity_or_asset: dict[str, Any], memory: dict[str, Any] 
     player_name = normalized_name(player.get("name"))
     companion_name = normalized_name(companion.get("name"))
     if player_key and (existing_entity_key == player_key or existing_entity_key.startswith("player:") or (player_name and player_name in names)):
-        return _identity_template("player", player_key, str(player.get("name") or display))
+        return _identity_template("player", existing_entity_key if existing_entity_key.startswith("player:") else player_key, str(player.get("name") or display))
     if companion_key and (
         existing_entity_key == companion_key
         or existing_entity_key.startswith("companion:")
@@ -2640,7 +2640,7 @@ def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, 
         if normalized_name(name) in protected:
             continue
         actor_id = stable_actor_entity_id(name)
-        row = {"kind": "npc", "key": f"npc:{actor_id}", "title": name, "meta": "NPC", "detail": "当前场景角色"}
+        row = {"kind": "npc", "key": f"npc:{actor_id}", "title": name, "meta": "NPC", "detail": "当前场景角色", "entity_key": f"npc:{actor_id}", "role": "npc", "runtime_role": "npc", "gallery_category": "character"}
         npc_row_by_id[actor_id] = row
         rows.append(row)
     for item in inventory[:8]:
@@ -3272,6 +3272,8 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
     if value in {"scene_image", "map_image"}:
         return "scene"
     if value == "npc_portrait":
+        return "character"
+    if "monster" in value or "enemy" in value or "boss" in value or "怪物" in value:
         return "character"
     if value == "item_icon":
         return "item"
@@ -6739,6 +6741,120 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+_asset_manifest_path_impl = asset_manifest_path
+_load_asset_manifest_impl = load_asset_manifest
+_campaign_asset_seed_impl = campaign_asset_seed
+_scoped_asset_key_impl = scoped_asset_key
+_normalize_asset_kind_impl = normalize_asset_kind
+_infer_asset_role_impl = infer_asset_role
+_asset_lookup_impl = asset_lookup
+_asset_list_impl = asset_list
+_save_asset_impl = save_asset
+_delete_asset_impl = delete_asset
+_rebuild_assets_impl = rebuild_assets
+_frontend_state_response_impl = frontend_state_response
+_campaign_state_impl = campaign_state
+_audit_writeback_payload_impl = audit_writeback_payload
+_writeback_review_payload_impl = writeback_review_payload
+_apply_writeback_payload_impl = apply_writeback_payload
+
+
+def asset_manifest_path(campaign_id: str) -> Path:
+    from .services import assets
+
+    return assets.asset_manifest_path(campaign_id)
+
+
+def load_asset_manifest(campaign_id: str) -> dict[str, Any]:
+    from .services import assets
+
+    return assets.load_asset_manifest(campaign_id)
+
+
+def campaign_asset_seed(campaign_id: str) -> str:
+    from .services import assets
+
+    return assets.campaign_asset_seed(campaign_id)
+
+
+def scoped_asset_key(campaign_id: str, kind: str, object_id: Any, variant: str = "default", generator_version: int = 17) -> str:
+    from .services import assets
+
+    return assets.scoped_asset_key(campaign_id, kind, object_id, variant, generator_version)
+
+
+def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key: str = "") -> str:
+    from .services import assets
+
+    return assets.normalize_asset_kind(kind, metadata, key)
+
+
+def infer_asset_role(asset: dict[str, Any]) -> str:
+    from .services import assets
+
+    return assets.infer_asset_role(asset)
+
+
+def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
+    from .services import assets
+
+    return assets.asset_lookup(campaign_id, key)
+
+
+def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
+    from .services import assets
+
+    return assets.asset_list(campaign_id, kind)
+
+
+def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
+    from .services import assets
+
+    return assets.save_asset(payload)
+
+
+def delete_asset(payload: dict[str, Any]) -> dict[str, Any]:
+    from .services import assets
+
+    return assets.delete_asset(payload)
+
+
+def rebuild_assets(payload: dict[str, Any]) -> dict[str, Any]:
+    from .services import assets
+
+    return assets.rebuild_assets(payload)
+
+
+def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:
+    from .services import frontend_state
+
+    return frontend_state.frontend_state_response(campaign_id)
+
+
+def campaign_state(campaign_id: str) -> dict[str, Any]:
+    from .services import frontend_state
+
+    return frontend_state.campaign_state(campaign_id)
+
+
+def audit_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
+    from .services import writeback_review
+
+    return writeback_review.audit_writeback_payload(campaign_id)
+
+
+def writeback_review_payload(campaign_id: str = "") -> dict[str, Any]:
+    from .services import writeback_review
+
+    return writeback_review.writeback_review_payload(campaign_id)
+
+
+def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
+    from .services import writeback_review
+
+    return writeback_review.apply_writeback_payload(campaign_id)
 
 
 if __name__ == "__main__":

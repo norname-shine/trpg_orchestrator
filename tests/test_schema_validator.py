@@ -1,4 +1,6 @@
-from trpg_orchestrator.schema_validator import validate_pressure_pack
+import pytest
+
+from trpg_orchestrator.schema_validator import SchemaValidationError, validate_chatgpt_blocks, validate_pressure_pack
 
 
 def minimal_pressure_pack():
@@ -54,3 +56,26 @@ def test_pressure_pack_allows_visual_contract_candidates():
     }]
 
     validate_pressure_pack(data)
+
+
+def test_minimal_pressure_pack_is_valid():
+    validate_pressure_pack(minimal_pressure_pack())
+
+
+def test_invalid_chatgpt_blocks_fail():
+    with pytest.raises(SchemaValidationError):
+        validate_chatgpt_blocks([
+            {"type": "gm_narration", "actor_kind": "gm", "speaker": "GM", "body": "missing player action echo"}
+        ])
+
+
+def test_writeback_metadata_invalid_value_fails():
+    from trpg_orchestrator.schema_validator import validate_writeback
+
+    with pytest.raises(SchemaValidationError):
+        validate_writeback({
+            "short_term_state": {},
+            "long_term_memory": {"world_state_updates": {"memory_type": "truth", "value": "bad"}},
+            "new_open_threads": [],
+            "closed_threads": [],
+        })

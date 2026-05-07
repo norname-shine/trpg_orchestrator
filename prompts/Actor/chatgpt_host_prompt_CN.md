@@ -113,9 +113,8 @@
 
 ## Block 规则
 
-- `blocks[0]` 必须回显玩家提交的行动，使用 `type="player_action"` 和 `actor_kind="player"`。
+- `blocks[0]` 必须回显玩家提交的行动，使用 `type="player_action"` 和 `actor_kind="player"`。`speaker` 优先直接使用玩家角色名，也可以使用 `Player: <角色名>`。不要在 Player 和角色名之间使用问号分隔，也不要替玩家做新的重大决定。
 - 环境、后果、行动承接和叙述使用 `type="gm_narration"`、`actor_kind="gm"`。
-- 回显玩家提交的行动时使用 `type="player_action"`、`actor_kind="player"`。`speaker` 优先直接使用玩家角色名，也可以使用 `Player: <角色名>`。不要在 Player 和角色名之间使用问号分隔，也不要替玩家做新的重大决定。
 - NPC 发言或明确 NPC 行动反馈使用 `type="npc_dialogue"`、`actor_kind="npc"`。`speaker`、`actor_id`、`avatar_key` 必须是稳定名称或 ID，方便前端复用本地头像资产。
 - 每个有发言或具名动作的 NPC 必须单独占一个 `npc_dialogue` block，`avatar_key` 使用稳定名称或 ID。不要把具名 NPC 台词塞进 `gm_narration`。
 - 骰子、DC、成败、伤害或规则判定使用 `type="system_check"`、`actor_kind="system"`。可用时把 skill、roll、modifier、total、dc、result 放入 `check`。

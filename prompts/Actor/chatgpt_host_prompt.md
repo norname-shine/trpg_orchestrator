@@ -114,9 +114,8 @@ Top-level JSON schema:
 
 ## Block Rules
 
-- `blocks[0]` must be the player's submitted action as `type="player_action"` and `actor_kind="player"`.
+- `blocks[0]` must echo the player's submitted action as `type="player_action"` and `actor_kind="player"`. Prefer the player character name as `speaker`; `Player: <character name>` is also allowed. Do not use a question-mark separator between `Player` and the character name. Do not make major new player decisions.
 - Use `type="gm_narration"` and `actor_kind="gm"` for environment, consequences, action framing, and narration.
-- Echo the player's submitted action as `type="player_action"`, `actor_kind="player"`. Prefer the player character name as `speaker`; `Player: <character name>` is also allowed. Do not use a question-mark separator between `Player` and the character name. Do not make major new player decisions.
 - Use `type="npc_dialogue"` and `actor_kind="npc"` for NPC speech or clear NPC action feedback. `speaker`, `actor_id`, and `avatar_key` must be stable names or IDs so the frontend can reuse local portrait assets.
 - Every named NPC who speaks or has a named action must be in their own `npc_dialogue` block with `avatar_key` set to their stable name or ID. Do not embed named NPC dialogue inside `gm_narration` blocks.
 - Use `type="system_check"` and `actor_kind="system"` for dice, DC, success/failure, damage, or rule checks. Put skill, roll, modifier, total, dc, and result in `check` when available.

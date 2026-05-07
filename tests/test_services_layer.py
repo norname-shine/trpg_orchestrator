@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from trpg_orchestrator import web_server
 from trpg_orchestrator.services import assets, frontend_state, writeback_review
+from trpg_orchestrator.json_utils import write_json
 
 
 def test_assets_load_empty_manifest_returns_compatible_shape(tmp_path, monkeypatch):
@@ -21,23 +22,79 @@ def test_assets_normalize_legacy_kind_keeps_compatibility():
     assert assets.normalize_asset_kind("map") == "map_image"
 
 
-def test_frontend_state_service_returns_core_payload(monkeypatch):
-    monkeypatch.setattr(frontend_state, "_web_server", lambda: SimpleNamespace(
-        _frontend_state_response_impl=lambda campaign_id="": {
-            "ok": True,
-            "active_campaign": campaign_id,
-            "campaign_state": {},
-            "frontend_state": {},
-            "output": {},
-            "job": {},
-        }
-    ))
+def test_frontend_state_service_returns_core_payload_without_impl(monkeypatch):
+    class FakeStore:
+        def load_registry(self):
+            return {"active_campaign": "", "campaigns": {}}
 
-    payload = frontend_state.frontend_state_response("demo")
+    fake_ws = SimpleNamespace(
+        JOB=SimpleNamespace(snapshot=lambda: {"running": False}),
+        campaign_list=lambda registry: [],
+        streaming_preview_enabled=lambda: False,
+        empty_output_payload=lambda campaign_id, warning="": {"campaign_id": campaign_id, "warning": warning},
+    )
+    monkeypatch.setattr(frontend_state, "MemoryStore", lambda: FakeStore())
+    monkeypatch.setattr(frontend_state, "_web_server", lambda: fake_ws)
+
+    payload = frontend_state.frontend_state_response("")
 
     assert isinstance(payload, dict)
     for key in ("ok", "active_campaign", "campaign_state", "frontend_state", "output", "job"):
         assert key in payload
+    assert not hasattr(fake_ws, "_frontend_state_response_impl")
+
+
+def test_frontend_state_campaign_state_reads_files_without_impl(tmp_path, monkeypatch):
+    root = tmp_path / "campaigns" / "demo"
+    root.mkdir(parents=True)
+    write_json(root / "campaign_profile.json", {
+        "title": "Demo",
+        "genre": "fantasy",
+        "tone": "quiet",
+        "safety_lines": ["no gore"],
+    })
+    write_json(root / "recent_context.json", {"current_scene": {"time": "night"}})
+    fake_ws = SimpleNamespace(
+        CAMPAIGNS_DIR=tmp_path / "campaigns",
+        normalize_story_config=lambda value: {"story_length": "medium"},
+        summarize_model_config=lambda value: {"provider": ""},
+        list_payload=lambda value: list(value or []),
+    )
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(frontend_state, "_web_server", lambda: fake_ws)
+
+    payload = frontend_state.campaign_state("demo")
+
+    assert payload["title"] == "Demo"
+    assert payload["genre"] == "fantasy"
+    assert payload["recent"]["current_scene"]["time"] == "night"
+    assert not hasattr(fake_ws, "_campaign_state_impl")
+
+
+def test_frontend_state_response_active_campaign_missing_outbox_does_not_crash(tmp_path, monkeypatch):
+    class FakeStore:
+        def load_registry(self):
+            return {
+                "active_campaign": "demo",
+                "campaigns": {"demo": {"name": "Demo", "status": "ready"}},
+            }
+
+        def resolve_campaign_id(self, campaign_id=None):
+            return campaign_id or "demo"
+
+    root = tmp_path / "campaigns" / "demo"
+    root.mkdir(parents=True)
+    write_json(root / "campaign_profile.json", {"title": "Demo"})
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(frontend_state, "MemoryStore", lambda: FakeStore())
+    monkeypatch.setattr(web_server, "MemoryStore", lambda: FakeStore())
+
+    payload = frontend_state.frontend_state_response("demo")
+
+    assert payload["ok"] is True
+    assert payload["active_campaign"] == "demo"
+    assert payload["campaign_state"]["title"] == "Demo"
+    assert "frontend_state" in payload
 
 
 def test_writeback_review_service_missing_outbox_files_returns_compatible_state(tmp_path, monkeypatch):

@@ -13,8 +13,8 @@
 ## 同步补充：gallery_taxonomy 准入
 
 - Canvas 资产是否进入资料夹，必须先通过当前团 `gallery_taxonomy` 白名单。
-- `gallery_taxonomy.core_categories` 是系统稳定分类，例如 `cg`、`npc`、`scene`、`item`。
-- `gallery_taxonomy.campaign_categories` 是当前团扩展分类，来自建团配置、campaign profile、rules、world setup 或模板默认。
+- `gallery_taxonomy.core_categories` 是系统稳定分类，固定为 `prop`、`item`、`character`、`scene`、`cg`。
+- `gallery_taxonomy.campaign_categories` 是导演初始化下发的当前团扩展分类，数量限制为 0-3 个。
 - `all` 只是前端聚合筛选，不是资料夹分类 ID。
 - `companion` 不是资料夹分类。当前玩家与当前绑定伙伴 / 副玩家默认 `gallery_category: hidden`。
 - 未在 taxonomy 中注册的分类不得只因为 PNG 存在就自动创建筛选或资料卡。
@@ -133,8 +133,8 @@
 ## 资料夹固定分类准入
 
 - Canvas 资产是否进入资料夹，必须先通过当前团开局固定的分类 ID 白名单。
-- `cg` 是全团通用资料夹分类；正式剧情 CG、生图成品、玩家可查看大图必须进入 `cg`。
-- Fate 团默认只允许 `cg`、`master`、`servant`、`npc`、`scene` / `map`、`item` 进入资料夹；其他团使用各自开局分类配置。
+- 基础固定分类恒为 `prop`、`item`、`character`、`scene`、`cg`；导演初始化只可追加 0-3 个自定义资料夹。
+- NPC、怪物、BOSS、敌对首领、御主、从者、关键角色统一进入 `character`；线索/文献类物件进入 `item` 或 `prop`。
 - CG 与地图/场景分离：CG 缓存在 `cg` 分类，地图和地点缩略图缓存在 `scene` 分类。
 - 未定义 kind、临时视觉记录、后台系统说明、不能对应稳定实体的普通视觉资产，不得仅因为生成了 PNG 就新建资料夹卡片。
 - 同一角色、物品或场景已有卡片时，新的 Canvas PNG 只能更新原卡缩略图、状态或详情，不新建重复卡。

@@ -15,14 +15,15 @@ All UI changes must be implemented through reusable multi-campaign structures fi
 
 - Filter buttons must update the visible gallery immediately.
 - The full gallery modal uses the same active filter as the side gallery.
-- Gallery filters must come from the campaign's fixed startup category ID config. Temporary visual assets must not introduce new filters or card categories during play.
+- Gallery filters show the fixed baseline `prop`, `item`, `character`, `scene`, and `cg`, plus at most 3 director-initialized custom categories. Temporary visual assets must not introduce new filters or card categories during play.
 - The frontend should render only cards whose kind maps to the fixed category ID allowlist. Unknown kinds, undefined IDs, backend notes, and temporary visual records must not create standalone gallery cards.
 - `cg` is a universal filter. Formal story CGs, generated scene images, and player-viewable large image assets go to `cg`.
-- Fate-style defaults are `cg`, `master`, `servant`, `npc`, `scene` / `map`, and `item`; `map` displays through the `scene` filter.
+- Fixed gallery filters are display slots only. Campaign-specific semantics must come from director-declared custom libraries or explicit `gallery_category`, not backend guessing.
+- Clue/document-like visible objects use `item` or `prop`; they must not create fixed `clue` or `document` filters.
 - CG is separate from maps/scenes: CG uses `cg`; maps and locations use `scene`.
 - Status changes for the same character, item, or scene should update the existing card in place instead of creating duplicate cards.
 - NPC and item rows can be cited into the player action input.
-- Scene, map, monster, and ecology rows are view-only by default.
+- Scene/map rows are view-only by default. Campaign-specific long-term details are shown through explicit asset links or custom story-library views.
 - Every newly visible item-like asset must be semantically analyzed before display.
 - Item-like assets include inventory rows, `visual_assets` items, clue objects, documents, relics, materials, supplies, weapons, and scene-only props that appear as gallery cards.
 - The frontend must use that semantic analysis to draw a local Canvas PNG once, save it into the current campaign asset manifest, and then display the saved PNG in the UI.

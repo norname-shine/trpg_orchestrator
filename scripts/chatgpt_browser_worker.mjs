@@ -9,6 +9,8 @@ const statusPath = path.join(workerDir, "worker_status.json");
 const cdpUrl = process.env.TRPG_BROWSER_CDP_URL || "http://127.0.0.1:9222";
 const userDataDir = process.env.TRPG_BROWSER_USER_DATA_DIR;
 const manualWaitMs = Number(process.env.TRPG_BROWSER_MANUAL_WAIT_MS || 10 * 60 * 1000);
+const quickPageReadyMs = Number(process.env.TRPG_BROWSER_QUICK_PAGE_READY_MS || 15_000);
+const staleTaskMs = Number(process.env.TRPG_BROWSER_STALE_TASK_MS || 2 * 60 * 1000);
 
 const M = {
   body: "\u3010\u6b63\u6587\u3011",
@@ -48,7 +50,7 @@ while (true) {
 async function handleTask(task) {
   page = await readyChatGPTPage(task.id);
   writeTaskStatus(task.id, { state: "running", stage: "actor_waiting", label: "准备 ChatGPT 常驻浏览器", percent: 5, updated_at: Date.now() });
-  await waitForHumanReady(page, task.id);
+  page = await ensureTaskPageReady(page, task.id);
   if (!task.capture_only) {
     writeTaskStatus(task.id, { state: "running", stage: "actor_waiting", label: "打开新聊天", percent: 12, updated_at: Date.now() });
     await openTaskConversation(page, task);
@@ -75,12 +77,24 @@ function nextTask() {
   for (const file of files) {
     const full = path.join(tasksDir, file);
     const task = readJson(full);
-    if (!task || task.state !== "pending") continue;
+    if (!task) continue;
+    if (task.state !== "pending") {
+      if (task.state !== "claimed" || !isStaleClaimedTask(task.id)) continue;
+      writeTaskStatus(task.id, { state: "running", stage: "task_requeued", label: "Recovering stale claimed ChatGPT task", percent: 4, updated_at: Date.now() });
+    }
     task.state = "claimed";
     fs.writeFileSync(full, JSON.stringify(task, null, 2), "utf8");
     return task;
   }
   return null;
+}
+
+function isStaleClaimedTask(id) {
+  const status = readJson(path.join(tasksDir, `${id}.status.json`));
+  const updatedAt = Number(status?.updated_at || 0);
+  const state = String(status?.state || "");
+  if (state === "complete" || state === "failed") return false;
+  return !updatedAt || Date.now() - updatedAt > staleTaskMs;
 }
 
 function writeTaskStatus(id, data) {
@@ -131,6 +145,21 @@ async function readyChatGPTPage(taskId = "") {
   return page;
 }
 
+async function ensureTaskPageReady(currentPage, taskId) {
+  try {
+    await withTimeout(waitForHumanReady(currentPage, taskId, quickPageReadyMs), quickPageReadyMs + 5_000, "ChatGPT existing page readiness timed out.");
+    return currentPage;
+  } catch (err) {
+    writeTaskStatus(taskId, { state: "running", stage: "browser_new_page", label: "现有 ChatGPT 页不可用，打开新窗口", percent: 8, warning: String(err?.message || err), updated_at: Date.now() });
+    const context = browser.contexts()[0];
+    if (!context) fail("Browser context not found.");
+    const fresh = await context.newPage();
+    await fresh.goto("https://chatgpt.com/", { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await waitForHumanReady(fresh, taskId, manualWaitMs);
+    return fresh;
+  }
+}
+
 async function restartBrowserSession() {
   try {
     if (typeof browser?.close === "function") await browser.close().catch(() => {});
@@ -179,9 +208,14 @@ async function chatgptPage(browser) {
   return page;
 }
 
-async function waitForHumanReady(page, taskId) {
+async function waitForHumanReady(page, taskId, maxWaitMs = manualWaitMs) {
   let start = Date.now();
-  while (Date.now() - start < manualWaitMs) {
+  let lastStatusAt = 0;
+  while (Date.now() - start < maxWaitMs) {
+    if (Date.now() - lastStatusAt > 5_000) {
+      writeTaskStatus(taskId, { state: "running", stage: "actor_waiting", label: "等待 ChatGPT 页面可操作", percent: 6, updated_at: Date.now() });
+      lastStatusAt = Date.now();
+    }
     const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
     const lower = `${page.url()}\n${bodyText}`.toLowerCase();
     if (await isComposerVisible(page)) return;
@@ -197,16 +231,23 @@ async function waitForHumanReady(page, taskId) {
   fail("ChatGPT page is still unavailable. Complete login or verification in the browser.");
 }
 
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 async function openProject(page, name, taskId, allowCreate = false) {
   await ensureSidebarOpen(page);
+  if (await clickFirstVisible(projectLinkCandidates(page, name), 1800)) {
+    await page.waitForTimeout(1200);
+    return;
+  }
   await openProjectsSection(page);
-  const candidates = projectLinkCandidates(page, name);
-  for (const candidate of candidates) {
-    if (await candidate.isVisible({ timeout: 2500 }).catch(() => false)) {
-      await candidate.click({ force: true });
-      await page.waitForTimeout(1200);
-      return;
-    }
+  if (await clickFirstVisible(projectLinkCandidates(page, name), 2500)) {
+    await page.waitForTimeout(1200);
+    return;
   }
   if (allowCreate) {
     writeTaskStatus(taskId, { state: "running", stage: "project_creating", label: "Creating ChatGPT project", percent: 13, updated_at: Date.now() });
@@ -274,7 +315,11 @@ async function openProjectsSection(page) {
 }
 
 function projectLinkCandidates(page, name) {
+  const escaped = escapeRegExp(name);
   return [
+    page.locator('a[href*="/project"]').filter({ hasText: name }).first(),
+    page.locator('a, [role="link"], [role="button"], button').filter({ hasText: new RegExp(escaped, "i") }).first(),
+    page.locator(`[aria-label*="${cssAttrEscape(name)}"]`).first(),
     page.getByText(name, { exact: true }).first(),
     page.getByRole("link", { name }).first(),
     page.getByRole("button", { name }).first(),
@@ -348,8 +393,27 @@ async function waitForProjectAvailable(page, name, taskId = "") {
 }
 
 function findByTextLoose(page, text) {
-  const escaped = String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escapeRegExp(text);
   return page.locator(`text=/${escaped}/i`).first();
+}
+
+async function clickFirstVisible(candidates, timeout = 1500) {
+  for (const candidate of candidates) {
+    const first = candidate.first();
+    if (await first.isVisible({ timeout }).catch(() => false)) {
+      await first.click({ force: true });
+      return true;
+    }
+  }
+  return false;
+}
+
+function escapeRegExp(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cssAttrEscape(text) {
+  return String(text || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 async function openNewChat(page, taskId) {

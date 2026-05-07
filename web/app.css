@@ -361,6 +361,7 @@ button:disabled {
 #closeGalleryOverlay,
 #closeCgOverlay,
 #closeCompanionOverlay,
+#closeStoryProgressOverlay,
 #closeRulesOverlay {
   width: 36px;
   min-width: 36px;
@@ -380,6 +381,7 @@ button:disabled {
 #closeGalleryOverlay:hover,
 #closeCgOverlay:hover,
 #closeCompanionOverlay:hover,
+#closeStoryProgressOverlay:hover,
 #closeRulesOverlay:hover {
   transform: none;
   border-color: rgba(126, 95, 58, .28);
@@ -1740,21 +1742,28 @@ textarea:focus {
   overflow: hidden;
 }
 .filterRow {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 7px;
   overflow: visible;
   padding: 8px 14px 0;
 }
 .filterRow button {
-  width: 100%;
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
   min-width: 58px;
   min-height: 30px;
-  padding: 0 12px;
+  height: auto;
+  padding: 6px 12px;
   border-radius: 10px;
   box-shadow: none;
-  white-space: nowrap;
-  word-break: keep-all;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.2;
+  text-align: center;
 }
 .filterRow .active {
   background: #4d82bd;
@@ -1858,6 +1867,7 @@ textarea:focus {
 }
 
 .storyOverlay,
+.storyProgressOverlay,
 .galleryOverlay,
 .rulesOverlay,
 .companionOverlay,
@@ -1871,10 +1881,122 @@ textarea:focus {
   background: rgba(54, 41, 26, .08);
 }
 .storyOverlay.hidden,
+.storyProgressOverlay.hidden,
 .galleryOverlay.hidden,
 .rulesOverlay.hidden,
 .companionOverlay.hidden,
 .cgOverlay.hidden { display: none; }
+.storyProgressOverlay {
+  z-index: 42;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(48, 36, 22, .28);
+  backdrop-filter: blur(6px);
+}
+.storyProgressDialog {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 36px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255,250,239,.97);
+  box-shadow: 0 24px 70px rgba(61, 42, 22, .24);
+  overflow: hidden;
+}
+.storyProgressDialogHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.storyProgressDialogHeader h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+.storyProgressDialogHeader p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.storyProgressDialogBody {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  overflow: auto;
+}
+.storyProgressDialogSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.storyProgressDialogSummary div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(132,111,79,.18);
+  border-radius: 12px;
+  background: rgba(255,255,255,.58);
+}
+.storyProgressDialogSummary span,
+.storyProgressDetailRow span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.storyProgressDialogSummary b {
+  display: block;
+  min-width: 0;
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+.storyProgressDialogTrack {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(132,111,79,.16);
+}
+.storyProgressDialogTrack span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4b7da8, #b98634);
+}
+.storyProgressDialogDetails {
+  display: grid;
+  gap: 10px;
+}
+.storyProgressDialogDetails.is-empty {
+  color: var(--muted);
+}
+.storyProgressDialogDetails .storyProgressDetailRow,
+.storyProgressDialogDetails .storyProgressDetailSection {
+  border: 1px solid rgba(132,111,79,.16);
+  border-radius: 12px;
+  background: rgba(255,255,255,.48);
+  padding: 12px;
+}
+.storyProgressDialogDetails .storyProgressDetailRow p {
+  margin: 5px 0 0;
+  line-height: 1.55;
+}
+.storyProgressDialogDetails .storyProgressDetailSection b {
+  display: block;
+  margin-bottom: 8px;
+}
+.storyProgressDialogDetails ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #5f4a30;
+  line-height: 1.55;
+}
 .cgOverlay {
   z-index: 48;
   display: grid;
@@ -2666,6 +2788,7 @@ textarea:focus {
   .galleryGrid { grid-template-columns: 1fr; }
   .galleryDialogBody { grid-template-columns: 1fr; overflow-y: auto; }
   .companionDialogBody { grid-template-columns: 1fr; }
+  .storyProgressDialogSummary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .companionDataGrid { grid-template-columns: 1fr; }
   .rulesBody { grid-template-columns: 1fr; overflow-y: auto; }
   .reportGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

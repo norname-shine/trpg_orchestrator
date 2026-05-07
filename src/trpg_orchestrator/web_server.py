@@ -562,14 +562,26 @@ ROLE_ASSET_KIND = {
     "companion": "companion_portrait",
     "master": "master_portrait",
     "npc": "npc_portrait",
+    "key_character": "npc_portrait",
     "item": "item_icon",
+    "prop": "item_icon",
     "scene": "scene_image",
     "map": "map_image",
     "monster": "monster_image",
     "cg": "cg_image",
 }
 
-ACTOR_ROLES = {"player", "companion", "master", "npc"}
+CORE_GALLERY_CATEGORIES = [
+    {"id": "prop", "label": "道具", "base": True},
+    {"id": "item", "label": "物品", "base": True},
+    {"id": "character", "label": "角色", "base": True},
+    {"id": "scene", "label": "场景", "base": True},
+    {"id": "cg", "label": "CG", "base": True},
+]
+CORE_GALLERY_CATEGORY_IDS = {row["id"] for row in CORE_GALLERY_CATEGORIES}
+MAX_CAMPAIGN_GALLERY_CATEGORIES = 3
+
+ACTOR_ROLES = {"player", "companion", "master", "npc", "key_character", "monster"}
 GALLERY_VISIBLE_KINDS = {
     "companion_portrait",
     "master_portrait", "npc_portrait", "item_icon", "scene_image", "map_image",
@@ -593,7 +605,9 @@ def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key:
         return "companion_portrait"
     if raw in {"npc", "character"} or "npc" in raw:
         return "npc_portrait"
-    if raw in {"item", "weapon", "supply", "material", "ritual_tool", "equipment"}:
+    if raw in {"item", "weapon", "supply", "material", "ritual_tool", "equipment", "document", "clue"}:
+        return "item_icon"
+    if raw in {"prop", "tool", "anomaly", "quest"}:
         return "item_icon"
     if raw in {"scene", "location"}:
         return "scene_image"
@@ -961,23 +975,23 @@ def _identity_template(role: str, entity_key: str, display_name: str = "") -> di
             "avatar_locked_by_vcg": False,
             "display_name": display_name,
         }
-    category = "npc" if role in {"", "unknown", "npc"} else role
+    category = "character" if role in {"", "unknown", "npc", "master", "servant", "key_character", "monster", "enemy", "boss"} else role
     return {
         "entity_key": entity_key,
-        "runtime_role": "npc" if role in {"", "unknown"} else role,
-        "role": "npc" if role in {"", "unknown"} else role,
+        "runtime_role": "npc" if role in {"", "unknown", "monster", "enemy", "boss"} else role,
+        "role": "npc" if role in {"", "unknown", "monster", "enemy", "boss"} else role,
         "companion_type": "",
         "archetype": "",
         "species": "",
-        "asset_kind": "npc_portrait" if category in {"npc", "master", "servant", "key_character"} else ROLE_ASSET_KIND.get(category, f"{category}_image"),
-        "portrait_asset_kind": "npc_portrait" if category in {"npc", "master", "servant", "key_character"} else ROLE_ASSET_KIND.get(category, f"{category}_image"),
+        "asset_kind": "npc_portrait" if category == "character" else ROLE_ASSET_KIND.get(category, f"{category}_image"),
+        "portrait_asset_kind": "npc_portrait" if category == "character" else ROLE_ASSET_KIND.get(category, f"{category}_image"),
         "display_slot": "dossier_gallery",
         "detail_slot": "dossier_detail",
-        "gallery_category": "npc" if category == "key_character" else category,
+        "gallery_category": category,
         "visible_in_gallery": category != "hidden",
         "not_in_gallery_filters": False,
         "avatar_key": entity_key,
-        "render_tier": "npc" if category in {"npc", "master", "servant", "key_character"} else category,
+        "render_tier": "npc" if category == "character" else category,
         "avatar_locked_by_vcg": False,
         "display_name": display_name,
     }
@@ -1014,19 +1028,18 @@ def resolve_entity_role(entity_or_asset: dict[str, Any], memory: dict[str, Any] 
         identity["companion_type_preset"] = identity["visual_profile"].get("companion_type_preset", "custom")
         return identity
     role = str(metadata.get("runtime_role") or metadata.get("role") or asset.get("runtime_role") or asset.get("role") or infer_asset_role(asset) or "").lower()
-    category = str(metadata.get("gallery_category") or asset.get("gallery_category") or normalize_frontend_gallery_kind(asset.get("kind")) or role or "npc").lower()
+    category = str(metadata.get("gallery_category") or asset.get("gallery_category") or normalize_frontend_gallery_kind(asset.get("kind")) or role or "character").lower()
     if role in {"player", "companion"}:
         role = "npc"
-    if category in {"", "character", "gallery_npc", "npc_portrait"}:
-        category = "npc"
-    if role in {"item", "scene", "map", "monster", "cg"}:
-        category = role
-    if category in {"master", "servant", "npc", "monster"}:
-        role = "npc" if category in {"master", "servant"} else category
+    if category in {"", "gallery_npc", "npc_portrait", "npc", "monster", "boss", "enemy", "master", "servant", "key_character"}:
+        category = "character"
+    if role in {"item", "prop", "scene", "map", "cg"}:
+        category = normalize_frontend_gallery_kind(role) or role
+    if role in {"monster", "boss", "enemy", "master", "servant", "key_character"}:
+        category = "character"
+        role = "npc"
     entity_key = existing_entity_key or entity_key_for_asset(asset)
-    if category in {"master", "servant"} and not entity_key.startswith(f"{category}:"):
-        entity_key = f"{category}:{stable_entity_name(display or key)}"
-    if category == "npc" and not entity_key.startswith("npc:"):
+    if category == "character" and not entity_key.startswith(("npc:", "master:", "servant:", "monster:", "boss:", "enemy:", "key_character:")):
         entity_key = f"npc:{stable_entity_name(display or key)}"
     identity = _identity_template(role or category or "npc", entity_key, display)
     identity["gallery_category"] = category
@@ -1576,7 +1589,9 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
         assets = asset_list(resolved).get("assets", [])
         recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
         scene = recent.get("current_scene", {}) if isinstance(recent.get("current_scene"), dict) else {}
-        return {"ok": True, "campaign_id": resolved, "module": "map_panel", "payload": frontend_map_panel(resolved, scene, output, assets)}
+        initial_payload = campaign_initialization_frontend_payload(resolved, state, assets)
+        map_panel = initial_payload.get("map_panel") if isinstance(initial_payload.get("map_panel"), dict) else {}
+        return {"ok": True, "campaign_id": resolved, "module": "map_panel", "payload": map_panel or frontend_map_panel(resolved, scene, output, assets)}
     if module_name == "inventory":
         return {"ok": True, "campaign_id": resolved, "module": "inventory", "payload": frontend_inventory(state)}
     if module_name == "dossier":
@@ -1594,6 +1609,99 @@ def safe_asset_read_path(campaign_id: str, rel_path: str) -> Path:
     if target.suffix.lower() != ".png":
         raise RuntimeError("only PNG assets are readable")
     return target
+
+
+def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    profile_path = root / "campaign_profile.json"
+    profile = read_json(profile_path) if profile_path.exists() else {}
+    initial_assets = profile.get("initial_assets") if isinstance(profile.get("initial_assets"), dict) else {}
+    if not initial_assets:
+        return {}
+    route = initial_assets.get("map_route") if isinstance(initial_assets.get("map_route"), dict) else {}
+    map_canvas = initial_assets.get("map_canvas") if isinstance(initial_assets.get("map_canvas"), dict) else {}
+    jobs: list[dict[str, Any]] = []
+    map_panel: dict[str, Any] = {}
+    if _setup_has_payload(initial_assets.get("map_generation_instruction")) and _setup_has_payload(map_canvas) and _valid_setup_map_route(route):
+        if not any(is_valid_cached_map_asset(asset) for asset in assets):
+            title = str(route.get("title") or profile.get("title") or state.get("title") or "opening map").strip()
+            map_panel = {
+                "mode": "update",
+                "state": "ready",
+                "update_requested": True,
+                "payload": {
+                    "map_route": route,
+                    "map_canvas": map_canvas,
+                    "title": title,
+                    "initialization_source": "campaign_profile.initial_assets",
+                },
+                "payload_ref": "",
+                "reason": "campaign initialization map contract",
+            }
+            jobs.append({
+                "job_id": "initial_map_canvas",
+                "kind": "map",
+                "renderer": "pixel_map",
+                "trigger": "system_required",
+                "input_ref": "campaign_profile.initial_assets.map_canvas",
+                "asset_key": "initial_map",
+                "cache_policy": "stable",
+                "campaign_id": campaign_id,
+                "asset_seed": campaign_asset_seed(campaign_id),
+            })
+    existing_initial_item_ids = {
+        str((asset.get("metadata") or {}).get("initial_asset_id") or "")
+        for asset in assets
+        if isinstance(asset, dict) and isinstance(asset.get("metadata"), dict)
+    }
+    item_rules = initial_assets.get("item_canvas_rules") if isinstance(initial_assets.get("item_canvas_rules"), dict) else {}
+    for item in initial_assets.get("initial_items", []) if isinstance(initial_assets.get("initial_items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        item_id = safe_segment(str(item.get("id") or item.get("key") or item.get("name") or item.get("title") or "initial_item"))
+        if item_id in existing_initial_item_ids:
+            continue
+        kind = normalize_initial_item_canvas_kind(item)
+        title = str(item.get("name") or item.get("title") or item_id).strip()
+        style = item.get("canvas_style") if isinstance(item.get("canvas_style"), dict) else {}
+        rule = item_rules.get(item_id) if isinstance(item_rules.get(item_id), dict) else {}
+        if not rule:
+            raw_kind = str(item.get("category") or item.get("kind") or item.get("item_type") or "").strip()
+            rule = item_rules.get(raw_kind) if raw_kind and isinstance(item_rules.get(raw_kind), dict) else {}
+        jobs.append({
+            "job_id": f"initial_{kind}_{item_id}",
+            "kind": kind,
+            "renderer": "pixel_item",
+            "trigger": "system_required",
+            "input_ref": f"campaign_profile.initial_assets.initial_items.{item_id}",
+            "asset_key": f"initial_{kind}_{item_id}",
+            "cache_policy": "stable",
+            "campaign_id": campaign_id,
+            "asset_seed": campaign_asset_seed(campaign_id),
+            "title": title,
+            "detail": str(item.get("description") or item.get("detail") or ""),
+            "initial_asset_id": item_id,
+            "canvas_style": {**rule, **style},
+        })
+    result: dict[str, Any] = {}
+    if map_panel:
+        result["map_panel"] = map_panel
+    if jobs:
+        result["canvas_jobs"] = jobs
+    cg_contract = {
+        "cg_generation_instruction": initial_assets.get("cg_generation_instruction"),
+        "cg_prompt": initial_assets.get("cg_prompt"),
+    }
+    if _setup_has_payload(cg_contract["cg_generation_instruction"]) and _setup_has_payload(cg_contract["cg_prompt"]):
+        result["cg_contract"] = cg_contract
+    return result
+
+
+def normalize_initial_item_canvas_kind(item: dict[str, Any]) -> str:
+    raw = str(item.get("category") or item.get("kind") or item.get("item_type") or "").lower()
+    if raw == "prop" or "prop" in raw or "tool" in raw:
+        return "prop"
+    return "item"
 
 
 def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:
@@ -1686,7 +1794,10 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
     gallery_taxonomy = gallery_taxonomy_for_campaign(campaign_id, state)
     gallery = {"filters": gallery_filters_from_taxonomy(gallery_taxonomy), "taxonomy": gallery_taxonomy, "assets": [], "payload_ref": gallery_payload_ref}
     story_progress_payload = frontend_story_progress_payload(campaign_id)
-    map_panel = frontend_map_panel(campaign_id, scene, output, assets)
+    initialization_payload = campaign_initialization_frontend_payload(campaign_id, state, assets)
+    map_panel = initialization_payload.get("map_panel") if isinstance(initialization_payload.get("map_panel"), dict) else {}
+    if not map_panel:
+        map_panel = frontend_map_panel(campaign_id, scene, output, assets)
     visual_registry = build_visual_registry(campaign_id, state, assets)
     pressure = normalize_pressure_pack_compat(output.get("pressure_pack", {}) if isinstance(output.get("pressure_pack"), dict) else {})
     action_path = resolve_outbox_dir(campaign_id) / "last_player_action.txt"
@@ -1706,6 +1817,7 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
             "blocks": [],
             "summary": output.get("parsed", {}).get("summary", "") if isinstance(output.get("parsed"), dict) else "",
         },
+        "initialization_payload": initialization_payload,
     }
     modules = build_frontend_modules(campaign_id, frontend_base, pressure, assets, story_progress_payload)
     return {
@@ -2706,11 +2818,11 @@ def is_gallery_cache_asset(asset: dict[str, Any], protected: set[str], inventory
             return False
     if normalized_name(title) in protected or normalized_name(metadata.get("object_id")) in protected:
         return False
-    if role in {"player", "master"} and normalized_kind != role:
+    if role == "player":
         return False
     if role == "companion" and normalized_kind != "companion":
         return False
-    if normalized_kind == "npc" and role in {"player", "master", "companion"}:
+    if normalized_kind == "character" and role in {"player", "companion"}:
         return False
     if kind in {"portrait", "player_portrait"}:
         return False
@@ -2719,11 +2831,19 @@ def is_gallery_cache_asset(asset: dict[str, Any], protected: set[str], inventory
             return False
     if kind == "npc_portrait":
         return normalized_kind not in {"", "hidden", "cg", "item", "scene", "map"}
-    if normalized_kind == "npc" and active_npc_ids is not None:
+    if normalized_kind == "character" and active_npc_ids is not None:
         actor_id = stable_actor_entity_id(title or metadata.get("title") or metadata.get("object_id") or key)
         if actor_id in active_npc_ids and normalized_name(title) not in {normalized_name("许守井"), normalized_name("陈航")}:
             return False
     if normalized_kind == "item":
+        raw_category = str(metadata.get("gallery_category") or asset.get("gallery_category") or asset.get("kind") or kind).lower()
+        explicit_item_asset = (
+            raw_category in {"item", "prop", "document", "clue", "tool", "anomaly", "quest"}
+            or str(metadata.get("role") or role).lower() in {"item", "prop"}
+            or str(metadata.get("entity_key") or "").lower().startswith(("item:", "prop:"))
+        )
+        if explicit_item_asset:
+            return True
         detail = str(metadata.get("detail") or "")
         analysis = analyze_inventory_item(title, detail)
         entity_id = stable_inventory_entity_id(title, detail, analysis)
@@ -3066,7 +3186,13 @@ def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
     aliases = {
         "location": "scene",
         "map": "scene",
-        "ecology": "monster",
+        "npc": "character",
+        "master": "character",
+        "servant": "character",
+        "document": "item",
+        "clue": "item",
+        "anomaly": "prop",
+        "quest": "prop",
         "weapon": "item",
         "supply": "item",
         "material": "item",
@@ -3075,8 +3201,6 @@ def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
     value = aliases.get(value, value)
     if value in allowed:
         return value
-    if value == "character" and "npc" in allowed:
-        return "npc"
     return ""
 
 
@@ -3085,39 +3209,37 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
     if value in {"cg_image", "gallery_image"}:
         return "cg"
     if value == "companion_portrait":
-        return "companion"
+        return "hidden"
     if value == "master_portrait":
-        return "master"
+        return "character"
     if value in {"scene_image", "map_image"}:
         return "scene"
     if value == "npc_portrait":
-        return "npc"
-    if value == "monster_image":
-        return "monster"
+        return "character"
     if value == "item_icon":
         return "item"
     if "companion" in value:
-        return "companion"
+        return "hidden"
     if any(token in value for token in ("cg", "generated_cg", "gallery_image", "formal_cg", "剧情图", "生图")):
         return "cg"
     if "master" in value or "御主" in value:
-        return "master"
+        return "character"
     if "document" in value or "文献" in value:
-        return "document"
+        return "item"
     if "clue" in value or "线索" in value:
-        return "clue"
+        return "item"
     if "anomaly" in value or "异常" in value:
-        return "anomaly"
+        return "prop"
     if "map" in value or "scene" in value or "location" in value:
         return "scene"
     if "npc" in value or "portrait" in value:
-        return "npc"
-    if "monster" in value or "ecology" in value:
-        return "monster"
+        return "character"
     if "quest" in value or "任务" in value:
-        return "quest"
+        return "prop"
     if "character" in value or "角色" in value:
         return "character"
+    if any(token in value for token in ("prop", "tool", "道具")):
+        return "prop"
     if any(token in value for token in ("item", "weapon", "supply", "material", "ritual_tool", "equipment", "物品", "装备", "补给", "材料", "仪式")):
         return "item"
     return ""
@@ -3129,9 +3251,14 @@ def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> di
     profile = profile if isinstance(profile, dict) else {}
     campaign_taxonomy = normalize_campaign_taxonomy(profile.get("campaign_taxonomy") if isinstance(profile.get("campaign_taxonomy"), dict) else {})
     taxonomy = profile.get("gallery_taxonomy") if isinstance(profile.get("gallery_taxonomy"), dict) else {}
-    core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
-    if not core:
-        core = campaign_taxonomy.get("asset_categories", [])
+    configured_core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
+    configured_core = configured_core or campaign_taxonomy.get("asset_categories", [])
+    configured_by_id = {
+        str(normalize_gallery_taxonomy_row(row, "configured_core").get("id") or ""): normalize_gallery_taxonomy_row(row, "configured_core")
+        for row in configured_core
+        if normalize_gallery_taxonomy_row(row, "configured_core")
+    }
+    core = [{**row, **{k: v for k, v in configured_by_id.get(row["id"], {}).items() if k in {"label"}}} for row in CORE_GALLERY_CATEGORIES]
     campaign_rows = []
     for row in taxonomy.get("campaign_categories", []) if isinstance(taxonomy.get("campaign_categories"), list) else []:
         normalized = normalize_gallery_taxonomy_row(row, "campaign_profile")
@@ -3152,7 +3279,7 @@ def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> di
             campaign_rows.append(normalized)
     campaign_rows.extend([
         {"id": row.get("id"), "label": row.get("label"), "source": "campaign_taxonomy"}
-        for row in campaign_taxonomy.get("item_types", [])
+        for row in campaign_taxonomy.get("campaign_categories", [])
         if isinstance(row, dict) and row.get("id")
     ])
     campaign_rows = dedupe_taxonomy_rows(campaign_rows, {row.get("id") for row in core if isinstance(row, dict)})
@@ -3179,6 +3306,18 @@ def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[s
         return {}
     if not category_id or category_id in {"all", "hidden", "player", "companion", "companion_portrait"}:
         return {}
+    legacy_aliases = {
+        "npc": "character",
+        "master": "character",
+        "servant": "character",
+        "map": "scene",
+        "location": "scene",
+        "clue": "item",
+        "document": "item",
+        "anomaly": "prop",
+        "quest": "prop",
+    }
+    category_id = legacy_aliases.get(category_id, category_id)
     result = {"id": category_id, "label": label or category_id, "source": source}
     if isinstance(row, dict) and row.get("locked") is not None:
         result["locked"] = bool(row.get("locked"))
@@ -3747,15 +3886,7 @@ def default_campaign_taxonomy(template: str = "custom", analysis: dict[str, Any]
             {"id": "companion", "label": "同伴", "base_role": "companion"},
             {"id": "key_character", "label": "关键角色", "base_role": "key_character"},
         ],
-        "asset_categories": [
-            {"id": "character", "label": "角色"},
-            {"id": "item", "label": "物品"},
-            {"id": "scene", "label": "场景"},
-            {"id": "map", "label": "地图"},
-            {"id": "cg", "label": "CG"},
-            {"id": "clue", "label": "线索"},
-            {"id": "document", "label": "文档"},
-        ],
+        "asset_categories": [dict(row) for row in CORE_GALLERY_CATEGORIES],
         "item_types": [],
         "visual_style": {
             "medium": stringify_brief(analysis.get("genre") or template or "original text TRPG", 80),
@@ -3825,6 +3956,7 @@ def build_node_seed(chapter_title: str, chapter_goal: str, chapter_index: int, n
         "goal": goal,
         "target_chars": 2800 if node_index in {1, node_count} else 3400,
         "max_turns": 3 if node_index in {1, node_count} else 4,
+        "requires_deep_instruction": node_index == 1,
         "next_nodes": [],
         "beat_checklist": [
             {"beat_id": f"{node_id}_b1", "title": "确认当前场景与玩家处境", "weight": 1},
@@ -4422,16 +4554,42 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
                 {"id": "key_character", "label": "关键角色"}
             ],
             "asset_categories": [
-                {"id": "character", "label": "角色"},
+                {"id": "prop", "label": "道具"},
                 {"id": "item", "label": "物品"},
+                {"id": "character", "label": "角色"},
                 {"id": "scene", "label": "场景"},
-                {"id": "map", "label": "地图"},
-                {"id": "cg", "label": "CG"},
-                {"id": "clue", "label": "线索"},
-                {"id": "document", "label": "文档"}
+                {"id": "cg", "label": "CG"}
             ],
+            "campaign_categories": [],
             "item_types": [],
             "visual_style": {"medium": "", "palette": [], "composition": [], "mood": [], "copyright_avoid": []},
+        },
+        "character_attribute_schema": {
+            "three": [{"key": "body", "label": "体", "description": ""}, {"key": "mind", "label": "心", "description": ""}, {"key": "social", "label": "社", "description": ""}],
+            "six": [{"key": "str", "label": "力", "description": ""}, {"key": "dex", "label": "敏", "description": ""}, {"key": "con", "label": "体", "description": ""}, {"key": "int", "label": "智", "description": ""}, {"key": "wis", "label": "感", "description": ""}, {"key": "cha", "label": "魅", "description": ""}],
+        },
+        "render_rules": {
+            "player_portrait": {},
+            "companion_portrait": {},
+            "character_portrait": {},
+            "map": {},
+            "item": {},
+            "prop": {},
+            "cg": {},
+        },
+        "initial_assets": {
+            "map_generation_instruction": "",
+            "map_canvas": {"canvas": {"width": 1280, "height": 720}, "points": [], "routes": [], "hazards": []},
+            "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
+            "initial_items": [],
+            "item_canvas_rules": {},
+            "cg_generation_instruction": "",
+            "cg_prompt": {"positive": "", "negative": "", "aspect": "2304x2304 dual panel"},
+        },
+        "story_memory_seed": {
+            "custom_libraries": [
+                {"id": "", "label": "", "purpose": "", "fields": [], "display_hint": {}, "asset_links": []}
+            ],
         },
         "campaign_direction": {
             "core_concept": "",
@@ -4491,6 +4649,10 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             "npc_seeds": [],
             "location_seeds": [],
             "quest_seeds": [],
+            "item_state_seeds": [],
+            "map_state_seeds": [],
+            "custom_rule_slots": [],
+            "custom_libraries": [],
             "unresolved_questions": [],
         },
     }
@@ -4543,7 +4705,13 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Only put truly player-owned details in unknown_or_player_owned. Do not use unknown_or_player_owned as a substitute for generating the requested setup.",
         "If companion_config.companion_enabled is true and companion_mode is auto, create a concrete companion_patch with a usable name, role, personality, and relationship_to_protagonist.",
         "If user_prompt is auto, generate campaign premise, background, opening situation, main conflict, early goals, and story seeds from the selected template and title.",
-        "Return campaign_taxonomy for this campaign. Keep base runtime roles limited to player, npc, companion, key_character. Put story-specific professions, species, factions, item types, dossier filters, and visual style in campaign_taxonomy.",
+        "Return campaign_taxonomy.asset_categories exactly as prop/item/character/scene/cg. Do not add clue, document, npc, map, monster, anomaly, or quest as fixed gallery filters.",
+        "Return campaign_taxonomy.campaign_categories as 0-3 story-specific custom gallery folders. Never output 4 or more.",
+        "Fixed gallery filters are only asset entry points, not story semantics. Do not force campaign-specific entities into a fixed semantic bucket; put campaign-specific semantics in custom_libraries.",
+        "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
+        "Return render_rules for player_portrait, companion_portrait, character_portrait, map, item, prop, and cg.",
+        "Return initial_assets with map_generation_instruction, map_canvas, map_route.nodes, initial_items, item_canvas_rules, cg_generation_instruction, and cg_prompt. Missing any of these makes setup invalid.",
+        "Return story_memory_seed.custom_libraries or initial_memory_notes.custom_libraries for campaign-specific content libraries. Only declare the generic resource-slot structure; do not rely on backend fixed library names.",
         "Do not use protected franchise, character, trademark, or artist names in visual_style. Describe original medium, palette, composition, and mood instead.",
         "story_blueprint_patch.chapters must contain usable chapters, nodes, and beat_checklist. The first playable turn will start at chapters[0].nodes[0].beat_checklist[0].",
         "User explicitly filled fields still have highest priority and must not be overwritten.",
@@ -4578,15 +4746,7 @@ BASE_CAMPAIGN_TAXONOMY = {
         {"id": "companion", "label": "companion", "base": True},
         {"id": "key_character", "label": "key character", "base": True},
     ],
-    "asset_categories": [
-        {"id": "character", "label": "Character", "base": True},
-        {"id": "item", "label": "Item", "base": True},
-        {"id": "scene", "label": "Scene", "base": True},
-        {"id": "map", "label": "Map", "base": True},
-        {"id": "cg", "label": "CG", "base": True},
-        {"id": "clue", "label": "Clue", "base": True},
-        {"id": "document", "label": "Document", "base": True},
-    ],
+    "asset_categories": [dict(row) for row in CORE_GALLERY_CATEGORIES],
     "item_types": [],
     "visual_style": {
         "medium": "original illustrated TRPG assets",
@@ -4625,7 +4785,7 @@ def normalize_taxonomy_rows(value: Any, allowed_base: set[str] | None = None, li
 def normalize_campaign_taxonomy(value: Any | None = None) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     base_roles = {row["id"]: dict(row) for row in BASE_CAMPAIGN_TAXONOMY["character_roles"]}
-    base_assets = {row["id"]: dict(row) for row in BASE_CAMPAIGN_TAXONOMY["asset_categories"]}
+    base_assets = {row["id"]: dict(row) for row in CORE_GALLERY_CATEGORIES}
     for row in normalize_taxonomy_rows(raw.get("character_roles")):
         if row["id"] in {"master", "servant"}:
             row["id"] = "key_character"
@@ -4636,6 +4796,7 @@ def normalize_campaign_taxonomy(value: Any | None = None) -> dict[str, Any]:
     for row in normalize_taxonomy_rows(raw.get("asset_categories")):
         if row["id"] in base_assets:
             base_assets[row["id"]].update(row)
+    campaign_categories = normalize_campaign_gallery_categories(raw.get("campaign_categories"))
     item_types = normalize_taxonomy_rows(raw.get("item_types"), limit=36)
     visual_style = raw.get("visual_style") if isinstance(raw.get("visual_style"), dict) else {}
     merged_style = dict(BASE_CAMPAIGN_TAXONOMY["visual_style"])
@@ -4649,9 +4810,27 @@ def normalize_campaign_taxonomy(value: Any | None = None) -> dict[str, Any]:
     return {
         "character_roles": list(base_roles.values()),
         "asset_categories": list(base_assets.values()),
+        "campaign_categories": campaign_categories,
         "item_types": item_types,
         "visual_style": merged_style,
     }
+
+
+def normalize_campaign_gallery_categories(value: Any, *, fail_on_too_many: bool = False) -> list[dict[str, Any]]:
+    rows = normalize_taxonomy_rows(value, limit=MAX_CAMPAIGN_GALLERY_CATEGORIES + 1)
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        category_id = str(row.get("id") or "")
+        normalized = normalize_gallery_taxonomy_row({"id": category_id, "label": row.get("label", "")}, "campaign_taxonomy")
+        category_id = str(normalized.get("id") or category_id)
+        if not category_id or category_id in CORE_GALLERY_CATEGORY_IDS:
+            continue
+        filtered.append({**row, "id": category_id, "label": row.get("label") or category_id})
+    if len(filtered) > MAX_CAMPAIGN_GALLERY_CATEGORIES:
+        if fail_on_too_many:
+            raise RuntimeError("campaign_categories must contain 0-3 custom gallery folders")
+        filtered = filtered[:MAX_CAMPAIGN_GALLERY_CATEGORIES]
+    return filtered
 
 
 def sanitize_story_blueprint_chapters(value: Any, limit: int = 12) -> list[dict[str, Any]]:
@@ -4682,6 +4861,7 @@ def sanitize_story_blueprint_chapters(value: Any, limit: int = 12) -> list[dict[
                 "title": stringify_brief(node.get("title") or node.get("name") or node_id, 120),
                 "goal": stringify_brief(node.get("goal") or node.get("node_goal") or "", 240),
                 "target_chars": int(node.get("target_chars") or 3000),
+                "requires_deep_instruction": True if nidx == 1 else bool(node.get("requires_deep_instruction")),
                 "next_nodes": next_nodes,
                 "beat_checklist": beats,
             })
@@ -4714,6 +4894,141 @@ def sanitize_public_think(value: Any, limit: int = 8) -> list[dict[str, str]]:
     return rows
 
 
+def _setup_has_payload(value: Any) -> bool:
+    if value in (None, "", [], {}):
+        return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        return bool(text) and text not in {"placeholder", "todo", "tbd", "unknown", "待确认"}
+    if isinstance(value, dict):
+        return any(_setup_has_payload(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_setup_has_payload(item) for item in value)
+    return True
+
+
+def sanitize_attribute_schema(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+
+    def rows_for(key: str, fallback: list[dict[str, str]], limit: int) -> list[dict[str, str]]:
+        raw_rows = source.get(key) if isinstance(source.get(key), list) else []
+        rows: list[dict[str, str]] = []
+        for index, row in enumerate(raw_rows[:limit], start=1):
+            if not isinstance(row, dict):
+                continue
+            row_key = safe_segment(str(row.get("key") or f"{key}_{index}").lower())
+            label = stringify_brief(row.get("label") or row.get("name") or row_key, 12)
+            if row_key and label:
+                rows.append({"key": row_key, "label": label, "description": stringify_brief(row.get("description"), 120)})
+        return rows if len(rows) == limit else fallback
+
+    return {
+        "three": rows_for("three", [{"key": "body", "label": "体", "description": ""}, {"key": "mind", "label": "心", "description": ""}, {"key": "social", "label": "社", "description": ""}], 3),
+        "six": rows_for("six", [{"key": "str", "label": "力", "description": ""}, {"key": "dex", "label": "敏", "description": ""}, {"key": "con", "label": "体", "description": ""}, {"key": "int", "label": "智", "description": ""}, {"key": "wis", "label": "感", "description": ""}, {"key": "cha", "label": "魅", "description": ""}], 6),
+    }
+
+
+def sanitize_render_rules(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    required = ("player_portrait", "companion_portrait", "character_portrait", "map", "item", "prop", "cg")
+    result = {key: (source.get(key) if isinstance(source.get(key), dict) else {}) for key in required}
+    missing = [key for key in required if not _setup_has_payload(result.get(key))]
+    if missing:
+        raise RuntimeError("render_rules missing required rules: " + ", ".join(missing))
+    return result
+
+
+def _valid_setup_map_route(value: Any) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("nodes"), list) and bool(value.get("nodes"))
+
+
+def sanitize_custom_libraries(value: Any) -> list[dict[str, Any]]:
+    if value in (None, "", [], {}):
+        return []
+    if not isinstance(value, list):
+        raise RuntimeError("story_memory_seed.custom_libraries must be an array")
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(value, start=1):
+        if not isinstance(row, dict):
+            raise RuntimeError(f"story_memory_seed.custom_libraries[{index}] must be object")
+        prefix = f"story_memory_seed.custom_libraries[{index}]"
+        library_id = safe_segment(str(row.get("id") or "").lower())
+        label = stringify_brief(row.get("label"), 40)
+        purpose = stringify_brief(row.get("purpose"), 180)
+        fields = row.get("fields")
+        display_hint = row.get("display_hint")
+        asset_links = row.get("asset_links")
+        if not library_id or not label or not purpose:
+            raise RuntimeError(f"{prefix} missing id, label, or purpose")
+        if not isinstance(fields, list):
+            raise RuntimeError(f"{prefix}.fields must be array")
+        if not isinstance(display_hint, dict):
+            raise RuntimeError(f"{prefix}.display_hint must be object")
+        if not isinstance(asset_links, list):
+            raise RuntimeError(f"{prefix}.asset_links must be array")
+        rows.append({
+            "id": library_id,
+            "label": label,
+            "purpose": purpose,
+            "fields": fields,
+            "display_hint": display_hint,
+            "asset_links": asset_links,
+        })
+    return rows
+
+
+def apply_attribute_schema_to_character_card(character_card: dict[str, Any], schema: dict[str, Any]) -> None:
+    if not isinstance(character_card, dict) or not isinstance(schema, dict):
+        return
+    attrs = character_card.get("attributes") if isinstance(character_card.get("attributes"), dict) else {}
+    for group_key in ("three", "six"):
+        group = attrs.get(group_key) if isinstance(attrs.get(group_key), dict) else {}
+        items = group.get("items") if isinstance(group.get("items"), list) else []
+        schema_rows = schema.get(group_key) if isinstance(schema.get(group_key), list) else []
+        if not items or not schema_rows:
+            continue
+        values = [item.get("value") for item in items if isinstance(item, dict)]
+        group["items"] = build_attribute_items(
+            [{"key": row.get("key", ""), "label": row.get("label", ""), "text": row.get("description") or row.get("label", "")} for row in schema_rows],
+            values[:len(schema_rows)],
+        )
+        group["source"] = "director_attribute_schema"
+        attrs[group_key] = group
+    attrs["theme"] = "director_custom"
+    character_card["attributes"] = attrs
+
+
+def sanitize_initial_assets(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    aliases = {
+        "initial_items": source.get("initial_items", source.get("items", source.get("props", []))),
+        "item_canvas_rules": source.get("item_canvas_rules", source.get("item_canvas", source.get("canvas_rules", {}))),
+        "cg_prompt": source.get("cg_prompt", source.get("opening_cg_prompt", source.get("image_prompt", {}))),
+    }
+    result = {
+        "map_generation_instruction": source.get("map_generation_instruction") or source.get("map_instruction") or "",
+        "map_canvas": source.get("map_canvas") or source.get("MapCanvas") or {},
+        "map_route": source.get("map_route") or {},
+        "initial_items": aliases["initial_items"],
+        "item_canvas_rules": aliases["item_canvas_rules"],
+        "cg_generation_instruction": source.get("cg_generation_instruction") or source.get("cg_instruction") or "",
+        "cg_prompt": aliases["cg_prompt"],
+    }
+    missing = [key for key, item in result.items() if not _setup_has_payload(item)]
+    if missing:
+        raise RuntimeError("initial_assets missing required fields: " + ", ".join(missing))
+    if not _valid_setup_map_route(result.get("map_route")):
+        raise RuntimeError("initial_assets missing required fields: map_route.nodes")
+    for index, item in enumerate(result.get("initial_items", []), start=1):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"initial_assets.initial_items[{index}] must be object")
+        if not str(item.get("id") or item.get("key") or "").strip():
+            raise RuntimeError(f"initial_assets.initial_items[{index}] missing id")
+        if not str(item.get("name") or item.get("title") or "").strip():
+            raise RuntimeError(f"initial_assets.initial_items[{index}] missing name")
+    return result
+
+
 def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     data = require_dict(raw, "root")
     public_think = data.get("public_think") if isinstance(data.get("public_think"), list) else []
@@ -4725,7 +5040,14 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     companion = require_dict(data.get("companion_patch"), "companion_patch")
     safety = require_dict(data.get("safety_interpretation"), "safety_interpretation")
     memory_notes = require_dict(data.get("initial_memory_notes"), "initial_memory_notes")
-    taxonomy = normalize_campaign_taxonomy(data.get("campaign_taxonomy"))
+    story_memory_seed = data.get("story_memory_seed") if isinstance(data.get("story_memory_seed"), dict) else {}
+    raw_taxonomy = data.get("campaign_taxonomy") if isinstance(data.get("campaign_taxonomy"), dict) else {}
+    taxonomy = normalize_campaign_taxonomy(raw_taxonomy)
+    taxonomy["campaign_categories"] = normalize_campaign_gallery_categories(raw_taxonomy.get("campaign_categories"), fail_on_too_many=True)
+    character_attribute_schema = sanitize_attribute_schema(data.get("character_attribute_schema"))
+    render_rules = sanitize_render_rules(data.get("render_rules"))
+    initial_assets = sanitize_initial_assets(data.get("initial_assets"))
+    custom_libraries = sanitize_custom_libraries(story_memory_seed.get("custom_libraries", memory_notes.get("custom_libraries", [])))
     for key in ("early_goals", "known_boundaries", "secrets_not_to_reveal_early", "director_notes"):
         require_list(direction.get(key), f"campaign_direction.{key}")
     for key in ("notes", "chapter_seeds"):
@@ -4750,6 +5072,9 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
             "source": "director_campaign_setup",
         },
         "campaign_taxonomy": taxonomy,
+        "character_attribute_schema": character_attribute_schema,
+        "render_rules": render_rules,
+        "initial_assets": initial_assets,
         "campaign_direction": {
             "core_concept": stringify_brief(direction.get("core_concept"), 240),
             "opening_situation": stringify_brief(direction.get("opening_situation"), 260),
@@ -4805,6 +5130,10 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
             "npc_seeds": sanitize_string_list(memory_notes.get("npc_seeds")),
             "location_seeds": sanitize_string_list(memory_notes.get("location_seeds")),
             "quest_seeds": sanitize_string_list(memory_notes.get("quest_seeds")),
+            "item_state_seeds": sanitize_string_list(memory_notes.get("item_state_seeds")),
+            "map_state_seeds": sanitize_string_list(memory_notes.get("map_state_seeds")),
+            "custom_rule_slots": sanitize_string_list(memory_notes.get("custom_rule_slots")),
+            "custom_libraries": custom_libraries,
             "unresolved_questions": sanitize_string_list(memory_notes.get("unresolved_questions")),
         },
     }
@@ -4946,6 +5275,7 @@ def create_campaign_smart_payload(payload: dict[str, Any], progress: Any | None 
         })
         registry["active_campaign"] = campaign_id
         store.save_registry(registry)
+        opening_job = schedule_opening_turn_once(campaign_id)
     except Exception:
         cleanup_failed_campaign(campaign_id, previous_active)
         raise
@@ -4959,6 +5289,7 @@ def create_campaign_smart_payload(payload: dict[str, Any], progress: Any | None 
         "api_key_persisted": False,
         "api_key_ref": next((slot.get("api_key_ref", "") for slot in config["model_config"].get("model_slots", {}).values() if slot.get("api_key_ref")), ""),
         "custom_api_key_received": config.get("custom_api_key_received", False),
+        "opening_job": opening_job,
         "status": status_payload(),
     }
 
@@ -4976,6 +5307,21 @@ def unique_campaign_id(name: str) -> str:
         root = CAMPAIGNS_DIR / candidate
         index += 1
     return candidate
+
+
+def schedule_opening_turn_once(campaign_id: str) -> dict[str, Any]:
+    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
+    progress_path = root / "story_progress.json"
+    progress = read_json(progress_path) if progress_path.exists() else {}
+    if progress.get("opening_turn_sent"):
+        return {"scheduled": False, "reason": "opening_turn_already_sent"}
+    progress["opening_turn_sent"] = True
+    progress["opening_turn_action"] = "开始游戏"
+    progress["opening_turn_source"] = "system_opening"
+    write_json(progress_path, progress)
+    command = cli_command(["run-turn", "--action", "开始游戏", "--auto-rewrite", "--rewrite-attempts", "2"], campaign_id)
+    launch_job(command)
+    return {"scheduled": True, "action": "开始游戏", "source": "system_opening", "job": JOB.snapshot()}
 
 
 def cleanup_failed_campaign(campaign_id: str, previous_active: str = "") -> None:
@@ -5093,6 +5439,9 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     v4_companion = v4_setup.get("companion_patch", {}) if isinstance(v4_setup.get("companion_patch"), dict) else {}
     v4_safety = v4_setup.get("safety_interpretation", {}) if isinstance(v4_setup.get("safety_interpretation"), dict) else {}
     v4_memory = v4_setup.get("initial_memory_notes", {}) if isinstance(v4_setup.get("initial_memory_notes"), dict) else {}
+    character_attribute_schema = v4_setup.get("character_attribute_schema", {}) if isinstance(v4_setup.get("character_attribute_schema"), dict) else {}
+    render_rules = v4_setup.get("render_rules", {}) if isinstance(v4_setup.get("render_rules"), dict) else {}
+    initial_assets = v4_setup.get("initial_assets", {}) if isinstance(v4_setup.get("initial_assets"), dict) else {}
     campaign_taxonomy = normalize_campaign_taxonomy(v4_setup.get("campaign_taxonomy") if isinstance(v4_setup, dict) else {})
     mode = next((row for row in ai_mode_options() if row["id"] == model_config.get("model_mode")), ai_mode_options()[0])
     profile.update({
@@ -5112,8 +5461,12 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         "campaign_taxonomy": campaign_taxonomy,
         "gallery_taxonomy": {
             "core_categories": campaign_taxonomy.get("asset_categories", []),
-            "campaign_categories": [],
+            "campaign_categories": campaign_taxonomy.get("campaign_categories", []),
         },
+        "character_attribute_schema": character_attribute_schema,
+        "render_rules": render_rules,
+        "initial_assets": initial_assets,
+        "story_memory_seed": v4_memory,
         "safety_lines": safety_lines,
         "ai_mode": mode,
         "mechanics": {
@@ -5124,6 +5477,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
             "roll_mode": rules_config.get("roll_mode", ""),
             "roll_attributes": rules_config.get("roll_attributes", []),
             "attribute_config": rules_config.get("attribute_config", {}),
+            "character_attribute_schema": character_attribute_schema,
             "attribute_roll_config": rules_config.get("attribute_roll_config", {}),
         },
         "prompt_routing": {
@@ -5163,17 +5517,34 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         direction.setdefault("safety_rules", []).extend(safety_lines)
     direction.setdefault("safety_interpretation", {}).update(v4_safety)
     direction.setdefault("initial_memory_notes", {}).update(v4_memory)
+    direction.setdefault("custom_rule_slots", []).extend(sanitize_string_list(v4_memory.get("custom_rule_slots")))
+    direction["initial_assets"] = initial_assets
+    direction["render_rules"] = render_rules
     direction["campaign_taxonomy"] = campaign_taxonomy
 
     style.setdefault("prose_style", []).extend(routing.get("actor_rules", []))
     image.setdefault("image_generation_rules", []).append("Generate one 2304x2304 square canvas containing a 16:9 horizontal panel and a 9:16 vertical panel; use only original descriptive style from campaign_taxonomy.")
     image["campaign_taxonomy_visual_style"] = campaign_taxonomy.get("visual_style", {})
+    image["render_rules"] = render_rules
+    image["initial_assets"] = initial_assets
     npc.setdefault("voice_rules", {})["custom_actor_rules"] = routing.get("actor_rules", [])
+    npc.setdefault("personality_library", {})
+    for index, seed in enumerate(sanitize_string_list(v4_memory.get("npc_seeds")), start=1):
+        npc["personality_library"].setdefault(f"npc_seed_{index}", {"summary": seed, "source": "campaign_initialization"})
+
+    ecology = read_json(root / "enemy_or_monster_ecology.json")
+    ecology.setdefault("monster_or_boss_library", [])
+    ecology["monster_or_boss_library"].extend([
+        {"summary": seed, "source": "campaign_initialization"}
+        for seed in sanitize_string_list(v4_memory.get("monster_or_boss_seeds"))
+    ])
+    ecology.setdefault("custom_rule_slots", []).extend(sanitize_string_list(v4_memory.get("custom_rule_slots")))
 
     character["character_card_enabled"] = bool(rules_config.get("character_card_enabled"))
     character["stat_visibility"] = rules_config.get("stat_visibility", "narrative")
     character["dice_enabled"] = bool(rules_config.get("dice_enabled"))
     character["roll_attributes"] = rules_config.get("roll_attributes", [])
+    character["character_attribute_schema"] = character_attribute_schema
     identity = character_card.get("identity", {}) if isinstance(character_card.get("identity"), dict) else {}
     profile_data = character_card.get("profile", {}) if isinstance(character_card.get("profile"), dict) else {}
     character["confirmed_identity"] = {
@@ -5230,8 +5601,17 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
 
     player_path = root / "player_state.json"
     player = read_json(player_path)
+    apply_attribute_schema_to_character_card(character_card, character_attribute_schema)
     character_card["vitals"] = build_character_vitals_from_three(character_card.get("attributes"))
+    if character_attribute_schema:
+        character_card["attribute_schema"] = character_attribute_schema
     player["character_card"] = character_card
+    player.setdefault("story_memory_seed", {})["item_state_seeds"] = sanitize_string_list(v4_memory.get("item_state_seeds"))
+
+    equipment = read_json(root / "equipment_history.json")
+    equipment.setdefault("initial_items", initial_assets.get("initial_items", []))
+    equipment.setdefault("item_canvas_rules", initial_assets.get("item_canvas_rules", {}))
+    equipment.setdefault("custom_rule_slots", []).extend(sanitize_string_list(v4_memory.get("custom_rule_slots")))
 
     blueprint_path = root / "story_blueprint.json"
     blueprint = read_json(blueprint_path) if blueprint_path.exists() else {}
@@ -5251,6 +5631,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     if isinstance(v4_story_patch.get("chapters"), list) and v4_story_patch.get("chapters"):
         blueprint["chapters"] = sanitize_story_blueprint_chapters(v4_story_patch.get("chapters"))
     blueprint["chapters"] = synthesize_story_chapters(blueprint, story_config)
+    mark_chapter_first_nodes_require_deep_instruction(blueprint)
     first_chapter = next((chapter for chapter in blueprint["chapters"] if isinstance(chapter, dict) and isinstance(chapter.get("nodes"), list) and chapter.get("nodes")), {})
     first_node = first_chapter.get("nodes", [{}])[0] if isinstance(first_chapter, dict) and first_chapter.get("nodes") else {}
     first_beats = first_node.get("beat_checklist") if isinstance(first_node, dict) and isinstance(first_node.get("beat_checklist"), list) else []
@@ -5266,11 +5647,22 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     write_json(style_path, style)
     write_json(image_path, image)
     write_json(npc_path, npc)
+    write_json(root / "enemy_or_monster_ecology.json", ecology)
     write_json(character_path, character)
     write_json(companion_path, companions)
     write_json(player_path, player)
+    write_json(root / "equipment_history.json", equipment)
     write_json(blueprint_path, blueprint)
     write_json(progress_path, progress)
+
+
+def mark_chapter_first_nodes_require_deep_instruction(blueprint: dict[str, Any]) -> None:
+    for chapter in blueprint.get("chapters", []) if isinstance(blueprint.get("chapters"), list) else []:
+        if not isinstance(chapter, dict):
+            continue
+        nodes = chapter.get("nodes") if isinstance(chapter.get("nodes"), list) else []
+        if nodes and isinstance(nodes[0], dict):
+            nodes[0]["requires_deep_instruction"] = True
 
 def canvas_rules_payload() -> dict[str, Any]:
     path = PROMPTS_DIR / "canvas_asset_generation_rules.md"
@@ -6239,11 +6631,3 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-
-

@@ -53,7 +53,7 @@
   "state_update_hints": [],
   "visual_assets": [
     {
-      "kind": "npc | item | scene | map | monster | ecology",
+      "kind": "prop | item | character | scene | cg",
       "id": "",
       "title": "",
       "detail": "",
@@ -141,6 +141,8 @@
 ## 视觉与地图要求
 
 - 生图结果走文本回合后的独立生图回合；本 JSON 只准备生图指令。
+- 资料夹资产 kind 固定为 `prop`、`item`、`character`、`scene`、`cg`。NPC、怪物、BOSS、敌对首领、关键角色都归入 `character`；地图/地点归入 `scene`；线索/文献类物件归入 `item` 或 `prop`。
+- 主玩家、副玩家、伙伴头像属于独立角色卡/头像槽，不进入资料夹筛选。
 - 除非玩家明确要求多图，否则一条可直接使用的生图提示词即可。
 - 如果生图画面会包含已存在角色，应在 `visual_assets.character_targets` 中列出这些角色和目标头像资产槽，方便运行时从最终大图中截取头像并更新角色视觉基准。
 - `map_route` 是剧情拓扑，不要放生图提示词、ASCII 点阵、绘图坐标或地形符号。
@@ -148,4 +150,3 @@
 - 当 `inventory_updates` 被授权时，优先返回结构化物品行，而不是只写自然语言句子。字段建议：
   `{ "id": "", "name": "", "category": "weapon | resource | relic | supply | clue | material | misc", "item_type": "short_sword | oil_lantern | pendant | potion | document | key | material | generic", "status": "confirmed | limited | damaged | uncertain", "description": "", "source_evidence": "", "certainty": "confirmed | clue | uncertain", "visual_hint": { "archetype": "", "category": "", "source_text": "" } }`。
 - 不要把否定状态写成物品。比如“暂无伤势”“没有装备损坏”“未发现物品”“无异常”不能进入 inventory 或 gallery 资产。
-

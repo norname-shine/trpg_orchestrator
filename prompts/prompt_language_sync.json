@@ -1,6 +1,6 @@
 {
   "schema": "trpg_orchestrator.prompt_language_sync.v1",
-  "updated_at": "2026-05-06T09:22:10Z",
+  "updated_at": "2026-05-07T01:29:41Z",
   "policy": "Manual bilingual sync baseline. --check fails when only one side changes after this baseline.",
   "standalone_md": [
     "rules_CN.md",
@@ -101,8 +101,8 @@
     "Actor/chatgpt_style_rules.md": {
       "english": "Actor/chatgpt_style_rules.md",
       "chinese": "Actor/chatgpt_style_rules_CN.md",
-      "english_sha256": "45544b1a286b3559c45f2bf4bf0809425a4abbf354b18784331bef980ac2a2e5",
-      "chinese_sha256": "05a442299101f1ec9c98164710e4333e2ec78fbdf8c69843b0ea683cb9af4de0",
+      "english_sha256": "b3d3d519377b70624bf2b0860528c792b5789e6c04e5ca3f6992c9fe2f08d2f8",
+      "chinese_sha256": "078bad5d4c2d3e81ca276724d438a2ea4e207c9b5e4232ac8b54c447e29e99f4",
       "last_sync_direction": "baseline"
     },
     "Backend/INDEX.md": {
@@ -136,8 +136,8 @@
     "Backend/canvas_asset_generation_rules.md": {
       "english": "Backend/canvas_asset_generation_rules.md",
       "chinese": "Backend/canvas_asset_generation_rules_CN.md",
-      "english_sha256": "c192035731530aedff01614d18bc8ad80c83a3ad992ed237a0abfa86c6ce5e4b",
-      "chinese_sha256": "3cb0248a36b5058a21b341f5264e488eef15b4f7d443ef9597f882cd440eba94",
+      "english_sha256": "fd2be22e29d0aaa6e4b723b009da00d8a322d9d3b50acf28a96b9c30453b6d6b",
+      "chinese_sha256": "740dc57f9e0c8106334fd92c2c0b2ec408b988bc7997b414e71ee4842a857adf",
       "last_sync_direction": "baseline"
     },
     "Backend/codex_computer_use_prompt.md": {
@@ -164,15 +164,15 @@
     "Backend/frontend_interaction_rules.md": {
       "english": "Backend/frontend_interaction_rules.md",
       "chinese": "Backend/frontend_interaction_rules_CN.md",
-      "english_sha256": "ace3dfa5fcb856a1b9eca425f6d57b69e9dc5e514639a14bb066b7007b8e9d26",
-      "chinese_sha256": "64d95afd23e2fe6f1a7e559b51f70d8e03b930c4a6c05b22de97af58cec96a1b",
+      "english_sha256": "0b627064305be280cc3fbab47e14f80668afeb76ff6cc9dda7b8c101f16ac270",
+      "chinese_sha256": "b42e127f6fad2d3443275d6dfdd96504ecceb0b9eb85f0b539cf4c78b1ddc48a",
       "last_sync_direction": "baseline"
     },
     "Backend/gallery_asset_rules.md": {
       "english": "Backend/gallery_asset_rules.md",
       "chinese": "Backend/gallery_asset_rules_CN.md",
-      "english_sha256": "74f77f07df2ad60922a7f6f0cd7857d39ab8bfad15595c66cf80a4f1eb5e3e88",
-      "chinese_sha256": "4056be92724c8d0d8f5eaa65d626861d1956c475754f142057f4fe0a8553c0d9",
+      "english_sha256": "a364bb6c7b85a7eda59010955057f11aad49ef4afbeee0326e08797cd1730606",
+      "chinese_sha256": "dded6cf0a622f2cd27db0b465daacd12028d9bf5d62bfa6caa9945bd8369e950",
       "last_sync_direction": "baseline"
     },
     "Backend/model_layer_contract_rules.md": {
@@ -234,8 +234,8 @@
     "Director/v4_director_prompt.md": {
       "english": "Director/v4_director_prompt.md",
       "chinese": "Director/v4_director_prompt_CN.md",
-      "english_sha256": "84a60c161010f1c0874fd61cecc695d2cc90129b79f22c3cd8d79eaaf2201576",
-      "chinese_sha256": "7f28e7851c5b529f13b6fe764ec6875a6e1b43ffe06885818b44021b77ca157d",
+      "english_sha256": "7b7228f9b8f5daa6694e5879a3fbe2cc68d4ccb7c535355bb61cc43976c3a2b7",
+      "chinese_sha256": "9cfc7514a0e20a197ee7f33f9e7f91734cd34fb679c892d6396daff13b04f155",
       "last_sync_direction": "baseline"
     },
     "Director/v4_light_action_rules.md": {
@@ -255,8 +255,8 @@
     "Director/visual_asset_protocol.md": {
       "english": "Director/visual_asset_protocol.md",
       "chinese": "Director/visual_asset_protocol_CN.md",
-      "english_sha256": "c6435450ac504f78929f60150c1ececeaaf058bba4fa19f38492ca4a2345b04a",
-      "chinese_sha256": "94a81b5f964303a5fffadfa7bd11db33266c0d064ebcdfe0ab5a2d54ce8b0b23",
+      "english_sha256": "39ecba27ea07bcdfcb361e9703a65420ea1088e30f084c679702b9334b2aaabe",
+      "chinese_sha256": "6b5f20c899a48ce8387feb09645a20d8b4092a76e5e4833501257a21e64fb9ac",
       "last_sync_direction": "baseline"
     },
     "Hotload/INDEX.md": {

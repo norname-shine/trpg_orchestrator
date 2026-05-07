@@ -95,7 +95,7 @@ Read the player action, long-term records, and runtime memory. Return strict JSO
   },
   "visual_assets": [
     {
-      "kind": "character | item | scene | map | cg | clue | document",
+      "kind": "prop | item | character | scene | cg",
       "id": "",
       "title": "",
       "detail": "",
@@ -183,6 +183,8 @@ When player action is continue:
 ## Visual And Map Requirements
 
 - Image generation is a separate image-only pass after the text pass. This JSON only prepares the image instruction.
+- Gallery asset kinds are fixed to `prop`, `item`, `character`, `scene`, and `cg`, but these are display slots only. Use explicit `gallery_category` for visible assets and put campaign-specific semantics in custom libraries.
+- Player, sub-player, and companion portraits are independent character-card/avatar slots. Do not put them into gallery filters.
 - One ready-to-use image prompt is enough unless multiple images are explicitly requested.
 - If the generated image will contain existing characters, list them in `visual_assets.character_targets` with their target portrait asset slots so the runtime can crop portraits from the final image and update each character's visual baseline.
 - `map_route` is reusable narrative topology. Do not put image prompts, ASCII grids, drawing coordinates, or terrain symbols into it.
@@ -206,4 +208,3 @@ When player action is continue:
   `{ "id": "", "name": "", "item_type": "", "status": "confirmed | limited | damaged | uncertain", "owner": "player | companion | party", "owner_ref": "", "short_description": "", "canvas_style": { "shape": "", "key_parts": [], "palette": [], "icon_rules": [], "avoid": [] }, "simple_prompt": "", "certainty": "confirmed | clue | uncertain", "source_evidence": "" }`.
 - `owner=party` is accepted only when owner_ref or source_evidence clearly shows the item is carried, used, or shared by the player or companion.
 - NPC, location, scene, unknown-owner, negative, or background-only objects must not become inventory records or Canvas assets.
-

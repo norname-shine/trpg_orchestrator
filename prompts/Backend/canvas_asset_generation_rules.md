@@ -61,8 +61,8 @@ These rules describe how the local frontend generates visual assets. They are ru
 ## Portrait Override From Formal Generated Images
 
 - First Canvas portraits are default placeholders and fallbacks, not permanent visual sources.
-- When a formal generated scene image contains existing player characters, NPCs, companions, servants, monsters, or key characters, automatically identify and crop the matching character portrait from the generated image first.
-- Save cropped results by asset type: main player to `portrait`, companion/servant to `companion` or `companion_portrait`, NPC to `npc_portrait`, and monsters to the monster portrait/gallery asset.
+- When a formal generated scene image contains existing named entities with explicit portrait slots, automatically identify and crop the matching portrait from the generated image first.
+- Save cropped results by director-provided role and portrait slot. Do not infer a campaign-specific semantic class from the creature, enemy, or threat name alone.
 - For multi-character scene images, attempt to match each recognizable character separately. Do not treat the whole scene image as the only gallery asset.
 - A successfully matched crop should replace the old Canvas portrait. If matching confidence is not reliable, keep the previous portrait and do not overwrite it.
 - When replacing a portrait, update that character's dedicated visual baseline: face shape, facial feature style, hairstyle, clothing tone, primary colors, style mood, distinctive identifiers, and anti-drift constraints.
@@ -138,10 +138,11 @@ These rules describe how the local frontend generates visual assets. They are ru
 ## Fixed Gallery Category Admission
 
 - A Canvas asset may enter the gallery only after it maps to the current campaign's `gallery_taxonomy` allowlist.
-- `gallery_taxonomy.core_categories` are system-stable categories such as `cg`, `npc`, `scene`, and `item`.
-- `gallery_taxonomy.campaign_categories` are campaign-defined extensions from campaign setup, profile, rules, world setup, or template defaults.
+- `gallery_taxonomy.core_categories` are system-stable and fixed to `prop`, `item`, `character`, `scene`, and `cg`.
+- `gallery_taxonomy.campaign_categories` are 0-3 campaign-defined extensions from director setup.
 - `all` is a frontend aggregate filter only; it is not a gallery category ID.
 - `companion` is not a gallery category. Current player and current bound companion/sub-player assets default to `gallery_category: hidden`.
+- Fixed gallery categories are display slots only. Use explicit `gallery_category` when an asset should be visible in one of them; clue/document-like visible objects use `item` or `prop`.
 - CG is separate from maps/scenes: CG assets use `cg`; map and location thumbnails use `scene`.
 - Undefined kinds, temporary visual records, backend system notes, and ordinary visual assets that cannot map to a stable entity must not create gallery cards merely because a PNG exists.
 - When a card already exists for the same character, item, or scene, the new Canvas PNG may update that card's thumbnail, status, or detail, but must not create a duplicate card.

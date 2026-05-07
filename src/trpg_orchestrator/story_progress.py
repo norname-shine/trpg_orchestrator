@@ -145,6 +145,10 @@ def build_backend_progress_control(
     if not beat_targets and valid_beats:
         beat_targets = [str(beat.get("beat_id") or "") for beat in _beats(node or {})[:1] if str(beat.get("beat_id") or "")]
     pace = _pace_command(node, progress) if node else "normal"
+    requires_deep = bool((node or {}).get("requires_deep_instruction"))
+    progress_note = str(incoming.get("progress_note") or "")
+    if requires_deep:
+        progress_note = "chapter_first_node_deep_instruction_required" if not progress_note else f"{progress_note}; chapter_first_node_deep_instruction_required"
     return {
         "current_chapter_id": chapter_id,
         "current_phase_id": str(progress.get("current_phase_id") or ""),
@@ -155,7 +159,8 @@ def build_backend_progress_control(
         "pace_command": pace,
         "legal_next_nodes": legal_next,
         "must_not_repeat": _string_list(incoming.get("must_not_repeat")),
-        "progress_note": str(incoming.get("progress_note") or ""),
+        "progress_note": progress_note,
+        "requires_deep_instruction": requires_deep,
         "protocol_warnings": _dedupe_tail(warnings),
     }
 

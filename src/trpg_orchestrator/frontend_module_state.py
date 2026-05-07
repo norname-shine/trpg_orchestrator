@@ -20,13 +20,19 @@ def build_frontend_modules(
     payloads = payloads if isinstance(payloads, dict) else {}
     payloads, warnings = filter_unauthorized_payloads(payloads, output_requests)
     asset_seed = str(frontend_state_base.get("asset_seed") or campaign_id)
+    initialization = frontend_state_base.get("initialization_payload") if isinstance(frontend_state_base.get("initialization_payload"), dict) else {}
     canvas_jobs = resolve_canvas_jobs({"payloads": payloads, "output_requests": output_requests}, campaign_id, asset_seed)
+    initial_canvas_jobs = initialization.get("canvas_jobs") if isinstance(initialization.get("canvas_jobs"), list) else []
+    canvas_jobs = [*initial_canvas_jobs, *canvas_jobs]
     map_request = _request(output_requests, "map", "keep_previous")
     module_refs = frontend_state_base.get("module_refs", {}) if isinstance(frontend_state_base.get("module_refs"), dict) else {}
+    map_panel = initialization.get("map_panel") if isinstance(initialization.get("map_panel"), dict) else {}
+    if not map_panel:
+        map_panel = _map_module(map_request, payloads, assets, warnings)
     return {
         "story_log": {"mode": "update", "state": "ready", "update_requested": True, "payload": {}, "payload_ref": module_refs.get("story_log", "")},
         "story_progress": {"mode": "update", "state": "ready", "update_requested": True, "payload": story_progress_payload},
-        "map_panel": _map_module(map_request, payloads, assets, warnings),
+        "map_panel": map_panel,
         "gallery": _gallery_module(output_requests, payloads, module_refs.get("gallery", "")),
         "inventory": _payload_module(output_requests, payloads, "inventory", "inventory_updates", payloads.get("inventory_updates", []), payload_ref=module_refs.get("inventory", "")),
         "dossier": _payload_module(output_requests, payloads, "dossier", "dossier_updates", payloads.get("dossier_updates", []), payload_ref=module_refs.get("dossier", "")),

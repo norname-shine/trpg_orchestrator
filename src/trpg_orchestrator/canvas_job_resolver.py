@@ -4,7 +4,18 @@ from __future__ import annotations
 from typing import Any
 
 
-CANVAS_JOB_KINDS = {"map", "portrait", "item", "clue", "gallery_scene"}
+CANVAS_JOB_KINDS = {
+    "map",
+    "portrait",
+    "player_portrait",
+    "companion_portrait",
+    "character_portrait",
+    "npc_portrait",
+    "monster_portrait",
+    "item",
+    "prop",
+    "gallery_scene",
+}
 CANVAS_JOB_TRIGGERS = {"user_requested", "director_triggered", "system_required"}
 CANVAS_CACHE_POLICIES = {"stable", "scene_only", "rebuild_on_version"}
 

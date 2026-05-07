@@ -8,7 +8,7 @@
 {
   "visual_assets": [
     {
-      "kind": "npc | item | scene | map | monster | ecology",
+      "kind": "prop | item | character | scene | cg",
       "id": "",
       "title": "",
       "detail": "",
@@ -79,6 +79,8 @@
 ## 边界
 
 - 不要为未确认设定绘制或描述精确外观。
+- 资料夹资产 kind 固定为 `prop`、`item`、`character`、`scene`、`cg`。NPC、怪物、BOSS、敌对首领、关键角色归入 `character`；地图/地点归入 `scene`；线索/文献类物件归入 `item` 或 `prop`。
+- 主玩家、副玩家、伙伴头像属于独立角色卡/头像槽，不生成资料夹筛选。
 - 可疑痕迹、未验证怪物迹象、传闻、推断、玩家猜测使用 `certainty: clue`。
 - 重复出现的 NPC、物品、地点和线索必须使用稳定 id。
 - 视觉提示本身不能创造新的长期记忆事实。
@@ -118,4 +120,3 @@
 - `map_canvas` 的符号语义：`#` 墙体/边界/隔断；`.` 可通行地面；`~` 黑水/污染/异常流体；`+` 交互/资源；`!` 危险/异常/高风险；`?` 未知/待调查。
 - `points` / `hazards` 的 `label`、`kind`、`symbol` 和 `certainty` 应优先用于语义分类；中文标签只作为短标签和语义提示，不要求逐字嵌入地图。
 - 地图生成后必须保存为当前团的缓存 PNG；前台展示 PNG，不直接展示原始 ASCII。
-

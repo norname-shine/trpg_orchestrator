@@ -5,9 +5,13 @@ These rules define how the local web console treats the right-side gallery. They
 ## Asset Types
 
 - `cg` is for formal story CGs, generated scene images, and player-viewable large image assets.
-- `npc` and `item` are usable in the player action input.
-- `scene`, `map`, `monster`, and `ecology` are view-only unless the user explicitly asks to act on them.
-- Monster and ecology rows may represent traces, uncertainty, or pressure. Do not present them as confirmed facts unless memory confirms them.
+- Fixed gallery categories are only `prop`, `item`, `character`, `scene`, and `cg`.
+- Gallery categories are asset display slots only. They do not decide campaign-specific story semantics.
+- Use an explicit director-provided `gallery_category` when a campaign-specific entity should be visible in one of the fixed slots.
+- Maps and locations enter `scene` only when they are visual scene/map assets.
+- Clue/document-like objects enter `item` or `prop`; they must not create `clue` or `document` filters.
+- Player, sub-player, and companion portraits stay in independent character-card/avatar slots and must not enter gallery filters.
+- Campaign-specific long-term details belong in director-declared custom libraries, not backend fixed library names.
 
 ## Fixed Category ID Rules
 
@@ -15,8 +19,9 @@ These rules define how the local web console treats the right-side gallery. They
 - Every category must have one stable unique ID. Frontend JSON rendering, backend output, and cached asset reuse must align to that ID set.
 - Only content matching the fixed ID allowlist may become a gallery card. Visual assets, temporary records, and system notes outside the allowlist must not create cards.
 - `cg` is a universal fixed filter and should be present for every campaign type. Formal generated story images must enter the CG category.
-- Fate-style campaigns default to: `cg`, `master`, `servant`, `npc`, `scene` / `map` (displayed as scene), and `item`.
-- Monster Hunter, wasteland, COC, DND, and other campaign types may use different startup category ID configs, but the underlying rule is the same: fixed IDs, allowlist admission, no random expansion.
+- The startup baseline is always `prop`, `item`, `character`, `scene`, and `cg`.
+- Director setup may add 0-3 story-specific custom gallery filters in `campaign_categories`. Four or more must be rejected locally.
+- Campaign-specific resources should use director-declared custom libraries, custom categories, or explicit fixed-slot asset links, not new fixed category IDs.
 - `all` is only a frontend aggregate filter. It is not an asset category ID, and backend rows must never use `all` as `kind`.
 
 ## Citation Input

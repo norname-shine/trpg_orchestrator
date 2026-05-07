@@ -221,7 +221,7 @@ def test_gallery_taxonomy_core_and_campaign_categories_from_profile(tmp_path, mo
 
     core_ids = {row["id"] for row in taxonomy["core_categories"]}
     campaign_ids = {row["id"] for row in taxonomy["campaign_categories"]}
-    assert {"cg", "npc", "scene", "item"}.issubset(core_ids)
+    assert {"prop", "item", "character", "scene", "cg"} == core_ids
     assert "faction" in campaign_ids
     assert "companion" not in {row["key"] for row in filters}
 
@@ -251,6 +251,31 @@ def test_gallery_taxonomy_does_not_create_filter_from_unknown_manifest_category(
 
     assert "unregistered_bucket" not in {row["key"] for row in gallery["filters"]}
     assert all(row.get("gallery_category") != "unregistered_bucket" for row in gallery["assets"])
+
+
+def test_legacy_npc_monster_and_document_categories_map_to_fixed_folders(tmp_path, monkeypatch):
+    campaign_id, campaign = make_campaign(tmp_path, monkeypatch)
+    write_json(
+        campaign / "assets" / "manifest.json",
+        {
+            "campaign_id": campaign_id,
+            "asset_seed": "seed123",
+            "assets": {
+                "npc": {"key": "npc", "kind": "npc_portrait", "path": "assets/portraits/npc.png", "metadata": {"role": "npc", "entity_key": "npc:guide", "display_name": "Guide", "gallery_category": "npc"}},
+                "monster": {"key": "monster", "kind": "monster_image", "path": "assets/portraits/boss.png", "metadata": {"role": "monster", "entity_key": "monster:boss", "display_name": "Boss", "gallery_category": "monster"}},
+                "doc": {"key": "doc", "kind": "document", "path": "assets/items/doc.png", "metadata": {"role": "item", "entity_key": "item:doc", "display_name": "Doc", "gallery_category": "document"}},
+            },
+        },
+    )
+
+    state = web_server.campaign_state(campaign_id)
+    assets = web_server.asset_list(campaign_id)["assets"]
+    gallery = web_server.frontend_gallery(campaign_id, state, {"parsed": {}, "pressure_pack": {}}, assets)
+
+    by_key = {row["key"]: row for row in gallery["assets"]}
+    assert by_key["npc"]["gallery_category"] == "character"
+    assert by_key["monster"]["gallery_category"] == "character"
+    assert by_key["doc"]["gallery_category"] == "item"
 
 
 def test_gallery_campaign_category_shows_normal_entity_not_companion(tmp_path, monkeypatch):

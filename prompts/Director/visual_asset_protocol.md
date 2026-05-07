@@ -8,7 +8,7 @@ This protocol describes structured visual and map data that V4, Codex, or future
 {
   "visual_assets": [
     {
-      "kind": "npc | item | scene | map | monster | ecology",
+      "kind": "prop | item | character | scene | cg",
       "id": "",
       "title": "",
       "detail": "",
@@ -79,6 +79,8 @@ This protocol describes structured visual and map data that V4, Codex, or future
 ## Boundaries
 
 - Do not draw or describe exact visuals for unconfirmed canon details.
+- Gallery asset kinds are fixed to `prop`, `item`, `character`, `scene`, and `cg`, but these are display slots only. Use explicit `gallery_category` for visible assets and put campaign-specific semantics in custom libraries.
+- Player, sub-player, and companion portraits are independent character-card/avatar slots and must not become gallery filters.
 - Use `certainty: clue` for suspicious traces, unverified monster signs, rumor, inference, or player speculation.
 - Use stable ids for recurring NPCs, items, locations, and clues.
 - Do not let a visual hint create new memory facts by itself.
@@ -118,4 +120,3 @@ This protocol describes structured visual and map data that V4, Codex, or future
 - Symbol semantics: `#` wall/boundary/partition; `.` walkable floor; `~` black water/pollution/abnormal fluid; `+` interactable/resource; `!` danger/anomaly/high risk; `?` unknown/investigable clue.
 - `points` / `hazards` labels, kind, symbol, and certainty drive semantic classification. Text labels are short UI labels, not text to be embedded cell by cell.
 - Generated maps must be saved as cached PNG assets for the current campaign; the player frontend displays PNG, not raw ASCII.
-

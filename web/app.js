@@ -101,6 +101,10 @@ function bindControls() {
   $("companionOverlay")?.addEventListener("click", (event) => {
     if (event.target.id === "companionOverlay") closeCompanionOverlay();
   });
+  $("closeStoryProgressOverlay")?.addEventListener("click", closeStoryProgressOverlay);
+  $("storyProgressOverlay")?.addEventListener("click", (event) => {
+    if (event.target.id === "storyProgressOverlay") closeStoryProgressOverlay();
+  });
   $("viewAllBtn").addEventListener("click", openGalleryOverlay);
   document.querySelector(".mapCanvas")?.addEventListener("click", () => openCurrentMapOverlay());
   document.querySelector(".mapCanvas")?.addEventListener("keydown", (event) => {
@@ -156,6 +160,7 @@ function bindControls() {
     if (event.key === "Escape") closeCgOverlay();
     if (event.key === "Escape") closeRulesOverlay();
     if (event.key === "Escape") closeCompanionOverlay();
+    if (event.key === "Escape") closeStoryProgressOverlay();
   });
 
   document.querySelectorAll("[data-command]").forEach((button) => {
@@ -189,7 +194,7 @@ function bindControls() {
     state.autoScroll = !state.autoScroll;
     $("autoScrollBtn").classList.toggle("active", state.autoScroll);
   });
-  $("storyProgressTopBtn")?.addEventListener("click", toggleStoryProgressMenu);
+  $("storyProgressTopBtn")?.addEventListener("click", openStoryProgressOverlay);
   document.addEventListener("click", (event) => {
     if (!event.target.closest?.("#storyProgressTop")) closeStoryProgressMenu();
   });
@@ -633,6 +638,18 @@ function resetStoryProgressDropdown() {
   if (legacyBar) legacyBar.style.width = "0%";
   const details = $("storyProgressDetails");
   if (details) details.innerHTML = "";
+  state.storyProgressPayload = {};
+  state.storyProgressChapter = {};
+  state.storyProgressNode = {};
+  setText("storyProgressDialogOverall", "0%");
+  setText("storyProgressDialogChapter", "-");
+  setText("storyProgressDialogNode", "-");
+  setText("storyProgressDialogPace", "normal");
+  const dialogBar = $("storyProgressDialogBar");
+  if (dialogBar) dialogBar.style.width = "0%";
+  const dialogDetails = $("storyProgressDialogDetails");
+  if (dialogDetails) dialogDetails.innerHTML = "";
+  closeStoryProgressOverlay();
   closeStoryProgressMenu();
 }
 
@@ -649,6 +666,28 @@ function closeStoryProgressMenu() {
   const menu = $("storyProgressMenu");
   const button = $("storyProgressTopBtn");
   if (menu) menu.classList.add("hidden");
+  if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function openStoryProgressOverlay(event) {
+  event?.stopPropagation?.();
+  closeStoryProgressMenu();
+  renderStoryProgressOverlayContent();
+  const overlay = $("storyProgressOverlay");
+  const button = $("storyProgressTopBtn");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+  if (button) button.setAttribute("aria-expanded", "true");
+}
+
+function closeStoryProgressOverlay() {
+  const overlay = $("storyProgressOverlay");
+  const button = $("storyProgressTopBtn");
+  if (overlay) {
+    overlay.classList.add("hidden");
+    overlay.setAttribute("aria-hidden", "true");
+  }
   if (button) button.setAttribute("aria-expanded", "false");
 }
 
@@ -1054,14 +1093,15 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
       const mapModule = frontendState.modules?.map_panel || {};
       const payload = mapModule.payload || {};
       const route = payload.map_route || {};
-      if (!isValidMapRoute(route)) {
-        console.warn("skip map canvas job without route nodes", job);
+      const hasCanvas = hasSemanticMapCanvas(payload.map_canvas || campaignState?.recent?.current_scene?.map_canvas || {});
+      if (!isValidMapRoute(route) && !hasCanvas) {
+        console.warn("skip map canvas job without route or MapCanvas", job);
         return;
       }
       renderCachedMap(campaignState?.recent?.current_scene || {}, { mode: "update", update_requested: true, payload });
       return;
     }
-    if (job.kind === "portrait") {
+    if (["portrait", "player_portrait"].includes(job.kind)) {
       const card = frontendState.modules?.character_card?.payload || frontendState.character_card || {};
       const seed = card.name || job.asset_key || state.activeCampaign || "portrait";
       const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, campaignState || state.lastCampaignState || {});
@@ -1095,6 +1135,53 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           visual_profile_hash: visualHash,
           variant: `vp_${visualHash}`,
           background_context: currentStoryVisualContext(),
+        },
+      });
+      return;
+    }
+    if (["character_portrait", "npc_portrait", "monster_portrait"].includes(job.kind)) {
+      const name = job.display_name || job.title || job.asset_key || "character";
+      const actorRole = job.kind === "monster_portrait" ? "monster" : "npc";
+      drawPixelActorPortrait(name, {
+        cache: true,
+        objectId: slugify(job.asset_key || name),
+        role: actorRole,
+        kind: "npc_portrait",
+        metadata: {
+          title: name,
+          display_name: name,
+          role: actorRole,
+          runtime_role: actorRole,
+          entity_key: makeEntityKey(actorRole, name),
+          portrait_asset_kind: "npc_portrait",
+          gallery_category: "character",
+          visible_in_gallery: true,
+          source: "director_canvas_job",
+        },
+      });
+      return;
+    }
+    if (["item", "prop"].includes(job.kind)) {
+      drawPixelItemIcon(job.asset_key || job.title || job.job_id, {
+        cache: true,
+        objectId: slugify(job.asset_key || job.job_id),
+        asset: {
+          key: job.asset_key,
+          title: job.title || job.asset_key,
+          kind: job.kind,
+          detail: job.detail || job.input_ref,
+          visualPrompt: job.visual_prompt || job.canvas_style || {},
+        },
+        metadata: {
+          title: job.title || job.asset_key,
+          display_name: job.title || job.asset_key,
+          role: job.kind,
+          runtime_role: job.kind,
+          entity_key: makeEntityKey(job.kind, job.title || job.asset_key),
+          gallery_category: job.kind,
+          source: "director_canvas_job",
+          initial_asset_id: job.initial_asset_id || "",
+          canvas_style: job.canvas_style || {},
         },
       });
       return;
@@ -1159,6 +1246,9 @@ function renderStoryProgressDropdown(frontendState = {}) {
   const nodeName = node.name || node.title || "-";
   const pace = payload.pace_command || "normal";
   const status = payload.status_text || payload.progress_label || "故事进度正常。";
+  state.storyProgressPayload = payload;
+  state.storyProgressChapter = chapter;
+  state.storyProgressNode = node;
   setText("storyProgressTopTitle", chapterName !== "-" ? chapterName : "结构化进度");
   setText("storyProgressTopPace", pace);
   setText("storyProgressMenuTitle", chapterName !== "-" ? chapterName : "结构化进度");
@@ -1173,10 +1263,11 @@ function renderStoryProgressDropdown(frontendState = {}) {
   renderStoryProgressDetails(payload, chapter, node);
   const bar = $("storyProgressOverallBar");
   if (bar) bar.style.width = `${overall}%`;
+  if (!$("storyProgressOverlay")?.classList.contains("hidden")) renderStoryProgressOverlayContent();
 }
 
-function renderStoryProgressDetails(payload = {}, chapter = {}, node = {}) {
-  const holder = $("storyProgressDetails");
+function renderStoryProgressDetails(payload = {}, chapter = {}, node = {}, targetId = "storyProgressDetails") {
+  const holder = $(targetId);
   if (!holder) return;
   holder.innerHTML = "";
   const rows = [];
@@ -1225,6 +1316,27 @@ function storyProgressDetailRow(label, value) {
   text.textContent = value;
   row.append(key, text);
   return row;
+}
+
+function renderStoryProgressOverlayContent() {
+  const payload = state.storyProgressPayload || {};
+  const chapter = state.storyProgressChapter || payload.current_chapter || {};
+  const node = state.storyProgressNode || payload.current_node || {};
+  const overall = clampPercent(payload.overall_progress);
+  const chapterName = chapter.name || chapter.title || "-";
+  const nodeName = node.name || node.title || "-";
+  const pace = payload.pace_command || "normal";
+  setText("storyProgressDialogOverall", `${overall}%`);
+  setText("storyProgressDialogChapter", chapterName);
+  setText("storyProgressDialogNode", nodeName);
+  setText("storyProgressDialogPace", pace);
+  const bar = $("storyProgressDialogBar");
+  if (bar) bar.style.width = `${overall}%`;
+  renderStoryProgressDetails(payload, chapter, node, "storyProgressDialogDetails");
+  const details = $("storyProgressDialogDetails");
+  if (details && !details.children.length) {
+    details.appendChild(storyProgressDetailRow("状态", payload.status_text || payload.progress_label || "未启用结构化故事进度"));
+  }
 }
 
 function clampPercent(value) {
@@ -3694,6 +3806,7 @@ function renderGalleryFilters(filters, taxonomy = state.galleryTaxonomy || {}) {
     button.type = "button";
     button.dataset.filter = filter.key;
     button.textContent = filter.label || filter.key;
+    button.title = filter.label || filter.key;
     button.classList.toggle("active", filter.key === state.galleryFilter);
     button.addEventListener("click", () => setGalleryFilter(filter.key));
     holder.appendChild(button);
@@ -3712,7 +3825,7 @@ function galleryFiltersFromTaxonomy(taxonomy = {}) {
     if (rows.some((item) => item.key === key)) return;
     rows.push({ key, label: row.label || key });
   });
-  if (rows.length === 1) rows.push({ key: "cg", label: "CG" }, { key: "npc", label: "NPC" }, { key: "scene", label: "Scene" }, { key: "item", label: "Item" });
+  if (rows.length === 1) rows.push({ key: "prop", label: "道具" }, { key: "item", label: "物品" }, { key: "character", label: "角色" }, { key: "scene", label: "场景" }, { key: "cg", label: "CG" });
   return rows;
 }
 
@@ -3791,7 +3904,7 @@ function openGalleryOverlay(assetKey = "", transientAsset = null) {
   }
   const requested = state.galleryAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.galleryFilter)) {
-    state.galleryFilter = requested.kind === "monster" || requested.kind === "ecology" ? "monster" : requested.kind;
+    state.galleryFilter = fixedGalleryKind(requested.kind) || normalizeGalleryKind(requested.kind) || requested.kind;
     setGalleryFilter(state.galleryFilter);
   }
   const assets = filteredGalleryAssets();
@@ -4495,22 +4608,21 @@ function normalizeGalleryKind(kind) {
   const value = String(kind || "").toLowerCase();
   if (["cg_image", "gallery_image"].includes(value)) return "cg";
   if (value === "companion_portrait") return "hidden";
-  if (value === "master_portrait") return "npc";
-  if (value === "npc_portrait") return "npc";
+  if (value === "master_portrait") return "character";
+  if (value === "npc_portrait") return "character";
   if (["scene_image", "map_image"].includes(value)) return "scene";
   if (value === "item_icon") return "item";
-  if (value === "monster_image") return "npc";
   if (value.includes("companion")) return "hidden";
   if (["cg", "generated_cg", "gallery_image", "formal_cg", "剧情图", "生图"].some((token) => value.includes(token))) return "cg";
-  if (value.includes("master") || value.includes("御主")) return "npc";
-  if (value.includes("document") || value.includes("文献")) return "document";
-  if (value.includes("clue") || value.includes("线索")) return "clue";
-  if (value.includes("anomaly") || value.includes("异常")) return "anomaly";
-  if (value.includes("quest") || value.includes("任务")) return "quest";
+  if (value.includes("master") || value.includes("御主")) return "character";
+  if (value.includes("document") || value.includes("文献")) return "item";
+  if (value.includes("clue") || value.includes("线索")) return "item";
+  if (value.includes("anomaly") || value.includes("异常")) return "prop";
+  if (value.includes("quest") || value.includes("任务")) return "prop";
   if (value.includes("character") || value.includes("角色")) return "character";
   if (value.includes("map")) return "scene";
-  if (value.includes("npc") || value.includes("portrait")) return "npc";
-  if (value.includes("monster") || value.includes("ecology")) return "npc";
+  if (value.includes("npc") || value.includes("portrait")) return "character";
+  if (["prop", "tool", "道具"].some((token) => value.includes(token))) return "prop";
   if (["item", "weapon", "supply", "material", "ritual_tool", "equipment", "物品", "装备", "补给", "材料", "仪式"].some((token) => value.includes(token))) return "item";
   return "";
 }
@@ -4530,7 +4642,13 @@ function fixedGalleryKind(kind) {
   const aliases = {
     location: "scene",
     map: "scene",
-    ecology: "monster",
+    npc: "character",
+    master: "character",
+    servant: "character",
+    document: "item",
+    clue: "item",
+    anomaly: "prop",
+    quest: "prop",
     weapon: "item",
     supply: "item",
     material: "item",
@@ -4538,7 +4656,6 @@ function fixedGalleryKind(kind) {
   };
   value = aliases[value] || value;
   if (allowed.has(value)) return value;
-  if (value === "character" && allowed.has("npc")) return "npc";
   return "";
 }
 
@@ -4547,11 +4664,12 @@ function normalizeGalleryAssetForFixedFilters(asset) {
   const identity = normalizeAssetIdentity(asset || {});
   if (identity.runtime_role === "player" || identity.runtime_role === "companion") return null;
   if (identity.visible_in_gallery === false || identity.not_in_gallery_filters) return null;
-  const kind = fixedGalleryKind(asset?.kind);
+  const explicitKind = identity.gallery_category && identity.gallery_category !== "hidden" ? fixedGalleryKind(identity.gallery_category) : "";
+  const kind = explicitKind || fixedGalleryKind(asset?.kind);
   if (kind === "item" && isInvalidGalleryItemAsset(asset)) return null;
   if (kind === "scene" && (asset?.kind === "map" || asset?.kind === "map_image" || asset?.metadata?.source === "map_route") && !isValidCachedMapAsset(asset)) return null;
   if (!kind) return null;
-  return { ...asset, kind: identity.gallery_category && identity.gallery_category !== "hidden" ? fixedGalleryKind(identity.gallery_category) || kind : kind };
+  return { ...asset, kind };
 }
 
 function isInvalidGalleryItemAsset(asset = {}) {
@@ -4621,7 +4739,7 @@ function conciseTitle(text, maxLen) {
 }
 
 function galleryKindLabel(kind) {
-  return { cg: "CG", companion: "伙伴", npc: "NPC", scene: "场景", item: "物品", clue: "线索", document: "文献", anomaly: "异常", character: "角色", quest: "任务" }[kind] || "资料";
+  return { prop: "道具", cg: "CG", companion: "伙伴", character: "角色", npc: "角色", scene: "场景", item: "物品", clue: "物品", document: "物品", anomaly: "道具", quest: "道具" }[kind] || "资料";
 }
 
 function drawGalleryAsset(targetImage, asset) {
@@ -7202,6 +7320,10 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
     state.assetCache[key] = saved.url ? { url: saved.url } : null;
     setAssetImage(targetImage, saved.url || dataUrl);
     if (saved.url) updateMapImageIfNeeded(canvas, saved.url);
+    if (saved.url) {
+      await loadCachedAssets();
+      if (state.lastCampaignState) renderGallery(state.lastCampaignState);
+    }
   } catch (err) {
     console.warn("asset cache failed", err);
     state.assetCache[key] = null;

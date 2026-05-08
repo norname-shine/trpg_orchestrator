@@ -1,4 +1,6 @@
 from trpg_orchestrator.capability_resolver import build_capability_plan
+from trpg_orchestrator.config import PROMPTS_DIR
+from trpg_orchestrator.encoding_utils import read_runtime_text
 from trpg_orchestrator.memory_selector import select_memory_for_actor
 from trpg_orchestrator.memory_store import default_memory
 from trpg_orchestrator.prompt_builder import build_actor_capability_view, build_chatgpt_input, build_director_user_prompt
@@ -41,6 +43,31 @@ def _writeback() -> dict:
         "new_open_threads": [],
         "closed_threads": [],
     }
+
+
+WRITEBACK_SEMANTIC_TERMS = (
+    "memory_type",
+    "certainty",
+    "ttl",
+    "confirmed_fact",
+    "observed_clue",
+    "npc_claim",
+)
+
+
+def test_actor_writeback_rules_do_not_request_memory_semantic_fields():
+    text = read_runtime_text(PROMPTS_DIR / "Actor" / "actor_writeback_rules.md")
+
+    for term in WRITEBACK_SEMANTIC_TERMS:
+        assert term not in text
+
+
+def test_build_actor_prompt_does_not_request_memory_semantic_fields():
+    memory = default_memory("demo")
+    prompt = build_chatgpt_input("demo", "继续", memory, _pressure_pack(), _plan(["base_actor"]))
+
+    for term in WRITEBACK_SEMANTIC_TERMS:
+        assert term not in prompt
 
 
 def test_build_actor_prompt_uses_min_style_and_turn_title_contract():

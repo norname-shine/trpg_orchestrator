@@ -6160,17 +6160,5 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:
-    from .services import frontend_state
-
-    return frontend_state.frontend_state_response(campaign_id)
-
-
-def campaign_state(campaign_id: str) -> dict[str, Any]:
-    from .services import frontend_state
-
-    return frontend_state.campaign_state(campaign_id)
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

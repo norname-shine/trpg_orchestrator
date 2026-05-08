@@ -434,3 +434,28 @@ def test_web_server_writeback_review_wrappers_call_service(monkeypatch):
     assert web_server.writeback_review_payload("demo") == {"ok": True, "campaign_id": "demo"}
     assert web_server.audit_writeback_payload("demo") == {"ok": True, "audited": "demo"}
     assert web_server.apply_writeback_payload("demo") == {"ok": True, "applied": "demo"}
+
+
+def test_service_files_do_not_call_deleted_web_impl_hooks():
+    deleted_impl_names = (
+        "_frontend_state_response_impl",
+        "_campaign_state_impl",
+        "_asset_list_impl",
+        "_asset_lookup_impl",
+        "_save_asset_impl",
+        "_delete_asset_impl",
+        "_rebuild_assets_impl",
+        "_writeback_review_payload_impl",
+        "_audit_writeback_payload_impl",
+        "_apply_writeback_payload_impl",
+    )
+    service_paths = (
+        Path(frontend_state.__file__),
+        Path(assets.__file__),
+        Path(writeback_review.__file__),
+    )
+
+    for path in service_paths:
+        text = path.read_text(encoding="utf-8")
+        for impl_name in deleted_impl_names:
+            assert impl_name not in text, f"{path.name} still references {impl_name}"

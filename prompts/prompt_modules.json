@@ -49,7 +49,7 @@
   },
   "visual_contract_director_rules": {
     "path": "Director/visual_contract_director_rules.md",
-    "always": true,
+    "triggers": ["visual_contract", "visual_preload", "init_visual_contract"],
     "layers": [
       "director",
       "audit"

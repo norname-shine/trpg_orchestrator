@@ -1,5 +1,5 @@
 from trpg_orchestrator.memory_store import default_memory
-from trpg_orchestrator.writeback import apply_approved_writeback, has_applied_writeback, normalize_writeback_entry, writeback_hash
+from trpg_orchestrator.writeback import apply_approved_writeback, has_applied_writeback, writeback_hash
 
 
 def approved_writeback():
@@ -44,27 +44,7 @@ def test_writeback_hash_is_not_recorded_twice():
     assert has_applied_writeback({"recent_context.json": updates["recent_context.json"]}, digest)
 
 
-def test_normalize_writeback_entry_wraps_legacy_string():
-    entry = normalize_writeback_entry("门口有水迹")
-
-    assert entry["value"] == "门口有水迹"
-    assert entry["memory_type"] == "short_term_scene"
-    assert entry["certainty"] == "uncertain"
-    assert entry["source"] == "actor"
-    assert entry["ttl"] == "scene"
-
-
-def test_normalize_writeback_entry_fills_safe_defaults_and_fallbacks():
-    entry = normalize_writeback_entry({"value": "门口有水迹", "memory_type": "truth", "certainty": "sure", "ttl": "forever"})
-
-    assert entry["value"] == "门口有水迹"
-    assert entry["memory_type"] == "short_term_scene"
-    assert entry["certainty"] == "uncertain"
-    assert entry["source"] == "actor"
-    assert entry["ttl"] == "scene"
-
-
-def test_confirmed_fact_confirmed_enters_long_term_fact_memory():
+def test_scalar_long_term_writeback_keeps_legacy_raw_entry():
     memory = default_memory("demo")
     writeback = approved_writeback()
     writeback["long_term_memory"] = {
@@ -80,11 +60,12 @@ def test_confirmed_fact_confirmed_enters_long_term_fact_memory():
     updates = apply_approved_writeback(memory, writeback)
 
     world_updates = updates["world_state.json"]["world_updates"]
-    assert world_updates[0]["value"]["value"] == "小卖部已经停电。"
+    assert world_updates[0]["field"] == "world_state_updates"
+    assert world_updates[0]["value"] == writeback["long_term_memory"]["world_state_updates"]
     assert "clue_history.json" not in updates
 
 
-def test_observed_clue_goes_to_clue_history_not_long_term_fact():
+def test_observed_clue_metadata_does_not_route_to_clue_history_in_this_branch():
     memory = default_memory("demo")
     writeback = approved_writeback()
     writeback["long_term_memory"] = {
@@ -97,11 +78,11 @@ def test_observed_clue_goes_to_clue_history_not_long_term_fact():
 
     updates = apply_approved_writeback(memory, writeback)
 
-    assert "world_state.json" not in updates
-    assert updates["clue_history.json"]["notes"][0]["value"]["memory_type"] == "observed_clue"
+    assert updates["world_state.json"]["world_updates"][0]["value"]["memory_type"] == "observed_clue"
+    assert "clue_history.json" not in updates
 
 
-def test_npc_claim_does_not_enter_npc_facts():
+def test_npc_memory_update_keeps_legacy_facts_bucket():
     memory = default_memory("demo")
     writeback = approved_writeback()
     writeback["long_term_memory"] = {
@@ -117,11 +98,11 @@ def test_npc_claim_does_not_enter_npc_facts():
     updates = apply_approved_writeback(memory, writeback)
 
     npc = updates["npc_memory.json"]["npcs"]["老周"]
-    assert npc["facts"] == []
-    assert npc["uncertain"][0]["value"]["memory_type"] == "npc_claim"
+    assert npc["facts"][0]["value"]["memory_type"] == "npc_claim"
+    assert npc["uncertain"] == []
 
 
-def test_short_term_scene_only_updates_recent_context():
+def test_short_term_scene_metadata_does_not_create_writeback_observations():
     memory = default_memory("demo")
     writeback = approved_writeback()
     writeback["long_term_memory"] = {
@@ -134,12 +115,12 @@ def test_short_term_scene_only_updates_recent_context():
 
     updates = apply_approved_writeback(memory, writeback)
 
-    assert "world_state.json" not in updates
+    assert updates["world_state.json"]["world_updates"][0]["value"]["memory_type"] == "short_term_scene"
     assert "clue_history.json" not in updates
-    assert updates["recent_context.json"]["writeback_observations"][0]["value"]["memory_type"] == "short_term_scene"
+    assert "writeback_observations" not in updates["recent_context.json"]
 
 
-def test_legacy_npc_memory_update_goes_to_notes_not_facts():
+def test_legacy_npc_memory_update_goes_to_facts():
     memory = default_memory("demo")
     writeback = approved_writeback()
     writeback["long_term_memory"] = {"npc_memory_updates": {"老周": "他说仓库里没有人。"}}
@@ -147,6 +128,6 @@ def test_legacy_npc_memory_update_goes_to_notes_not_facts():
     updates = apply_approved_writeback(memory, writeback)
 
     npc = updates["npc_memory.json"]["npcs"]["老周"]
-    assert npc["facts"] == []
+    assert npc["facts"][0]["value"] == "他说仓库里没有人。"
     assert npc["uncertain"] == []
-    assert npc["notes"][0]["value"]["value"] == "他说仓库里没有人。"
+    assert npc["notes"] == []

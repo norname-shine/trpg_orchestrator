@@ -87,10 +87,6 @@ CHOICE_STYLES = {"natural_stop", "listed_options", "no_choice"}
 AUDIT_DECISIONS = {"accept", "revise", "reject"}
 CHATGPT_BLOCK_TYPES = {"gm_narration", "player_action", "npc_dialogue", "system_check", "choice_prompt", "cg_image", "backend_note"}
 CHATGPT_ACTOR_KINDS = {"gm", "player", "npc", "system", ""}
-WRITEBACK_MEMORY_TYPES = {"confirmed_fact", "observed_clue", "npc_claim", "short_term_scene", "progress_update"}
-WRITEBACK_CERTAINTY = {"confirmed", "likely", "uncertain"}
-WRITEBACK_SOURCES = {"actor", "director", "audit", "backend"}
-WRITEBACK_TTLS = {"scene", "session", "permanent"}
 
 
 class SchemaValidationError(ValueError):
@@ -165,34 +161,8 @@ def validate_writeback(data: dict[str, Any]) -> None:
         raise SchemaValidationError("new_open_threads must be a list")
     if not isinstance(data["closed_threads"], list):
         raise SchemaValidationError("closed_threads must be a list")
-    _validate_writeback_entry_metadata(data.get("long_term_memory"), "long_term_memory")
-    _validate_writeback_entry_metadata(data.get("optional_writebacks"), "optional_writebacks")
     if "progress_writeback" in data:
         validate_progress_writeback(data["progress_writeback"])
-
-
-def _validate_writeback_entry_metadata(value: Any, path: str) -> None:
-    if isinstance(value, dict):
-        for key in ("memory_type", "certainty", "source", "ttl"):
-            if key not in value:
-                continue
-            item = value.get(key)
-            allowed = {
-                "memory_type": WRITEBACK_MEMORY_TYPES,
-                "certainty": WRITEBACK_CERTAINTY,
-                "source": WRITEBACK_SOURCES,
-                "ttl": WRITEBACK_TTLS,
-            }[key]
-            if item not in allowed:
-                raise SchemaValidationError(f"{path}.{key} invalid: {item}")
-        for key, item in value.items():
-            if key == "value":
-                continue
-            if isinstance(item, (dict, list)):
-                _validate_writeback_entry_metadata(item, f"{path}.{key}")
-    elif isinstance(value, list):
-        for index, item in enumerate(value, start=1):
-            _validate_writeback_entry_metadata(item, f"{path}[{index}]")
 
 
 def validate_output_requests(data: dict[str, Any]) -> None:

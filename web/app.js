@@ -223,8 +223,8 @@ function bindControls() {
     openCompanionOverlay();
   });
   document.getElementById("characterProfileToggle")?.addEventListener("click", () => {
-    state.characterProfileExpanded = !state.characterProfileExpanded;
-    renderCharacterProfile(state.lastCharacterCardForRender?.profile || {});
+    state.character.characterProfileExpanded = !state.character.characterProfileExpanded;
+    renderCharacterProfile(state.character.lastCharacterCardForRender?.profile || {});
   });
   $("closeCompanionOverlay")?.addEventListener("click", closeCompanionOverlay);
   $("companionOverlay")?.addEventListener("click", (event) => {
@@ -643,7 +643,7 @@ async function refresh() {
 }
 
 function renderStatus(data) {
-  state.campaigns = data.campaign_list || [];
+  state.campaign.campaigns = data.campaign_list || [];
   state.campaign.activeCampaign = data.active_campaign || "";
   state.campaign.selectedCampaign = state.campaign.selectedCampaign || activeCampaignId();
   setText("campaignName", campaignTitle(activeCampaignId()) || "-");
@@ -1918,9 +1918,9 @@ function renderCharacterProfile(profile) {
   const toggle = $("characterProfileToggle");
   const details = $("characterProfileDetails");
   if (!holder) return;
-  if (state.characterProfileCampaign !== state.campaign.activeCampaign) {
-    state.characterProfileCampaign = state.campaign.activeCampaign;
-    state.characterProfileExpanded = false;
+  if (state.character.characterProfileCampaign !== state.campaign.activeCampaign) {
+    state.character.characterProfileCampaign = state.campaign.activeCampaign;
+    state.character.characterProfileExpanded = false;
   }
   const normalized = normalizeCharacterProfile(profile);
   holder.textContent = normalized.background || "背景待确认";
@@ -1932,9 +1932,9 @@ function renderCharacterProfile(profile) {
     (Array.isArray(normalized.notes) && normalized.notes.length)
   );
   toggle.hidden = !hasDetails;
-  toggle.textContent = state.characterProfileExpanded ? "主角资料 · 收起" : "主角资料 · 展开";
-  toggle.setAttribute("aria-expanded", state.characterProfileExpanded ? "true" : "false");
-  details.hidden = !state.characterProfileExpanded || !hasDetails;
+  toggle.textContent = state.character.characterProfileExpanded ? "主角资料 · 收起" : "主角资料 · 展开";
+  toggle.setAttribute("aria-expanded", state.character.characterProfileExpanded ? "true" : "false");
+  details.hidden = !state.character.characterProfileExpanded || !hasDetails;
   details.innerHTML = "";
   if (details.hidden) return;
   renderCharacterProfileDetails(details, normalized);
@@ -2310,7 +2310,7 @@ function normalizeStarAttributes(attributes = []) {
 }
 
 function currentCampaignMeta() {
-  return state.campaigns.find((campaign) => campaign.campaign_id === state.campaign.activeCampaign) || null;
+  return state.campaign.campaigns.find((campaign) => campaign.campaign_id === state.campaign.activeCampaign) || null;
 }
 
 function renderSidePanel(campaignState, frontendState = state.campaign.frontendState || {}) {
@@ -3551,8 +3551,8 @@ function renderStoryPicker() {
   const stories = $("storyList");
   campaigns.innerHTML = "";
   stories.innerHTML = "";
-  const usingDemoCampaigns = !state.campaigns.length;
-  const availableCampaigns = state.campaigns.length ? state.campaigns : demoCampaigns();
+  const usingDemoCampaigns = !state.campaign.campaigns.length;
+  const availableCampaigns = state.campaign.campaigns.length ? state.campaign.campaigns : demoCampaigns();
   if (!state.campaign.selectedCampaign && availableCampaigns[0]) {
     state.campaign.selectedCampaign = availableCampaigns[0].campaign_id;
   }
@@ -3645,7 +3645,7 @@ function renderBindingSafety(campaign) {
 }
 
 function campaignById(campaignId) {
-  return state.campaigns.find((campaign) => campaign.campaign_id === campaignId) || {};
+  return state.campaign.campaigns.find((campaign) => campaign.campaign_id === campaignId) || {};
 }
 
 function setInputValue(id, value) {
@@ -3704,9 +3704,9 @@ async function deleteCampaign(campaignId, title = "") {
       body: JSON.stringify({ campaign_id: campaignId }),
     });
     const status = data.status || {};
-    state.campaigns = status.campaign_list || [];
+    state.campaign.campaigns = status.campaign_list || [];
     state.campaign.activeCampaign = status.active_campaign || "";
-    state.campaign.selectedCampaign = state.campaign.activeCampaign || state.campaigns[0]?.campaign_id || "";
+    state.campaign.selectedCampaign = state.campaign.activeCampaign || state.campaign.campaigns[0]?.campaign_id || "";
     resetCampaignScopedUiState(state.campaign.activeCampaign);
     await refresh();
     renderStoryPicker();
@@ -3885,7 +3885,7 @@ function makeAssetDraggable(element, asset) {
 function beginReferenceDrag(event, text) {
   if (event.button !== 0 || !text) return;
   if (event.target.closest("button, input, textarea, select, a")) return;
-  state.activeReferenceDrag = {
+  state.ui.activeReferenceDrag = {
     text,
     startX: event.clientX,
     startY: event.clientY,
@@ -3897,7 +3897,7 @@ function beginReferenceDrag(event, text) {
 }
 
 function moveReferenceDrag(event) {
-  const drag = state.activeReferenceDrag;
+  const drag = state.ui.activeReferenceDrag;
   if (!drag) return;
   const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
   if (!drag.moved && distance < 6) return;
@@ -3916,7 +3916,7 @@ function moveReferenceDrag(event) {
 }
 
 function endReferenceDrag(event) {
-  const drag = state.activeReferenceDrag;
+  const drag = state.ui.activeReferenceDrag;
   if (!drag) return;
   const input = $("actionInput");
   if (drag.moved && isPointInsideElement(event.clientX, event.clientY, input)) {
@@ -3926,7 +3926,7 @@ function endReferenceDrag(event) {
   input?.classList.remove("dropTarget");
   document.body.classList.remove("referenceDragging");
   document.removeEventListener("pointermove", moveReferenceDrag);
-  state.activeReferenceDrag = null;
+  state.ui.activeReferenceDrag = null;
 }
 
 function isPointInsideElement(x, y, element) {
@@ -4333,9 +4333,9 @@ async function loadRulesDirectory(query = "") {
   try {
     const suffix = query ? `?q=${encodeURIComponent(query)}` : "";
     const data = await api(`/api/rules${suffix}`);
-    state.ruleFiles = data.rules || [];
+    state.ui.ruleFiles = data.rules || [];
     renderRulesList(data);
-    const first = (data.matches && data.matches[0]) || state.ruleFiles.find((item) => item.name === state.selectedRule) || state.ruleFiles[0];
+    const first = (data.matches && data.matches[0]) || state.ui.ruleFiles.find((item) => item.name === state.ui.selectedRule) || state.ui.ruleFiles[0];
     if (first) await openRuleFile(first.name);
   } catch (err) {
     setText("rulesViewerTitle", "规则读取失败");
@@ -4359,7 +4359,7 @@ function renderRulesList(data) {
   rows.forEach((rule) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `ruleItem${rule.name === state.selectedRule ? " active" : ""}`;
+    button.className = `ruleItem${rule.name === state.ui.selectedRule ? " active" : ""}`;
     const snippets = (rule.snippets || []).map((item) => `<small>${escapeHtml(item)}</small>`).join("");
     button.innerHTML = `<b>${escapeHtml(rule.title || rule.name)}</b><span>${escapeHtml(rule.name)}</span>${snippets}`;
     button.addEventListener("click", () => openRuleFile(rule.name));
@@ -4369,7 +4369,7 @@ function renderRulesList(data) {
 
 async function openRuleFile(name) {
   if (!name) return;
-  state.selectedRule = name;
+  state.ui.selectedRule = name;
   document.querySelectorAll(".ruleItem").forEach((item) => item.classList.toggle("active", item.querySelector("span")?.textContent === name));
   const data = await api(`/api/rules?name=${encodeURIComponent(name)}`);
   setText("rulesViewerTitle", data.name || name);
@@ -5265,7 +5265,7 @@ function setText(id, text) {
 }
 
 function campaignTitle(campaignId) {
-  const row = state.campaigns.find((campaign) => campaign.campaign_id === campaignId);
+  const row = state.campaign.campaigns.find((campaign) => campaign.campaign_id === campaignId);
   return row?.title || row?.name || campaignId;
 }
 

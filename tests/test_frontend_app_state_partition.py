@@ -67,14 +67,20 @@ def test_legacy_state_proxy_remains_available():
     assert "partitionLegacyState();" in source
 
     for field in (
+        "campaigns",
         "activeCampaign",
         "frontendState",
         "assetCache",
         "galleryAssets",
         "currentMapAsset",
         "writebackReview",
+        "characterProfileExpanded",
+        "characterProfileCampaign",
+        "ruleFiles",
+        "selectedRule",
         "runProgress",
         "dragPanels",
+        "activeReferenceDrag",
     ):
         assert re.search(rf"\b{field}\s*:\s*\[", source), f"missing legacy proxy for {field}"
 
@@ -111,10 +117,30 @@ def test_low_risk_state_access_uses_partitions():
         "collapsedPanels",
         "dragPanels",
         "activeDragPanel",
+        "characterProfileExpanded",
+        "characterProfileCampaign",
+        "ruleFiles",
+        "selectedRule",
+        "activeReferenceDrag",
+        "campaigns",
     )
 
     for field in legacy_reads:
         assert not re.search(rf"\bstate\.{field}\b", source), f"state.{field} should use a partition"
+
+
+def test_remaining_legacy_state_fields_use_partitions():
+    source = app_source()
+
+    for expected in (
+        "state.character.characterProfileExpanded",
+        "state.character.characterProfileCampaign",
+        "state.ui.ruleFiles",
+        "state.ui.selectedRule",
+        "state.ui.activeReferenceDrag",
+        "state.campaign.campaigns",
+    ):
+        assert expected in source
 
 
 def test_reset_campaign_scoped_state_keeps_drag_panel_layout():

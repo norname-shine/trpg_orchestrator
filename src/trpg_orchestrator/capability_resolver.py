@@ -112,6 +112,9 @@ def build_capability_plan(
         if frontend_flags.get("gallery") == "update" and not image_negated:
             enable("visual_assets", "frontend_requested_visual_assets")
 
+    for capability, request in _forecast_capability_requests(memory, warnings):
+        enable(capability, request)
+
     if image_negated and "visual_assets" in loaded:
         loaded = [capability for capability in loaded if capability != "visual_assets"]
         explicit = [request for request in explicit if request not in {"user_requested_image", "event_requested_image", "frontend_requested_visual_assets"}]
@@ -180,3 +183,69 @@ def _event_capability_requests(event_name: str) -> list[tuple[str, str]]:
         "image_requested": [("visual_assets", "event_requested_image")],
     }
     return mapping.get(event_name, [])
+
+
+def _forecast_capability_requests(memory: dict[str, Any], warnings: list[str]) -> list[tuple[str, str]]:
+    recent = memory.get("recent_context.json", {}) if isinstance(memory, dict) else {}
+    forecast = recent.get("orchestration_forecast") if isinstance(recent, dict) else {}
+    if not isinstance(forecast, dict) or forecast.get("for_backend_only") is not True:
+        return []
+    current_turn = int(recent.get("turn_index", 0) or 0)
+    expires_at = int(forecast.get("expires_at_turn", current_turn) or 0)
+    if expires_at < current_turn:
+        return []
+    valid_until = str(forecast.get("valid_until_node_id") or "").strip()
+    current_node = _current_node_id(memory)
+    if valid_until and current_node and valid_until != current_node:
+        return []
+    hotload = forecast.get("hotload_next_turn")
+    if not isinstance(hotload, dict):
+        return []
+    result: list[tuple[str, str]] = []
+    for bucket in ("director_modules", "actor_modules", "payload_modules"):
+        modules = hotload.get(bucket)
+        if not isinstance(modules, list):
+            continue
+        for raw in modules:
+            module = str(raw or "").strip()
+            if not module:
+                continue
+            mapped = _forecast_module_capability(module)
+            if not mapped:
+                warnings.append(f"unknown orchestration_forecast module ignored: {module}")
+                continue
+            if mapped not in result:
+                result.append(mapped)
+    return result
+
+
+def _forecast_module_capability(module: str) -> tuple[str, str] | None:
+    mapping = {
+        "director_visual_payload_min": ("visual_preload", "forecast_visual_preload"),
+        "director_map_payload_min": ("map_preload", "forecast_map_preload"),
+        "npc_voice_deep": ("dialogue_heavy_preload", "forecast_dialogue_heavy_preload"),
+    }
+    return mapping.get(module)
+
+
+def _current_node_id(memory: dict[str, Any]) -> str:
+    story_progress = memory.get("story_progress.json", {}) if isinstance(memory, dict) else {}
+    if isinstance(story_progress, dict):
+        for key in ("current_node_id", "active_node_id"):
+            value = str(story_progress.get(key) or "").strip()
+            if value:
+                return value
+        current_node = story_progress.get("current_node")
+        if isinstance(current_node, dict):
+            value = str(current_node.get("id") or current_node.get("node_id") or "").strip()
+            if value:
+                return value
+    recent = memory.get("recent_context.json", {}) if isinstance(memory, dict) else {}
+    if isinstance(recent, dict):
+        value = str(recent.get("current_node_id") or "").strip()
+        if value:
+            return value
+        scene = recent.get("current_scene")
+        if isinstance(scene, dict):
+            return str(scene.get("node_id") or scene.get("current_node_id") or "").strip()
+    return ""

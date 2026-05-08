@@ -146,6 +146,16 @@ def apply_approved_writeback(
             scene["immediate_pressure"] = short_term["quest"]
         updates["recent_context.json"] = recent
 
+    forecast = sanitize_orchestration_forecast((pressure_pack or {}).get("orchestration_forecast") if isinstance(pressure_pack, dict) else None)
+    if forecast:
+        recent = deepcopy(updates.get("recent_context.json") or memory["recent_context.json"])
+        source_turn = int(recent.get("turn_index", 0) or 0)
+        expires_after = int(forecast.get("expires_after_turns", 1) or 1)
+        forecast["source_turn"] = source_turn
+        forecast["expires_at_turn"] = source_turn + expires_after
+        recent["orchestration_forecast"] = forecast
+        updates["recent_context.json"] = recent
+
     protocol_warnings: list[str] = []
     progress_writeback = approved_writeback.get("progress_writeback")
     if isinstance(progress_writeback, dict):
@@ -188,6 +198,48 @@ def _writeback_prose_chars(writeback: dict[str, Any]) -> int:
     if isinstance(short, dict):
         parts.extend(str(value) for value in short.values() if isinstance(value, str))
     return len("".join(str(part) for part in parts if part))
+
+
+def sanitize_orchestration_forecast(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("for_backend_only") is not True:
+        return {}
+    try:
+        expires_after = int(value.get("expires_after_turns", 1) or 1)
+    except (TypeError, ValueError):
+        expires_after = 1
+    expires_after = max(1, min(3, expires_after))
+    hotload = value.get("hotload_next_turn")
+    if not isinstance(hotload, dict):
+        hotload = {}
+    return {
+        "for_backend_only": True,
+        "expires_after_turns": expires_after,
+        "valid_until_node_id": str(value.get("valid_until_node_id") or ""),
+        "hotload_next_turn": {
+            "director_modules": _string_list(hotload.get("director_modules")),
+            "actor_modules": _string_list(hotload.get("actor_modules")),
+            "payload_modules": _string_list(hotload.get("payload_modules")),
+        },
+        "upcoming_assets": [
+            _sanitize_forecast_asset(item)
+            for item in value.get("upcoming_assets", [])
+            if isinstance(item, dict)
+        ][:12] if isinstance(value.get("upcoming_assets", []), list) else [],
+    }
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def _sanitize_forecast_asset(value: dict[str, Any]) -> dict[str, Any]:
+    allowed = {}
+    for key in ("id", "kind", "reason", "valid_until_node_id"):
+        if key in value:
+            allowed[key] = str(value.get(key) or "")
+    return allowed
 
 
 def is_confirmed_fact(entry: dict[str, Any]) -> bool:

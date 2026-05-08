@@ -146,6 +146,8 @@ def validate_pressure_pack(data: dict[str, Any], expected_campaign_id: str | Non
         raise SchemaValidationError("story_topology must be an object")
     if "visual_contract_candidates" in data and not isinstance(data.get("visual_contract_candidates"), list):
         raise SchemaValidationError("visual_contract_candidates must be a list")
+    validate_actor_dispatch(data.get("actor_dispatch"))
+    validate_orchestration_forecast(data.get("orchestration_forecast"))
 
 
 def validate_writeback(data: dict[str, Any]) -> None:
@@ -207,6 +209,36 @@ def validate_output_requests(data: dict[str, Any]) -> None:
                 raise SchemaValidationError(f"output_requests.{module}.{key} must be a string")
         if item.get("mode") not in allowed_modes:
             raise SchemaValidationError(f"invalid output_requests.{module}.mode: {item.get('mode')}")
+
+
+def validate_actor_dispatch(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise SchemaValidationError("actor_dispatch must be an object")
+    for key in ("modules", "heavy_modules"):
+        if key in value and not isinstance(value.get(key), list):
+            raise SchemaValidationError(f"actor_dispatch.{key} must be a list")
+
+
+def validate_orchestration_forecast(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise SchemaValidationError("orchestration_forecast must be an object")
+    if value.get("for_backend_only") is not True:
+        raise SchemaValidationError("orchestration_forecast.for_backend_only must be true")
+    expires = value.get("expires_after_turns", 1)
+    if not isinstance(expires, int) or expires < 1 or expires > 3:
+        raise SchemaValidationError("orchestration_forecast.expires_after_turns must be an integer from 1 to 3")
+    hotload = value.get("hotload_next_turn", {})
+    if hotload in (None, {}):
+        return
+    if not isinstance(hotload, dict):
+        raise SchemaValidationError("orchestration_forecast.hotload_next_turn must be an object")
+    for key in ("director_modules", "actor_modules", "payload_modules"):
+        if key in hotload and not isinstance(hotload.get(key), list):
+            raise SchemaValidationError(f"orchestration_forecast.hotload_next_turn.{key} must be a list")
 
 
 def validate_payloads_against_output_requests(payloads: dict[str, Any], output_requests: dict[str, Any]) -> None:
@@ -398,6 +430,8 @@ def normalize_pressure_pack_compat(data: dict[str, Any]) -> dict[str, Any]:
             for key, value in defaults.items():
                 output_requests.setdefault(key, value)
     normalized.setdefault("payloads", {})
+    if isinstance(normalized.get("orchestration_forecast"), dict):
+        normalized["orchestration_forecast"].setdefault("expires_after_turns", 1)
     payloads = normalized["payloads"] if isinstance(normalized.get("payloads"), dict) else {}
     output_requests = normalized.get("output_requests", {})
     if isinstance(payloads, dict) and isinstance(output_requests, dict):

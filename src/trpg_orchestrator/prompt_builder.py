@@ -245,6 +245,8 @@ def build_actor_capability_view(capability_plan: dict[str, Any]) -> dict[str, An
     capabilities = []
     for capability in loaded if isinstance(loaded, list) else []:
         text = str(capability or "").strip()
+        if text.endswith("_preload"):
+            continue
         if text and text.startswith(ACTOR_VISIBLE_CAPABILITY_PREFIXES):
             capabilities.append(text)
     return sanitize_actor_prompt_value({

@@ -154,6 +154,13 @@ def _sanitize_actor_memory(data: Any) -> Any:
         "hidden_motives",
         "director_notes",
         "npc_knowledge_boundaries",
+        "orchestration_forecast",
+        "actor_dispatch",
+        "hotload_next_turn",
+        "upcoming_assets",
+        "hidden_reason",
+        "future_asset",
+        "future_node",
     }
     if isinstance(data, dict):
         clean: dict[str, Any] = {}
@@ -161,7 +168,7 @@ def _sanitize_actor_memory(data: Any) -> Any:
             if key in hidden_keys:
                 continue
             lowered = str(key).lower()
-            if any(token in lowered for token in ("hidden", "secret", "director_note", "future_node", "forbidden_reveal")):
+            if any(token in lowered for token in ("hidden", "secret", "director_note", "future_node", "forbidden_reveal", "future_asset", "hotload_next_turn", "orchestration_forecast", "actor_dispatch", "upcoming_assets")):
                 continue
             clean[key] = _sanitize_actor_memory(value)
         return clean

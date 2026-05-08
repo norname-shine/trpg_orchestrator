@@ -13,6 +13,19 @@ from .output_contract import output_requests_to_capabilities
 REGISTRY_PATH = PROMPTS_DIR / "prompt_modules.json"
 _LAST_WARNINGS: list[str] = []
 
+ACTOR_DISPATCH_MODULES = {
+    "style_min": "actor_style_min",
+    "npc_voice_min": "actor_npc_voice_min",
+    "npc_voice_deep": "npc_voice_rules",
+    "choice_pressure": "actor_choice_pressure",
+    "recap": "actor_recap_rules",
+    "progress": "actor_progress_rules",
+    "inventory": "actor_inventory_rules",
+    "dossier": "actor_dossier_rules",
+    "map": "actor_map_rules",
+    "dice": "actor_dice_rules",
+}
+
 
 def load_prompt_module_registry() -> dict[str, Any]:
     return read_json(REGISTRY_PATH)
@@ -81,6 +94,8 @@ def select_prompt_modules(
     layer: str,
     pressure_pack: dict[str, Any] | None = None,
 ) -> list[str]:
+    global _LAST_WARNINGS
+    _LAST_WARNINGS = []
     registry = load_prompt_module_registry()
     capabilities = set(capability_plan.get("loaded_capabilities", []) if isinstance(capability_plan, dict) else [])
     if layer == "actor" and isinstance(pressure_pack, dict):
@@ -99,6 +114,12 @@ def select_prompt_modules(
             selected.append(module_id)
         else:
             excluded.append(module_id)
+    if layer == "actor" and isinstance(pressure_pack, dict):
+        for module_id in _actor_dispatch_module_ids(pressure_pack.get("actor_dispatch")):
+            if module_id in registry and module_id not in selected:
+                selected.append(module_id)
+            if module_id in excluded:
+                excluded.remove(module_id)
     if isinstance(capability_plan, dict):
         prompt_modules = capability_plan.setdefault("prompt_modules", {"director": [], "actor": [], "audit": [], "excluded": []})
         if isinstance(prompt_modules, dict):
@@ -110,9 +131,29 @@ def select_prompt_modules(
     return selected
 
 
+def _actor_dispatch_module_ids(dispatch: Any) -> list[str]:
+    if not isinstance(dispatch, dict):
+        return []
+    selected: list[str] = []
+    for bucket in ("modules", "heavy_modules"):
+        raw_modules = dispatch.get(bucket)
+        if not isinstance(raw_modules, list):
+            continue
+        for raw in raw_modules:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            module_id = ACTOR_DISPATCH_MODULES.get(name)
+            if not module_id:
+                _LAST_WARNINGS.append(f"unknown actor_dispatch module ignored: {name}")
+                continue
+            if module_id not in selected:
+                selected.append(module_id)
+    return selected
+
+
 def load_prompt_modules(module_ids: list[str]) -> str:
     global _LAST_WARNINGS
-    _LAST_WARNINGS = []
     registry = load_prompt_module_registry()
     parts: list[str] = []
     for module_id in module_ids:

@@ -31,6 +31,22 @@
     "allowed_outputs": ["output_contract_constraints", "output_requests", "protocol_warnings"],
     "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆", "替代 actor 输出正文", "替代 backend 合并落盘"]
   },
+  "director_actor_dispatch_rules": {
+    "path": "Hotload/director_actor_dispatch_rules.md",
+    "always": true,
+    "layers": ["director"],
+    "responsibility": "只要求 director 输出本回合 actor_dispatch 供后台选择 actor 模块",
+    "allowed_outputs": ["actor_dispatch", "protocol_warnings"],
+    "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆", "替代 actor 输出正文"]
+  },
+  "director_forecast_rules": {
+    "path": "Hotload/director_forecast_rules.md",
+    "always": true,
+    "layers": ["director"],
+    "responsibility": "只要求 director 输出 backend-only orchestration_forecast 供下一回合热加载",
+    "allowed_outputs": ["orchestration_forecast", "protocol_warnings"],
+    "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆", "授权资产生成", "泄露给 actor"]
+  },
   "visual_contract_director_rules": {
     "path": "Director/visual_contract_director_rules.md",
     "always": true,
@@ -74,6 +90,22 @@
     "allowed_outputs": ["turn_title", "blocks", "summary"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "输出未授权 payload", "直接落盘记忆", "替代 audit 判断写回可信度"]
   },
+  "actor_style_min": {
+    "path": "Actor/actor_style_min.md",
+    "layers": ["actor"],
+    "triggers": ["actor_style_min"],
+    "responsibility": "只提供 actor 最小正文风格约束",
+    "allowed_outputs": ["turn_title", "blocks", "summary"],
+    "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
+  },
+  "actor_npc_voice_min": {
+    "path": "Actor/actor_npc_voice_min.md",
+    "layers": ["actor"],
+    "triggers": ["actor_npc_voice_min"],
+    "responsibility": "只提供 actor 最小 NPC 台词约束",
+    "allowed_outputs": ["turn_title", "blocks", "summary", "state_writeback"],
+    "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
+  },
   "image_rules": {
     "path": "Actor/chatgpt_image_rules.md",
     "layers": ["actor"],
@@ -90,6 +122,22 @@
     "allowed_outputs": ["pressure_pack", "output_requests", "payloads", "progress_control", "protocol_warnings"],
     "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆", "替代 audit 判断写回可信度"]
   },
+  "director_visual_payload_min": {
+    "path": "Director/director_visual_payload_min.md",
+    "layers": ["director"],
+    "triggers": ["visual_preload", "user_requested_image"],
+    "responsibility": "只为 director 预加载最小视觉 payload 判断规则",
+    "allowed_outputs": ["output_requests", "payloads", "protocol_warnings"],
+    "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆", "直接生成资产"]
+  },
+  "director_map_payload_min": {
+    "path": "Director/director_map_payload_min.md",
+    "layers": ["director"],
+    "triggers": ["map_preload", "user_requested_map"],
+    "responsibility": "只为 director 预加载最小地图 payload 判断规则",
+    "allowed_outputs": ["output_requests", "payloads", "protocol_warnings"],
+    "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆"]
+  },
   "actor_map_rules": {
     "path": "Actor/actor_map_rules.md",
     "layers": ["actor"],
@@ -101,10 +149,34 @@
   "npc_voice_rules": {
     "path": "Actor/chatgpt_npc_voice_rules.md",
     "layers": ["actor"],
-    "triggers": ["npc_present", "dialogue_expected", "npc_voice"],
+    "triggers": ["npc_voice_deep"],
     "responsibility": "只约束 actor 的 NPC 台词与可见行动表达",
     "allowed_outputs": ["turn_title", "blocks", "summary", "state_writeback"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "输出未授权 payload", "直接落盘记忆", "替代 audit 判断写回可信度"]
+  },
+  "actor_choice_pressure": {
+    "path": "Actor/actor_choice_pressure.md",
+    "layers": ["actor"],
+    "triggers": ["actor_choice_pressure"],
+    "responsibility": "只约束 actor 呈现选择压力",
+    "allowed_outputs": ["turn_title", "blocks", "summary"],
+    "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
+  },
+  "actor_recap_rules": {
+    "path": "Actor/actor_recap_rules.md",
+    "layers": ["actor"],
+    "triggers": ["actor_recap_rules"],
+    "responsibility": "只约束 actor 进行简短复盘表达",
+    "allowed_outputs": ["turn_title", "blocks", "summary"],
+    "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
+  },
+  "actor_progress_rules": {
+    "path": "Actor/actor_progress_rules.md",
+    "layers": ["actor"],
+    "triggers": ["actor_progress_rules"],
+    "responsibility": "只约束 actor 呈现已授权的进度变化",
+    "allowed_outputs": ["turn_title", "blocks", "summary", "progress_writeback"],
+    "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
   },
   "character_card_rules": {
     "path": "Actor/character_card_json_rules.md",

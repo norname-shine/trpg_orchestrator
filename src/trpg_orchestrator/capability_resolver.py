@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .capability_events import detect_capability_events
+
 
 DEFAULT_CAPABILITIES = ["base_director", "base_actor", "story_progress", "recent_context"]
 
@@ -42,8 +44,12 @@ def build_capability_plan(
     explicit: list[str] = []
     secondary: list[str] = []
     warnings: list[str] = []
+    events = detect_capability_events(action, memory)
+    image_negated = _has_negated_image(action_lower) or any(event.get("event") == "image_negated" for event in events)
 
     def enable(name: str, request: str | None = None) -> None:
+        if name == "visual_assets" and image_negated:
+            return
         if name not in loaded:
             loaded.append(name)
         if request and request not in explicit:
@@ -53,7 +59,7 @@ def build_capability_plan(
 
     if _has_keywords(action_lower, KEYWORDS["map"]):
         enable("map", "user_requested_map")
-    if _has_keywords(action_lower, KEYWORDS["image"]) and not _has_negated_image(action_lower):
+    if _has_keywords(action_lower, KEYWORDS["image"]) and not image_negated:
         enable("visual_assets", "user_requested_image")
     if _has_keywords(action_lower, KEYWORDS["dossier"]):
         enable("dossier", "user_requested_dossier")
@@ -65,6 +71,18 @@ def build_capability_plan(
         enable("character_card", "user_requested_character_card")
     if _has_keywords(action_lower, KEYWORDS["dice"]):
         enable("dice_check_requested", "user_requested_dice")
+
+    for event in events:
+        event_name = str(event.get("event") or "")
+        confidence = str(event.get("confidence") or "")
+        if event_name == "image_negated":
+            warnings.append("visual_assets_disabled_by_player_request")
+            continue
+        if confidence != "high":
+            warnings.append(f"possible_{event_name}_detected_but_low_confidence")
+            continue
+        for capability, request in _event_capability_requests(event_name):
+            enable(capability, request)
 
     recent = memory.get("recent_context.json", {}) if isinstance(memory, dict) else {}
     scene = recent.get("current_scene", {}) if isinstance(recent, dict) else {}
@@ -91,8 +109,13 @@ def build_capability_plan(
     if isinstance(frontend_flags, dict):
         if frontend_flags.get("map_panel") == "update":
             enable("map", "frontend_requested_map")
-        if frontend_flags.get("gallery") == "update":
+        if frontend_flags.get("gallery") == "update" and not image_negated:
             enable("visual_assets", "frontend_requested_visual_assets")
+
+    if image_negated and "visual_assets" in loaded:
+        loaded = [capability for capability in loaded if capability != "visual_assets"]
+        explicit = [request for request in explicit if request not in {"user_requested_image", "event_requested_image", "frontend_requested_visual_assets"}]
+        secondary = [request for request in secondary if request not in {"user_requested_image", "event_requested_image", "frontend_requested_visual_assets"}]
 
     return {
         "schema": "trpg_orchestrator.capability_plan.v1",
@@ -142,3 +165,18 @@ def _primary_intent(explicit: list[str]) -> str:
     if not explicit:
         return "continue_scene"
     return explicit[0]
+
+
+def _event_capability_requests(event_name: str) -> list[tuple[str, str]]:
+    mapping = {
+        "location_changed": [("map", "event_location_changed")],
+        "item_obtained": [("inventory", "event_item_obtained")],
+        "item_lost": [("inventory", "event_item_lost")],
+        "item_inspected": [("inventory", "event_item_inspected"), ("dossier", "event_item_inspected")],
+        "clue_observed": [("dossier", "event_clue_observed")],
+        "npc_present": [("npc_voice", "event_npc_present"), ("npc_present", "event_npc_present")],
+        "status_changed": [("character_card", "event_status_changed")],
+        "dice_requested": [("dice_check_requested", "event_dice_requested")],
+        "image_requested": [("visual_assets", "event_requested_image")],
+    }
+    return mapping.get(event_name, [])

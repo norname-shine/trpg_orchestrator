@@ -1,10 +1,16 @@
 import base64
+import copy
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from trpg_orchestrator import web_server
 from trpg_orchestrator.json_utils import read_json, write_json
+from trpg_orchestrator.memory_store import default_memory
 from trpg_orchestrator.services import assets, frontend_state, writeback_review
+from trpg_orchestrator.writeback import writeback_hash
 
 
 def _png_data_url() -> str:
@@ -47,6 +53,70 @@ def _write_asset_entry(tmp_path: Path, *, kind: str = "npc_portrait", metadata: 
         },
     })
     return key
+
+
+def _memory_payload(campaign_id: str = "demo") -> dict:
+    return copy.deepcopy(default_memory(campaign_id, "Demo"))
+
+
+def _write_outbox_files(
+    outbox_dir: Path,
+    *,
+    writeback: dict | None = None,
+    audit_result: dict | None = None,
+    pressure_pack: dict | None = None,
+) -> None:
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    if writeback is not None:
+        write_json(outbox_dir / "state_writeback.json", writeback)
+    if audit_result is not None:
+        write_json(outbox_dir / "v4_audit_result.json", audit_result)
+    if pressure_pack is not None:
+        write_json(outbox_dir / "pressure_pack.json", pressure_pack)
+
+
+def _base_writeback() -> dict:
+    return {
+        "summary_for_recent_context": "主角确认了新的调查方向。",
+        "short_term_state": {"location": "港口仓库", "quest": "追查失踪货物"},
+        "long_term_memory": {
+            "world_state_updates": [{"value": "港口最近频繁失窃", "memory_type": "confirmed_fact", "certainty": "confirmed"}]
+        },
+    }
+
+
+def _accept_audit(writeback: dict | None = None) -> dict:
+    approved = writeback or _base_writeback()
+    return {
+        "decision": "accept",
+        "approved_writeback": approved,
+        "reason": "",
+        "warnings": [],
+    }
+
+
+class FakeWritebackStore:
+    def __init__(self, memory: dict | None = None):
+        self.memory = memory or _memory_payload()
+        self.backups: list[tuple[str, list[str]]] = []
+        self.writes: list[tuple[str, dict]] = []
+        self.logs: list[tuple[str, dict]] = []
+
+    def resolve_campaign_id(self, campaign_id=None):
+        return campaign_id or "demo"
+
+    def load_campaign_memory(self, campaign_id):
+        return copy.deepcopy(self.memory)
+
+    def backup_files(self, campaign_id, filenames):
+        self.backups.append((campaign_id, list(filenames)))
+
+    def write_memory_updates(self, campaign_id, updates):
+        self.writes.append((campaign_id, copy.deepcopy(updates)))
+        return list(updates.keys())
+
+    def write_log(self, campaign_id, payload):
+        self.logs.append((campaign_id, copy.deepcopy(payload)))
 
 
 def test_assets_load_empty_manifest_returns_compatible_shape(tmp_path, monkeypatch):
@@ -247,20 +317,11 @@ def test_frontend_state_response_active_campaign_missing_outbox_does_not_crash(t
 
 
 def test_writeback_review_service_missing_outbox_files_returns_compatible_state(tmp_path, monkeypatch):
-    class FakeStore:
-        def resolve_campaign_id(self, campaign_id=None):
-            return campaign_id or "demo"
-
-        def load_campaign_memory(self, campaign_id):
-            return {
-                "recent_context.json": {"applied_writeback_hashes": []},
-                "story_blueprint.json": {},
-                "story_progress.json": {},
-            }
-
-    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
-    monkeypatch.setattr(web_server, "MemoryStore", lambda: FakeStore())
-    monkeypatch.setattr(web_server, "resolve_outbox_dir", lambda campaign_id: tmp_path / "outbox")
+    store = FakeWritebackStore()
+    monkeypatch.setattr(writeback_review, "MemoryStore", lambda: store)
+    monkeypatch.setattr(writeback_review, "_resolve_outbox_dir", lambda campaign_id="": tmp_path / "outbox")
+    monkeypatch.setattr(writeback_review, "_require_outbox_campaign", lambda outbox_dir, campaign_id: None)
+    monkeypatch.setattr(web_server, "_writeback_review_payload_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
 
     payload = writeback_review.writeback_review_payload("demo")
 
@@ -268,7 +329,81 @@ def test_writeback_review_service_missing_outbox_files_returns_compatible_state(
     assert payload["campaign_id"] == "demo"
     assert payload["decision"] == "not_audited"
     assert payload["approved_writeback"] == {}
-    assert isinstance(payload["warnings"], list)
+    assert payload["warnings"]
+
+
+def test_audit_writeback_payload_runs_without_web_impl(tmp_path, monkeypatch):
+    outbox_dir = tmp_path / "outbox"
+    writeback = _base_writeback()
+    _write_outbox_files(outbox_dir, writeback=writeback, pressure_pack={"foo": "bar"})
+    store = FakeWritebackStore()
+
+    class FakeClient:
+        def complete_json(self, system_prompt, user_prompt):
+            return json.dumps(_accept_audit(writeback), ensure_ascii=False)
+
+    monkeypatch.setattr(writeback_review, "MemoryStore", lambda: store)
+    monkeypatch.setattr(writeback_review, "_resolve_outbox_dir", lambda campaign_id="": outbox_dir)
+    monkeypatch.setattr(writeback_review, "_require_outbox_campaign", lambda outbox_dir, campaign_id: None)
+    monkeypatch.setattr(writeback_review, "DeepSeekClient", FakeClient)
+    monkeypatch.setattr(writeback_review, "read_prompt", lambda name: "audit-system")
+    monkeypatch.setattr(writeback_review, "build_audit_user_prompt", lambda *args, **kwargs: "audit-user")
+    monkeypatch.setattr(writeback_review, "validate_audit_result", lambda data: None)
+    monkeypatch.setattr(writeback_review, "validate_writeback", lambda data: None)
+    monkeypatch.setattr(web_server, "_audit_writeback_payload_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
+
+    payload = writeback_review.audit_writeback_payload("demo")
+
+    assert payload["ok"] is True
+    assert payload["campaign_id"] == "demo"
+    assert payload["decision"] == "accept"
+    assert read_json(outbox_dir / "v4_audit_result.json")["decision"] == "accept"
+
+
+def test_apply_writeback_payload_reject_does_not_write_memory(tmp_path, monkeypatch):
+    outbox_dir = tmp_path / "outbox"
+    writeback = _base_writeback()
+    _write_outbox_files(outbox_dir, writeback=writeback, audit_result={"decision": "reject", "reason": "needs review"})
+    store = FakeWritebackStore()
+
+    monkeypatch.setattr(writeback_review, "MemoryStore", lambda: store)
+    monkeypatch.setattr(writeback_review, "_resolve_outbox_dir", lambda campaign_id="": outbox_dir)
+    monkeypatch.setattr(writeback_review, "_require_outbox_campaign", lambda outbox_dir, campaign_id: None)
+    monkeypatch.setattr(writeback_review, "validate_audit_result", lambda data: None)
+    monkeypatch.setattr(writeback_review, "validate_writeback", lambda data: None)
+    monkeypatch.setattr(writeback_review, "_status_payload", lambda: {"ok": True})
+    monkeypatch.setattr(web_server, "_apply_writeback_payload_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
+
+    with pytest.raises(RuntimeError, match="V4 rejected writeback"):
+        writeback_review.apply_writeback_payload("demo")
+
+    assert store.backups == []
+    assert store.writes == []
+    assert store.logs == []
+
+
+def test_apply_writeback_payload_duplicate_hash_does_not_write_twice(tmp_path, monkeypatch):
+    outbox_dir = tmp_path / "outbox"
+    writeback = _base_writeback()
+    audit_result = _accept_audit(writeback)
+    _write_outbox_files(outbox_dir, writeback=writeback, audit_result=audit_result)
+    memory = _memory_payload()
+    memory["recent_context.json"]["applied_writeback_hashes"] = [writeback_hash(writeback)]
+    store = FakeWritebackStore(memory=memory)
+
+    monkeypatch.setattr(writeback_review, "MemoryStore", lambda: store)
+    monkeypatch.setattr(writeback_review, "_resolve_outbox_dir", lambda campaign_id="": outbox_dir)
+    monkeypatch.setattr(writeback_review, "_require_outbox_campaign", lambda outbox_dir, campaign_id: None)
+    monkeypatch.setattr(writeback_review, "validate_audit_result", lambda data: None)
+    monkeypatch.setattr(writeback_review, "validate_writeback", lambda data: None)
+    monkeypatch.setattr(writeback_review, "_status_payload", lambda: {"ok": True})
+
+    with pytest.raises(RuntimeError, match="duplicate writeback already applied"):
+        writeback_review.apply_writeback_payload("demo")
+
+    assert store.backups == []
+    assert store.writes == []
+    assert store.logs == []
 
 
 def test_web_server_asset_wrappers_call_service(monkeypatch):
@@ -291,7 +426,11 @@ def test_web_server_frontend_state_wrapper_calls_service(monkeypatch):
     assert web_server.frontend_state_response("demo") == {"ok": True, "active_campaign": "demo"}
 
 
-def test_web_server_writeback_review_wrapper_calls_service(monkeypatch):
+def test_web_server_writeback_review_wrappers_call_service(monkeypatch):
     monkeypatch.setattr(writeback_review, "writeback_review_payload", lambda campaign_id="": {"ok": True, "campaign_id": campaign_id})
+    monkeypatch.setattr(writeback_review, "audit_writeback_payload", lambda campaign_id="": {"ok": True, "audited": campaign_id})
+    monkeypatch.setattr(writeback_review, "apply_writeback_payload", lambda campaign_id="": {"ok": True, "applied": campaign_id})
 
     assert web_server.writeback_review_payload("demo") == {"ok": True, "campaign_id": "demo"}
+    assert web_server.audit_writeback_payload("demo") == {"ok": True, "audited": "demo"}
+    assert web_server.apply_writeback_payload("demo") == {"ok": True, "applied": "demo"}

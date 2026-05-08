@@ -5785,118 +5785,21 @@ def current_visible_prose_chars(campaign_id: str = "") -> int:
 
 
 def audit_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
-    store = MemoryStore()
-    resolved = store.resolve_campaign_id(campaign_id or None)
-    memory = store.load_campaign_memory(resolved)
-    outbox_dir = resolve_outbox_dir(resolved)
-    require_outbox_campaign(outbox_dir, resolved)
-    writeback = current_writeback(resolved)
-    pressure_path = outbox_dir / "pressure_pack.json"
-    pressure_pack = read_json(pressure_path) if pressure_path.exists() else {}
-    capability_plan = read_web_capability_plan(outbox_dir, resolved, memory)
-    audit_result = extract_json_object(DeepSeekClient().complete_json(
-        read_prompt("v4_audit_prompt.md"),
-        build_audit_user_prompt(resolved, memory, pressure_pack, writeback, capability_plan),
-    ))
-    validate_audit_result(audit_result)
-    if audit_result.get("decision") in {"accept", "revise"}:
-        validate_writeback(audit_result.get("approved_writeback") or writeback)
-    write_json(outbox_dir / "v4_audit_result.json", audit_result)
-    return writeback_review_payload(resolved)
+    from .services import writeback_review
+
+    return writeback_review.audit_writeback_payload(campaign_id)
 
 
 def writeback_review_payload(campaign_id: str = "") -> dict[str, Any]:
-    store = MemoryStore()
-    resolved = store.resolve_campaign_id(campaign_id or None)
-    memory = store.load_campaign_memory(resolved)
-    writeback: dict[str, Any] = {}
-    audit_result: dict[str, Any] = {}
-    pending_updates: dict[str, Any] = {}
-    warnings: list[str] = []
-    outbox_dir = resolve_outbox_dir(resolved)
-    try:
-        require_outbox_campaign(outbox_dir, resolved)
-        writeback = current_writeback(resolved)
-    except Exception as exc:
-        warnings.append(str(exc))
-    audit_path = outbox_dir / "v4_audit_result.json"
-    if audit_path.exists():
-        try:
-            audit_result = read_json(audit_path)
-            validate_audit_result(audit_result)
-        except Exception as exc:
-            warnings.append(f"invalid audit result: {exc}")
-            audit_result = {}
-    decision = audit_result.get("decision", "not_audited")
-    approved = audit_result.get("approved_writeback") or writeback
-    if decision in {"accept", "revise"} and approved:
-        pressure_path = outbox_dir / "pressure_pack.json"
-        pressure_pack = normalize_pressure_pack_compat(read_json(pressure_path)) if pressure_path.exists() else {}
-        raw_digest = writeback_hash(writeback)
-        approved_digest = writeback_hash(approved)
-        for digest in (raw_digest, approved_digest):
-            if digest and has_applied_writeback(memory, digest):
-                warnings.append(f"duplicate writeback already applied: {digest[:12]}")
-        pending_updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack, prose_chars_delta=current_visible_prose_chars(resolved))
-        pending_updates.update(visual_contract_updates_from_pressure(memory, pressure_pack, resolved))
-    return {
-        "ok": True,
-        "campaign_id": resolved,
-        "writeback": writeback,
-        "audit_result": audit_result,
-        "decision": decision,
-        "approved_writeback": approved if decision in {"accept", "revise"} else {},
-        "memory_files_to_update": sorted(pending_updates.keys()),
-        "pending_updates": pending_updates,
-        "warnings": warnings + list(audit_result.get("warnings", [])),
-    }
+    from .services import writeback_review
+
+    return writeback_review.writeback_review_payload(campaign_id)
 
 
 def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
-    store = MemoryStore()
-    resolved = store.resolve_campaign_id(campaign_id or None)
-    memory = store.load_campaign_memory(resolved)
-    outbox_dir = resolve_outbox_dir(resolved)
-    require_outbox_campaign(outbox_dir, resolved)
-    writeback = current_writeback(resolved)
-    audit_path = outbox_dir / "v4_audit_result.json"
-    if not audit_path.exists():
-        raise RuntimeError("missing V4 audit result; run audit first")
-    audit_result = read_json(audit_path)
-    validate_audit_result(audit_result)
-    decision = audit_result.get("decision")
-    if decision == "reject":
-        raise RuntimeError(f"V4 rejected writeback: {audit_result.get('reason', '')}")
-    if decision not in {"accept", "revise"}:
-        raise RuntimeError(f"invalid V4 audit decision: {decision}")
-    approved = audit_result.get("approved_writeback") or writeback
-    validate_writeback(approved)
-    pressure_path = outbox_dir / "pressure_pack.json"
-    pressure_pack = normalize_pressure_pack_compat(read_json(pressure_path)) if pressure_path.exists() else {}
-    raw_digest = writeback_hash(writeback)
-    approved_digest = writeback_hash(approved)
-    for digest in (raw_digest, approved_digest):
-        if has_applied_writeback(memory, digest):
-            raise RuntimeError(f"duplicate writeback already applied: {digest[:12]}")
-    updates = apply_approved_writeback(memory, approved, extra_hashes=[raw_digest], pressure_pack=pressure_pack, prose_chars_delta=current_visible_prose_chars(resolved))
-    updates.update(visual_contract_updates_from_pressure(memory, pressure_pack, resolved))
-    touched = list(updates.keys())
-    if touched:
-        store.backup_files(resolved, touched)
-        store.write_memory_updates(resolved, updates)
-    raw_path = outbox_dir / "chatgpt_raw_output.md"
-    flavor_path = outbox_dir / "ai_flavor_report.json"
-    image_job_path = outbox_dir / "image_job.json"
-    action_path = outbox_dir / "last_player_action.txt"
-    store.write_log(resolved, {
-        "player_action": read_runtime_text(action_path) if action_path.exists() else "",
-        "v4_pressure_pack": pressure_pack,
-        "chatgpt_raw_output": read_runtime_text(raw_path) if raw_path.exists() else "",
-        "ai_flavor_report": read_json(flavor_path) if flavor_path.exists() else {},
-        "v4_audit_result": audit_result,
-        "final_write": updates,
-    })
-    return {"ok": True, "campaign_id": resolved, "updated_files": touched, "status": status_payload()}
+    from .services import writeback_review
+
+    return writeback_review.apply_writeback_payload(campaign_id)
 def status_payload() -> dict[str, Any]:
     store = MemoryStore()
     registry = store.load_registry()
@@ -6257,11 +6160,6 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-_audit_writeback_payload_impl = audit_writeback_payload
-_writeback_review_payload_impl = writeback_review_payload
-_apply_writeback_payload_impl = apply_writeback_payload
-
-
 def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:
     from .services import frontend_state
 
@@ -6272,24 +6170,6 @@ def campaign_state(campaign_id: str) -> dict[str, Any]:
     from .services import frontend_state
 
     return frontend_state.campaign_state(campaign_id)
-
-
-def audit_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
-    from .services import writeback_review
-
-    return writeback_review.audit_writeback_payload(campaign_id)
-
-
-def writeback_review_payload(campaign_id: str = "") -> dict[str, Any]:
-    from .services import writeback_review
-
-    return writeback_review.writeback_review_payload(campaign_id)
-
-
-def apply_writeback_payload(campaign_id: str = "") -> dict[str, Any]:
-    from .services import writeback_review
-
-    return writeback_review.apply_writeback_payload(campaign_id)
 
 
 if __name__ == "__main__":

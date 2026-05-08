@@ -478,7 +478,7 @@ def build_chatgpt_input(
             "## Scene Brief For This Turn",
             "Follow this turn's visible pressure, boundaries, NPC direction, forbidden items, choice requirements, and allowed state updates.",
             "```json\n" + json.dumps(actor_scene_control, ensure_ascii=False, indent=2) + "\n```",
-            "Output strict JSON only: blocks, summary, and state_writeback. No text outside JSON.",
+            "Output strict JSON only: turn_title, blocks, summary, and state_writeback. No text outside JSON.",
         ]
     )
 

@@ -1,7 +1,7 @@
 from trpg_orchestrator.capability_resolver import build_capability_plan
 from trpg_orchestrator.memory_selector import select_memory_for_actor
 from trpg_orchestrator.memory_store import default_memory
-from trpg_orchestrator.prompt_builder import build_actor_capability_view
+from trpg_orchestrator.prompt_builder import build_actor_capability_view, build_chatgpt_input, build_director_user_prompt
 from trpg_orchestrator.prompt_module_registry import get_prompt_module_warnings, select_prompt_modules
 from trpg_orchestrator.writeback import apply_approved_writeback
 
@@ -41,6 +41,32 @@ def _writeback() -> dict:
         "new_open_threads": [],
         "closed_threads": [],
     }
+
+
+def test_build_actor_prompt_uses_min_style_and_turn_title_contract():
+    memory = default_memory("demo")
+    prompt = build_chatgpt_input("demo", "继续", memory, _pressure_pack(), _plan(["base_actor"]))
+
+    assert "## Prompt Module: actor_style_min" in prompt
+    assert "Actor Deep Style Rules" not in prompt
+    assert "Output strict JSON only: turn_title, blocks, summary, and state_writeback. No text outside JSON." in prompt
+
+
+def test_build_actor_prompt_uses_min_npc_voice_without_long_voice_for_npc_present():
+    memory = default_memory("demo")
+    prompt = build_chatgpt_input("demo", "和守林人交谈", memory, _pressure_pack(), _plan(["base_actor", "npc_present"]))
+
+    assert "## Prompt Module: actor_npc_voice_min" in prompt
+    assert "NPC Performance Rules" not in prompt
+
+
+def test_build_actor_prompt_loads_long_npc_voice_only_for_deep_dispatch():
+    memory = default_memory("demo")
+    pressure_pack = _pressure_pack(actor_dispatch={"modules": [], "heavy_modules": ["npc_voice_deep"]})
+    prompt = build_chatgpt_input("demo", "继续对峙", memory, pressure_pack, _plan(["base_actor"]))
+
+    assert "## Prompt Module: npc_voice_rules" in prompt
+    assert "NPC Performance Rules" in prompt
 
 
 def test_actor_modules_without_dispatch_keep_existing_trigger_logic():
@@ -123,6 +149,54 @@ def test_orchestration_forecast_writeback_preloads_next_turn_capability():
     assert "hidden_reason" not in forecast["upcoming_assets"][0]
     assert "visual_assets" not in plan["loaded_capabilities"]
     assert "map" not in plan["loaded_capabilities"]
+    assert plan["output_contract"]["allow_visual_assets"] is False
+    assert plan["output_contract"]["allow_map_payload"] is False
+
+
+def test_build_actor_prompt_does_not_leak_forecast_fields():
+    memory = default_memory("demo")
+    memory["recent_context.json"]["orchestration_forecast"] = {
+        "for_backend_only": True,
+        "hotload_next_turn": {"actor_modules": ["npc_voice_deep"]},
+        "upcoming_assets": [{"id": "x", "future_asset": "secret"}],
+        "hidden_reason": "backend only",
+        "future_node": "node_secret",
+    }
+
+    prompt = build_chatgpt_input("demo", "继续", memory, _pressure_pack(), _plan(["base_actor"]))
+
+    for forbidden in (
+        "orchestration_forecast",
+        "hotload_next_turn",
+        "upcoming_assets",
+        "hidden_reason",
+        "future_node",
+        "future_asset",
+    ):
+        assert forbidden not in prompt
+
+
+def test_build_director_prompt_preloads_visual_and_map_rules_without_authorizing_payloads():
+    memory = default_memory("demo")
+    memory["recent_context.json"]["turn_index"] = 2
+    memory["recent_context.json"]["orchestration_forecast"] = {
+        "for_backend_only": True,
+        "source_turn": 2,
+        "expires_at_turn": 4,
+        "valid_until_node_id": "",
+        "hotload_next_turn": {
+            "director_modules": ["director_visual_payload_min"],
+            "payload_modules": ["director_map_payload_min"],
+        },
+    }
+
+    plan = build_capability_plan("demo", "继续", memory)
+    prompt = build_director_user_prompt("demo", "继续", memory, plan)
+
+    assert "visual_preload" in plan["loaded_capabilities"]
+    assert "map_preload" in plan["loaded_capabilities"]
+    assert "## Prompt Module: director_visual_payload_min" in prompt
+    assert "## Prompt Module: director_map_payload_min" in prompt
     assert plan["output_contract"]["allow_visual_assets"] is False
     assert plan["output_contract"]["allow_map_payload"] is False
 

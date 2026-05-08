@@ -173,6 +173,22 @@ function currentRunProgress() {
   return state.job.runProgress || {};
 }
 
+function currentAssetCache() {
+  return state.assets.assetCache || {};
+}
+
+function currentModulePayloadCache() {
+  return state.assets.modulePayloadCache || {};
+}
+
+function currentUiState() {
+  return state.ui || {};
+}
+
+function currentStoryState() {
+  return state.story || {};
+}
+
 const $ = (id) => document.getElementById(id);
 const ASSET_GENERATOR_VERSION = 19;
 const PORTRAIT_SPEC_VERSION = "story_linked_canvas_portrait.v1";
@@ -189,7 +205,7 @@ function init() {
   resetCampaignScopedUiState("");
   loadCanvasRules();
   refresh();
-  state.polling = setInterval(refresh, 2500);
+  state.job.polling = setInterval(refresh, 2500);
 }
 
 function bindControls() {
@@ -284,28 +300,28 @@ function bindControls() {
   });
   document.querySelectorAll("[data-side-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.sideTab = button.dataset.sideTab;
+      state.ui.sideTab = button.dataset.sideTab;
       document.querySelectorAll("[data-side-tab]").forEach((x) => x.classList.toggle("active", x === button));
-      if (state.sideTab === "items") {
-        const inventoryModule = state.frontendState?.modules?.inventory || {};
+      if (state.ui.sideTab === "items") {
+        const inventoryModule = state.campaign.frontendState?.modules?.inventory || {};
         if (inventoryModule.payload_ref) {
           loadModulePayload(inventoryModule.payload_ref, "inventory").then((data) => {
-            if (data?.payload && data.campaign_id === state.activeCampaign) {
-              state.latestInventoryPayload = data.payload;
-              renderSidePanel(state.lastCampaignState);
+            if (data?.payload && data.campaign_id === state.campaign.activeCampaign) {
+              state.character.latestInventoryPayload = data.payload;
+              renderSidePanel(state.campaign.lastCampaignState);
             }
           }).catch((err) => console.warn("inventory module unavailable", err));
         }
       }
-      renderSidePanel(state.lastCampaignState);
+      renderSidePanel(state.campaign.lastCampaignState);
     });
   });
   document.querySelectorAll("[data-collapse-panel]").forEach((button) => {
     button.addEventListener("click", () => toggleCollapsePanel(button.dataset.collapsePanel));
   });
   $("autoScrollBtn").addEventListener("click", () => {
-    state.autoScroll = !state.autoScroll;
-    $("autoScrollBtn").classList.toggle("active", state.autoScroll);
+    state.ui.autoScroll = !state.ui.autoScroll;
+    $("autoScrollBtn").classList.toggle("active", state.ui.autoScroll);
   });
   $("storyProgressTopBtn")?.addEventListener("click", openStoryProgressOverlay);
   document.addEventListener("click", (event) => {
@@ -318,14 +334,14 @@ function bindControls() {
 }
 
 function toggleCollapsePanel(name) {
-  if (!Object.prototype.hasOwnProperty.call(state.collapsedPanels, name)) return;
-  state.collapsedPanels[name] = !state.collapsedPanels[name];
+  if (!Object.prototype.hasOwnProperty.call(state.ui.collapsedPanels, name)) return;
+  state.ui.collapsedPanels[name] = !state.ui.collapsedPanels[name];
   applyCollapseState();
 }
 
 function applyCollapseState() {
   const leftColumn = document.querySelector(".leftColumn");
-  Object.entries(state.collapsedPanels).forEach(([name, collapsed]) => {
+  Object.entries(state.ui.collapsedPanels).forEach(([name, collapsed]) => {
     leftColumn?.classList.toggle(`${name}-collapsed`, collapsed);
     const panel = document.querySelector(`.${name}Panel`);
     panel?.classList.toggle("collapsed", collapsed);
@@ -347,7 +363,7 @@ function collapsePanelLabel(name) {
 }
 
 function initDraggablePanels() {
-  state.dragPanels = loadDragPanelState();
+  state.ui.dragPanels = loadDragPanelState();
   [
     { id: "task", selector: ".taskPanel", handle: ".panelTitle", label: "任务物品卡" },
     { id: "memory", selector: ".memoryPanel", handle: ".panelTitle", label: "近期记忆卡" },
@@ -377,7 +393,7 @@ function beginPanelDrag(event, id, panel) {
   const bounds = floatingPanelBounds();
   const width = Math.min(Math.max(260, rect.width), bounds.width);
   const height = Math.min(Math.max(160, rect.height), Math.max(180, bounds.height * 0.9));
-  state.activeDragPanel = {
+  state.ui.activeDragPanel = {
     id,
     panel,
     offsetX: event.clientX - rect.left,
@@ -395,7 +411,7 @@ function beginPanelDrag(event, id, panel) {
 }
 
 function movePanelDrag(event) {
-  const drag = state.activeDragPanel;
+  const drag = state.ui.activeDragPanel;
   if (!drag) return;
   const bounds = floatingPanelBounds();
   const maxLeft = Math.max(bounds.left, bounds.right - drag.width);
@@ -409,11 +425,11 @@ function movePanelDrag(event) {
 }
 
 function endPanelDrag() {
-  const drag = state.activeDragPanel;
+  const drag = state.ui.activeDragPanel;
   if (!drag) return;
   drag.panel.classList.remove("is-dragging");
   const rect = drag.panel.getBoundingClientRect();
-  state.dragPanels[drag.id] = {
+  state.ui.dragPanels[drag.id] = {
     left: Math.round(rect.left),
     top: Math.round(rect.top),
     width: Math.round(rect.width),
@@ -421,11 +437,11 @@ function endPanelDrag() {
   };
   saveDragPanelState();
   document.removeEventListener("pointermove", movePanelDrag);
-  state.activeDragPanel = null;
+  state.ui.activeDragPanel = null;
 }
 
 function applyDragPanelState(id, panel) {
-  const saved = state.dragPanels[id];
+  const saved = state.ui.dragPanels[id];
   if (!saved || window.matchMedia("(max-width: 900px)").matches) return;
   const bounds = floatingPanelBounds();
   const width = Math.min(Math.max(260, Number(saved.width) || panel.offsetWidth), bounds.width);
@@ -439,7 +455,7 @@ function applyDragPanelState(id, panel) {
 }
 
 function resetDragPanel(id, panel) {
-  delete state.dragPanels[id];
+  delete state.ui.dragPanels[id];
   panel.classList.remove("floatingPanel", "is-dragging");
   ["left", "top", "width", "height", "zIndex"].forEach((prop) => {
     panel.style[prop] = "";
@@ -502,7 +518,7 @@ function loadDragPanelState() {
 }
 
 function saveDragPanelState() {
-  localStorage.setItem(DRAG_PANEL_STORAGE_KEY, JSON.stringify(state.dragPanels || {}));
+  localStorage.setItem(DRAG_PANEL_STORAGE_KEY, JSON.stringify(state.ui.dragPanels || {}));
 }
 
 async function api(path, options = {}) {
@@ -521,11 +537,11 @@ async function loadModulePayload(ref, moduleName = "") {
 
 async function loadModulePayloadWithOptions(ref, moduleName = "", options = {}) {
   if (!ref || ref.startsWith("asset://")) return null;
-  const key = `${state.activeCampaign}:${moduleName}:${ref}`;
-  if (!options.force && state.modulePayloadCache[key]) return state.modulePayloadCache[key];
+  const key = `${state.campaign.activeCampaign}:${moduleName}:${ref}`;
+  if (!options.force && state.assets.modulePayloadCache[key]) return state.assets.modulePayloadCache[key];
   const data = await api(ref);
-  if (data.campaign_id && state.activeCampaign && data.campaign_id !== state.activeCampaign) return null;
-  state.modulePayloadCache[key] = data;
+  if (data.campaign_id && state.campaign.activeCampaign && data.campaign_id !== state.campaign.activeCampaign) return null;
+  state.assets.modulePayloadCache[key] = data;
   return data;
 }
 
@@ -546,7 +562,7 @@ async function submitActionEvent(action, source = "action") {
   }
   await startJob(
     "/api/run-turn",
-    { action: value, campaign_id: state.activeCampaign, source },
+    { action: value, campaign_id: state.campaign.activeCampaign, source },
     { storyProgress: true, clearInputOnSuccess: true, actionEvent: true },
   );
 }
@@ -557,15 +573,15 @@ async function prepareOnly() {
     showPanel("logs");
     return setLog("玩家行动不能为空。");
   }
-  await startJob("/api/prepare", { action, campaign_id: state.activeCampaign });
+  await startJob("/api/prepare", { action, campaign_id: state.campaign.activeCampaign });
 }
 
 async function runCommand(name) {
-  await startJob("/api/command", { name, campaign_id: state.activeCampaign });
+  await startJob("/api/command", { name, campaign_id: state.campaign.activeCampaign });
 }
 
 function exportCampaign() {
-  const params = state.activeCampaign ? `?campaign_id=${encodeURIComponent(state.activeCampaign)}` : "";
+  const params = state.campaign.activeCampaign ? `?campaign_id=${encodeURIComponent(state.campaign.activeCampaign)}` : "";
   window.open(`/api/export-campaign${params}`, "_blank");
 }
 
@@ -603,21 +619,21 @@ async function refresh() {
     const data = await api("/api/frontend-state");
     const previousCampaign = activeCampaignId();
     const nextCampaign = data.active_campaign || "";
-    state.frontendState = data.frontend_state || {};
-    state.streamingPreview = Boolean(data.streaming_preview);
-    state.activeCampaign = nextCampaign;
-    state.assetSeed = state.frontendState.asset_seed || state.frontendState.campaign?.asset_seed || nextCampaign || "";
+    state.campaign.frontendState = data.frontend_state || {};
+    state.campaign.streamingPreview = Boolean(data.streaming_preview);
+    state.campaign.activeCampaign = nextCampaign;
+    state.campaign.assetSeed = state.campaign.frontendState.asset_seed || state.campaign.frontendState.campaign?.asset_seed || nextCampaign || "";
     if (previousCampaign !== nextCampaign) {
       resetCampaignScopedUiState(nextCampaign);
     }
-    state.currentPressurePack = data.output?.pressure_pack || {};
+    state.story.currentPressurePack = data.output?.pressure_pack || {};
     if (Array.isArray(data.assets)) {
-      state.cachedAssets = data.assets.filter(isAssetForCurrentCampaign);
+      state.assets.cachedAssets = data.assets.filter(isAssetForCurrentCampaign);
     }
     if (previousCampaign !== nextCampaign) await loadCachedAssets();
     renderStatus(data);
     updateRunProgressFromPipeline(data.pipeline || {}, data.job || {}, data.output || {});
-    renderFrontendState(state.frontendState, data.campaign_state || {});
+    renderFrontendState(state.campaign.frontendState, data.campaign_state || {});
     renderOutput(data.output || {});
   } catch (err) {
     setBusy(false, true);
@@ -628,8 +644,8 @@ async function refresh() {
 
 function renderStatus(data) {
   state.campaigns = data.campaign_list || [];
-  state.activeCampaign = data.active_campaign || "";
-  state.selectedCampaign = state.selectedCampaign || activeCampaignId();
+  state.campaign.activeCampaign = data.active_campaign || "";
+  state.campaign.selectedCampaign = state.campaign.selectedCampaign || activeCampaignId();
   setText("campaignName", campaignTitle(activeCampaignId()) || "-");
 
   const scene = data.campaign_state?.recent?.current_scene || {};
@@ -651,38 +667,38 @@ function renderStatus(data) {
   const output = [job.output, job.error, cmd].filter(Boolean).join("\n");
   if (output) setLog(output);
 
-  if (state.lastJobRunning && !job.running && !failed) showPanel("story");
-  state.lastJobRunning = Boolean(job.running);
+  if (state.job.lastJobRunning && !job.running && !failed) showPanel("story");
+  state.job.lastJobRunning = Boolean(job.running);
 }
 
 async function loadCanvasRules() {
   try {
     const data = await api("/api/canvas-rules");
-    state.canvasRules = data.rules || "";
+    state.assets.canvasRules = data.rules || "";
   } catch (err) {
     console.warn("canvas rules unavailable", err);
-    state.canvasRules = "";
+    state.assets.canvasRules = "";
   }
 }
 
 async function loadCachedAssets() {
-  if (!state.activeCampaign) {
-    state.cachedAssets = [];
+  if (!state.campaign.activeCampaign) {
+    state.assets.cachedAssets = [];
     return;
   }
   try {
-    const data = await api(`/api/assets?campaign_id=${encodeURIComponent(state.activeCampaign)}`);
-    state.cachedAssets = (Array.isArray(data.assets) ? data.assets : []).filter(isAssetForCurrentCampaign);
+    const data = await api(`/api/assets?campaign_id=${encodeURIComponent(state.campaign.activeCampaign)}`);
+    state.assets.cachedAssets = (Array.isArray(data.assets) ? data.assets : []).filter(isAssetForCurrentCampaign);
   } catch (err) {
     console.warn("asset list unavailable", err);
-    state.cachedAssets = [];
+    state.assets.cachedAssets = [];
   }
 }
 
 function invalidateModulePayloadCache(moduleName) {
   const needle = `:${moduleName}:`;
-  Object.keys(state.modulePayloadCache || {}).forEach((key) => {
-    if (key.includes(needle)) delete state.modulePayloadCache[key];
+  Object.keys(state.assets.modulePayloadCache || {}).forEach((key) => {
+    if (key.includes(needle)) delete state.assets.modulePayloadCache[key];
   });
 }
 
@@ -757,9 +773,9 @@ function resetStoryProgressDropdown() {
   if (legacyBar) legacyBar.style.width = "0%";
   const details = $("storyProgressDetails");
   if (details) details.innerHTML = "";
-  state.storyProgressPayload = {};
-  state.storyProgressChapter = {};
-  state.storyProgressNode = {};
+  state.story.storyProgressPayload = {};
+  state.story.storyProgressChapter = {};
+  state.story.storyProgressNode = {};
   setText("storyProgressDialogOverall", "0%");
   setText("storyProgressDialogChapter", "-");
   setText("storyProgressDialogNode", "-");
@@ -814,18 +830,18 @@ function isAssetForCurrentCampaign(asset) {
   if (!asset) return false;
   const cid = asset.campaign_id || asset.campaignId || "";
   const seed = asset.asset_seed || asset.assetSeed || "";
-  if (!cid || cid !== state.activeCampaign) return false;
-  if (seed && state.assetSeed && seed !== state.assetSeed) return false;
+  if (!cid || cid !== state.campaign.activeCampaign) return false;
+  if (seed && state.campaign.assetSeed && seed !== state.campaign.assetSeed) return false;
   if (asset.placeholder || asset.is_placeholder || asset.metadata?.placeholder) return false;
   return true;
 }
 
 function findCurrentCampaignAsset(predicate) {
-  return (state.cachedAssets || []).find((asset) => isAssetForCurrentCampaign(asset) && predicate(asset));
+  return (state.assets.cachedAssets || []).find((asset) => isAssetForCurrentCampaign(asset) && predicate(asset));
 }
 
 function visualContractFor(entityKey = "", entityType = "", displayName = "") {
-  const rows = state.visualContracts || {};
+  const rows = state.assets.visualContracts || {};
   if (entityKey && rows[entityKey]) return rows[entityKey];
   const normalizedType = slugify(entityType || "");
   const normalizedDisplay = slugify(displayName || "");
@@ -864,8 +880,8 @@ function visualPromptFromContract(contract = {}) {
 }
 
 function makeScopedAssetKey(kind, objectId, variant = "default") {
-  const campaignId = state.activeCampaign || "unknown_campaign";
-  const seed = state.assetSeed || campaignId;
+  const campaignId = state.campaign.activeCampaign || "unknown_campaign";
+  const seed = state.campaign.assetSeed || campaignId;
   const object = slugify(objectId || "unknown");
   return `${campaignId}:${seed}:${kind}:${object}:${variant}:v${ASSET_GENERATOR_VERSION}`;
 }
@@ -907,7 +923,7 @@ function renderCachedMap(scene, mapPanel = {}) {
   const modulePayload = mapPanel.payload || mapPanel.latest_map || {};
   const mode = mapPanel.mode || (mapPanel.keep_previous ? "keep_previous" : "none");
   const updateRequested = mapPanel.update_requested === true;
-  const seed = scene.location || state.activeCampaign || "map";
+  const seed = scene.location || state.campaign.activeCampaign || "map";
   const route = modulePayload.map_route || {};
   const mapCanvas = modulePayload.map_canvas || {};
   const routeKey = mapCanvas.title || route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
@@ -922,11 +938,11 @@ function renderCachedMap(scene, mapPanel = {}) {
       ? modulePayload.url
       : cached?.url || "";
     if (!url) {
-      state.currentMapAsset = null;
+      state.map.currentMapAsset = null;
       showMapEmptyState();
       return;
     }
-    state.currentMapAsset = galleryMapAssetFromEntry(cached, modulePayload, scene, route, mapCanvas);
+    state.map.currentMapAsset = galleryMapAssetFromEntry(cached, modulePayload, scene, route, mapCanvas);
     showMapImage(url, modulePayload.asset_key || cached?.key || "");
     return;
   }
@@ -938,7 +954,7 @@ function renderCachedMap(scene, mapPanel = {}) {
   const objectId = slugify(`${scene.location || "current_map"}:${routeKey || "base"}`);
   const mapKey = makeScopedAssetKey("map", objectId, "route");
   const mapScene = { ...scene, map_route: route, map_canvas: mapCanvas };
-  state.currentMapAsset = {
+  state.map.currentMapAsset = {
     kind: "scene",
     key: mapKey,
     title: route.title || scene.location || "当前区域地图",
@@ -949,8 +965,8 @@ function renderCachedMap(scene, mapPanel = {}) {
     cachedUrl: modulePayload.url || "",
     status: "current",
   };
-  if (state.renderedMapKey === mapKey) return;
-  state.renderedMapKey = mapKey;
+  if (state.map.renderedMapKey === mapKey) return;
+  state.map.renderedMapKey = mapKey;
   const mapWrap = document.querySelector(".mapCanvas");
   if (mapWrap) {
     mapWrap.tabIndex = 0;
@@ -988,18 +1004,18 @@ function galleryMapAssetFromEntry(entry, modulePayload = {}, scene = {}, route =
     title: modulePayload.title || metadata.title || scene.location || "当前区域地图",
     meta: metadata.meta || "当前地图",
     detail: metadata.detail || scene.immediate_pressure || "当前展示的区域地图。",
-    seed: scopedSeed(scene.location || state.activeCampaign || "map"),
+    seed: scopedSeed(scene.location || state.campaign.activeCampaign || "map"),
     scene: { ...scene, map_route: route, map_canvas: mapCanvas },
     cachedUrl: url,
     status: "cached",
-    campaign_id: state.activeCampaign,
-    asset_seed: state.assetSeed,
+    campaign_id: state.campaign.activeCampaign,
+    asset_seed: state.campaign.assetSeed,
   };
 }
 
 function renderCampaignState(campaignState) {
-  state.lastCampaignState = campaignState;
-  const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
+  state.campaign.lastCampaignState = campaignState;
+  const title = campaignState.title || campaignTitle(state.campaign.activeCampaign) || "未命名跑团";
   const recent = campaignState.recent || {};
   const scene = recent.current_scene || {};
   const card = buildCharacterCard(campaignState, title, scene);
@@ -1048,7 +1064,7 @@ function buildCharacterCard(campaignState, fallbackTitle, scene) {
     name,
     meta: roleParts.length ? roleParts.join(" / ") : fallbackRole,
     profile,
-    visual_profile: provided.visual_profile || state.frontendState?.character_card?.visual_profile || buildPlayerVisualProfile({ name, meta: roleParts.join(" / "), profile }, campaignState),
+    visual_profile: provided.visual_profile || state.campaign.frontendState?.character_card?.visual_profile || buildPlayerVisualProfile({ name, meta: roleParts.join(" / "), profile }, campaignState),
     progression,
     vitals: normalizeVitals(vitalsSource, mode, fallback),
     conditions: normalizeConditions(provided.conditions || provided.tags || provided.badges, campaignState, scene),
@@ -1112,9 +1128,9 @@ function hidePlayerHiddenAdminPanels() {
 function renderFrontendState(frontendState, campaignState) {
   const fs = frontendState || {};
   const modules = fs.modules || {};
-  state.lastCampaignState = campaignState;
-  state.visualContracts = fs.visual_contracts?.contracts || {};
-  state.galleryTaxonomy = fs.gallery_taxonomy || fs.gallery?.taxonomy || {};
+  state.campaign.lastCampaignState = campaignState;
+  state.assets.visualContracts = fs.visual_contracts?.contracts || {};
+  state.gallery.galleryTaxonomy = fs.gallery_taxonomy || fs.gallery?.taxonomy || {};
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
   renderRollActions(fs.roll_actions || []);
@@ -1124,7 +1140,7 @@ function renderFrontendState(frontendState, campaignState) {
   });
   renderSidePanel(campaignState, fs);
   renderMemoryPanel(campaignState);
-  renderGalleryFilters(fs.gallery?.filters || [], state.galleryTaxonomy);
+  renderGalleryFilters(fs.gallery?.filters || [], state.gallery.galleryTaxonomy);
   if (!modules.gallery || modules.gallery.mode !== "no_update") {
     renderGallery(campaignState, fs.gallery || {}, modules.gallery);
   }
@@ -1136,30 +1152,30 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
   Object.entries(modules || {}).forEach(([name, moduleState]) => {
     if (!moduleState?.payload_ref) return;
     const shouldLoad = moduleState.update_requested === true
-      || (name === "story_log" && ["story", "summary", "logs"].includes(state.activePanel))
-      || (name === "gallery" && (!(state.galleryAssets || []).length || !document.getElementById("galleryOverlay")?.classList.contains("hidden")));
+      || (name === "story_log" && ["story", "summary", "logs"].includes(state.ui.activePanel))
+      || (name === "gallery" && (!(state.gallery.galleryAssets || []).length || !document.getElementById("galleryOverlay")?.classList.contains("hidden")));
     if (!shouldLoad) return;
     loadModulePayload(moduleState.payload_ref, name)
       .then((data) => {
-        if (!data?.payload || (data.campaign_id && data.campaign_id !== state.activeCampaign)) return;
+        if (!data?.payload || (data.campaign_id && data.campaign_id !== state.campaign.activeCampaign)) return;
         if (name === "story_log") {
           renderOutput({
             campaign_id: data.campaign_id,
             source: data.payload.source || "module:story-log",
             parsed: data.payload,
-            pressure_pack: state.currentPressurePack || {},
+            pressure_pack: state.story.currentPressurePack || {},
           });
         } else if (name === "gallery") {
-          state.galleryTaxonomy = data.payload.taxonomy || frontendState.gallery_taxonomy || frontendState.gallery?.taxonomy || state.galleryTaxonomy || {};
-          renderGalleryFilters(data.payload.filters || frontendState.gallery?.filters || [], state.galleryTaxonomy);
+          state.gallery.galleryTaxonomy = data.payload.taxonomy || frontendState.gallery_taxonomy || frontendState.gallery?.taxonomy || state.gallery.galleryTaxonomy || {};
+          renderGalleryFilters(data.payload.filters || frontendState.gallery?.filters || [], state.gallery.galleryTaxonomy);
           renderGallery(campaignState, data.payload || {}, { ...moduleState, payload: data.payload });
         } else if (name === "map_panel") {
           updateMapModule(data.payload || {}, campaignState);
         } else if (name === "inventory") {
-          state.latestInventoryPayload = data.payload || [];
+          state.character.latestInventoryPayload = data.payload || [];
           renderSidePanel(campaignState, frontendState);
         } else if (name === "dossier") {
-          state.latestDossierPayload = data.payload || [];
+          state.character.latestDossierPayload = data.payload || [];
         }
       })
       .catch((err) => console.warn(`module payload unavailable: ${name}`, err));
@@ -1167,17 +1183,17 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
 }
 
 async function refreshStoryLogNow() {
-  if (!state.activeCampaign) return;
+  if (!state.campaign.activeCampaign) return;
   invalidateModulePayloadCache("story_log");
-  const moduleState = state.frontendState?.modules?.story_log || {};
-  const ref = moduleState.payload_ref || `/api/module/story-log?campaign_id=${encodeURIComponent(state.activeCampaign)}&limit=40`;
+  const moduleState = state.campaign.frontendState?.modules?.story_log || {};
+  const ref = moduleState.payload_ref || `/api/module/story-log?campaign_id=${encodeURIComponent(state.campaign.activeCampaign)}&limit=40`;
   const data = await loadModulePayloadWithOptions(ref, "story_log", { force: true });
-  if (!data?.payload || (data.campaign_id && data.campaign_id !== state.activeCampaign)) return;
+  if (!data?.payload || (data.campaign_id && data.campaign_id !== state.campaign.activeCampaign)) return;
   renderOutput({
-    campaign_id: data.campaign_id || state.activeCampaign,
+    campaign_id: data.campaign_id || state.campaign.activeCampaign,
     source: data.payload.source || "module:story-log",
     parsed: data.payload,
-    pressure_pack: state.currentPressurePack || {},
+    pressure_pack: state.story.currentPressurePack || {},
   });
 }
 
@@ -1207,7 +1223,7 @@ function keepPreviousModule(name, moduleState = {}) {
     return asset.exists && asset.url && (kind === "map" || kind === "map_image" || kind.startsWith("gallery_map"));
   });
   if (cached?.url) {
-    state.currentMapAsset = galleryMapAssetFromEntry(cached);
+    state.map.currentMapAsset = galleryMapAssetFromEntry(cached);
     showMapImage(cached.url, cached.key);
   } else {
     showMapEmptyState();
@@ -1250,17 +1266,17 @@ function renderLayout() {
 
 function updateInventoryModule(moduleState = {}) {
   if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
-  state.latestInventoryPayload = moduleState.payload || [];
+  state.character.latestInventoryPayload = moduleState.payload || [];
 }
 
 function updateDossierModule(moduleState = {}) {
   if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
-  state.latestDossierPayload = moduleState.payload || [];
+  state.character.latestDossierPayload = moduleState.payload || [];
 }
 
 function updateCharacterCardModule(moduleState = {}, campaignState = {}) {
   if (moduleState.mode !== "update" || moduleState.update_requested !== true || !moduleState.payload) return;
-  const rules = state.frontendState?.rules_config || {};
+  const rules = state.campaign.frontendState?.rules_config || {};
   if (rules.character_card_enabled === false) return;
   renderCharacterCard(protocolCharacterCard({ ...moduleState.payload, stat_visibility: rules.stat_visibility || moduleState.payload.stat_visibility }, campaignState));
 }
@@ -1294,14 +1310,14 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
     }
     if (["portrait", "player_portrait"].includes(job.kind)) {
       const card = frontendState.modules?.character_card?.payload || frontendState.character_card || {};
-      const seed = card.name || job.asset_key || state.activeCampaign || "portrait";
+      const seed = card.name || job.asset_key || state.campaign.activeCampaign || "portrait";
       const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : hasVisualContract(card.visual_contract) ? card.visual_contract : visualContractFor(job.visual_contract_key || "", "player", card.name || seed);
-      const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, campaignState || state.lastCampaignState || {});
+      const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, campaignState || state.campaign.lastCampaignState || {});
       const visualHash = visualProfileHash(visualProfile);
       drawPixelActorPortrait(seed, {
         cache: true,
         objectId: slugify(job.asset_key || card.name || "portrait"),
-        seedText: scopedSeed(`${state.activeCampaign}:${job.asset_key}:${visualHash}:${currentStoryVisualContext()}`),
+        seedText: scopedSeed(`${state.campaign.activeCampaign}:${job.asset_key}:${visualHash}:${currentStoryVisualContext()}`),
         role: "player",
         kind: "player_portrait",
         visualProfile,
@@ -1402,12 +1418,12 @@ function isValidCanvasJob(job) {
   if (required.some((key) => !String(job[key] || "").trim())) return false;
   const text = required.map((key) => String(job[key] || "").toLowerCase()).join(" ");
   if (text.includes("placeholder") || text.includes("todo") || text.includes("tbd")) return false;
-  if (!state.activeCampaign || !state.assetSeed) return false;
+  if (!state.campaign.activeCampaign || !state.campaign.assetSeed) return false;
   return true;
 }
 
 function renderStoryProgressModule(moduleState = {}) {
-  const payload = moduleState.payload || state.frontendState?.story_progress || {};
+  const payload = moduleState.payload || state.campaign.frontendState?.story_progress || {};
   const panel = $("storyProgressPanel");
   if (!panel) return;
   if (payload.enabled === false) {
@@ -1452,9 +1468,9 @@ function renderStoryProgressDropdown(frontendState = {}) {
   const nodeName = node.name || node.title || "-";
   const pace = payload.pace_command || "normal";
   const status = payload.status_text || payload.progress_label || "故事进度正常。";
-  state.storyProgressPayload = payload;
-  state.storyProgressChapter = chapter;
-  state.storyProgressNode = node;
+  state.story.storyProgressPayload = payload;
+  state.story.storyProgressChapter = chapter;
+  state.story.storyProgressNode = node;
   setText("storyProgressTopTitle", chapterName !== "-" ? chapterName : "结构化进度");
   setText("storyProgressTopPace", pace);
   setText("storyProgressMenuTitle", chapterName !== "-" ? chapterName : "结构化进度");
@@ -1525,9 +1541,9 @@ function storyProgressDetailRow(label, value) {
 }
 
 function renderStoryProgressOverlayContent() {
-  const payload = state.storyProgressPayload || {};
-  const chapter = state.storyProgressChapter || payload.current_chapter || {};
-  const node = state.storyProgressNode || payload.current_node || {};
+  const payload = state.story.storyProgressPayload || {};
+  const chapter = state.story.storyProgressChapter || payload.current_chapter || {};
+  const node = state.story.storyProgressNode || payload.current_node || {};
   const overall = clampPercent(payload.overall_progress);
   const chapterName = chapter.name || chapter.title || "-";
   const nodeName = node.name || node.title || "-";
@@ -1566,7 +1582,7 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
     };
   }
   if (!card || !card.name) {
-    const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
+    const title = campaignState.title || campaignTitle(state.campaign.activeCampaign) || "未命名跑团";
     const scene = campaignState.recent?.current_scene || {};
     const localCard = buildCharacterCard(campaignState, title, scene);
     return {
@@ -1577,7 +1593,7 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
   }
   const provided = campaignState.player?.character_card || campaignState.character_prompt?.character_card || {};
   if (provided && (provided.profile || (provided.attributes && !Array.isArray(provided.attributes)))) {
-    const title = campaignState.title || campaignTitle(state.activeCampaign) || "未命名跑团";
+    const title = campaignState.title || campaignTitle(state.campaign.activeCampaign) || "未命名跑团";
     const scene = campaignState.recent?.current_scene || {};
     return buildCharacterCard(campaignState, title, scene);
   }
@@ -1615,7 +1631,7 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
     }),
     conditions: Array.isArray(card.tags) ? card.tags : [],
     attributes: statVisibility === "narrative" ? [] : (Array.isArray(card.attributes) ? card.attributes : []),
-    companion: protocolCompanionCard(state.frontendState?.companion_card, campaignState),
+    companion: protocolCompanionCard(state.campaign.frontendState?.companion_card, campaignState),
   };
 }
 
@@ -1732,7 +1748,7 @@ function normalizeCompanion(companion) {
   return {
     name,
     meta: companionDisplayMeta(rawMeta, archetype),
-    seed: companion.visual_seed || `companion:${state.activeCampaign}:${name}`,
+    seed: companion.visual_seed || `companion:${state.campaign.activeCampaign}:${name}`,
     archetype,
     raw: companion,
   };
@@ -1902,8 +1918,8 @@ function renderCharacterProfile(profile) {
   const toggle = $("characterProfileToggle");
   const details = $("characterProfileDetails");
   if (!holder) return;
-  if (state.characterProfileCampaign !== state.activeCampaign) {
-    state.characterProfileCampaign = state.activeCampaign;
+  if (state.characterProfileCampaign !== state.campaign.activeCampaign) {
+    state.characterProfileCampaign = state.campaign.activeCampaign;
     state.characterProfileExpanded = false;
   }
   const normalized = normalizeCharacterProfile(profile);
@@ -1976,7 +1992,7 @@ function renderCompanionCard(companion) {
     clearImageElement("companionImage");
     return;
   }
-  const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
+  const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.campaign.lastCampaignState || {}, {}, {});
   const visualHash = visualProfileHash(visualProfile);
   const visualContract = hasVisualContract(companion.visual_contract) ? companion.visual_contract : visualContractFor("", "companion", companion.name || "");
   const resolved = resolveVisualAsset({ ...companion, visual_profile: visualProfile, type: "companion", role: "companion", portrait: companion.portrait || {} });
@@ -2173,7 +2189,7 @@ function renderAttributeStar(attributes = [], characterName = "player") {
   const objectId = slugify(`${characterName || "player"}_attribute_star_${hashSeed(signature).toString(16)}`);
   const seedText = scopedSeed(`${characterName || "player"}:${signature}`);
   const draw = () => drawAttributeStarToCanvas(canvas, rows);
-  if (state.activeCampaign && image) {
+  if (state.campaign.activeCampaign && image) {
     cacheCanvasAsset({
       canvas,
       targetImage: image,
@@ -2294,14 +2310,14 @@ function normalizeStarAttributes(attributes = []) {
 }
 
 function currentCampaignMeta() {
-  return state.campaigns.find((campaign) => campaign.campaign_id === state.activeCampaign) || null;
+  return state.campaigns.find((campaign) => campaign.campaign_id === state.campaign.activeCampaign) || null;
 }
 
-function renderSidePanel(campaignState, frontendState = state.frontendState || {}) {
+function renderSidePanel(campaignState, frontendState = state.campaign.frontendState || {}) {
   const list = $("sideList");
   if (!list) return;
-  const rows = state.sideTab === "items" ? protocolInventoryRows(frontendState, campaignState) : protocolQuestRows(frontendState, campaignState);
-  const fallback = state.sideTab === "items" ? ["暂无物品记录"] : ["暂无任务记录"];
+  const rows = state.ui.sideTab === "items" ? protocolInventoryRows(frontendState, campaignState) : protocolQuestRows(frontendState, campaignState);
+  const fallback = state.ui.sideTab === "items" ? ["暂无物品记录"] : ["暂无任务记录"];
   list.innerHTML = "";
   (rows.length ? rows.slice(-5) : fallback.map((title) => ({ title, tag: "记录" }))).forEach((row, index) => {
     const li = document.createElement("li");
@@ -2315,7 +2331,7 @@ function renderSidePanel(campaignState, frontendState = state.frontendState || {
     const span = document.createElement("span");
     span.textContent = row.tag || (index === rows.length - 1 ? "当前" : "记录");
     li.append(b, span);
-    makeTextDraggable(li, `${row.title || row}${row.detail ? `：${row.detail}` : ""}`, row.tag || state.sideTab);
+    makeTextDraggable(li, `${row.title || row}${row.detail ? `：${row.detail}` : ""}`, row.tag || state.ui.sideTab);
     list.appendChild(li);
   });
 }
@@ -2517,13 +2533,13 @@ function dedupeRows(rows) {
 }
 
 async function renderOutput(output) {
-  if (output.campaign_id && state.activeCampaign && output.campaign_id !== state.activeCampaign) {
-    clearStoryTurnHistory(state.activeCampaign);
+  if (output.campaign_id && state.campaign.activeCampaign && output.campaign_id !== state.campaign.activeCampaign) {
+    clearStoryTurnHistory(state.campaign.activeCampaign);
     renderStoryBlocks([], "当前跑团暂无正文记录。");
     setText("summaryText", `已拦截其他跑团的正文记录：${output.campaign_id}`);
     setText("directorText", JSON.stringify({
       warning: "output campaign mismatch",
-      active_campaign: state.activeCampaign,
+      active_campaign: state.campaign.activeCampaign,
       output_campaign: output.campaign_id,
     }, null, 2));
     return;
@@ -2575,10 +2591,10 @@ async function renderOutput(output) {
 }
 
 async function loadWritebackReview(options = {}) {
-  if (!state.activeCampaign) return;
+  if (!state.campaign.activeCampaign) return;
   try {
-    const data = await api(`/api/writeback-review?campaign_id=${encodeURIComponent(state.activeCampaign)}`);
-    state.writebackReview = data;
+    const data = await api(`/api/writeback-review?campaign_id=${encodeURIComponent(state.campaign.activeCampaign)}`);
+    state.writeback.writebackReview = data;
     renderWritebackReview(data);
   } catch (err) {
     if (!options.silent) {
@@ -2592,7 +2608,7 @@ async function loadWritebackReview(options = {}) {
 }
 
 function appendStoryTurnHistory(blocks, fallbackText, output = {}) {
-  const campaignId = state.activeCampaign || output.campaign_id || "default";
+  const campaignId = state.campaign.activeCampaign || output.campaign_id || "default";
   const rows = visibleStoryBlocks(blocks);
   const turnBlocks = rows.length ? rows : fallbackPlayerInstructionBlocks(fallbackText);
   if (!turnBlocks.length) return [];
@@ -2641,7 +2657,7 @@ function isEmptyStoryPlaceholder(text = "") {
   return !normalized || ["暂无正文。", "暂无正文", "当前跑团暂无正文记录。", "当前跑团暂无正文记录"].includes(normalized);
 }
 
-function clearStoryTurnHistory(campaignId = state.activeCampaign || "default") {
+function clearStoryTurnHistory(campaignId = state.campaign.activeCampaign || "default") {
   delete state.storyTurnsByCampaign[campaignId];
   delete state.storyTurnSignatures[campaignId];
 }
@@ -2656,13 +2672,13 @@ function storyTurnSignature(blocks, output = {}) {
     choices: Array.isArray(block.choices) ? block.choices.map((choice) => choice.label || choice.text || "") : [],
   }));
   return stableJson({
-    campaign_id: output.campaign_id || state.activeCampaign || "",
+    campaign_id: output.campaign_id || state.campaign.activeCampaign || "",
     blocks: simplified,
   });
 }
 
 function renderCharacterPortrait(card) {
-  const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, state.lastCampaignState || {});
+  const visualProfile = card.visual_profile || buildPlayerVisualProfile(card, state.campaign.lastCampaignState || {});
   const visualHash = visualProfileHash(visualProfile);
   const visualContract = hasVisualContract(card.visual_contract) ? card.visual_contract : visualContractFor("", "player", card?.name || "");
   const resolved = resolveVisualAsset({ ...card, visual_profile: visualProfile, type: "player", role: "player", portrait: card?.portrait || {} });
@@ -2708,8 +2724,8 @@ function renderCharacterPortrait(card) {
 }
 
 function currentStoryVisualContext() {
-  const scene = state.lastCampaignState?.recent?.current_scene || {};
-  const pressure = state.currentPressurePack || {};
+  const scene = state.campaign.lastCampaignState?.recent?.current_scene || {};
+  const pressure = state.story.currentPressurePack || {};
   return [
     scene.location,
     scene.immediate_pressure,
@@ -2733,7 +2749,7 @@ function showAvatarPlaceholder(id) {
   img.removeAttribute("src");
   img.classList.add("is-empty");
   img.dataset.assetKey = "";
-  img.dataset.campaignId = state.activeCampaign || "";
+  img.dataset.campaignId = state.campaign.activeCampaign || "";
 }
 
 function showAvatarImage(id, url, assetKey = "") {
@@ -2742,15 +2758,15 @@ function showAvatarImage(id, url, assetKey = "") {
   img.onload = () => img.classList.remove("is-empty");
   img.onerror = () => showAvatarPlaceholder(id);
   img.dataset.assetKey = assetKey;
-  img.dataset.campaignId = state.activeCampaign || "";
+  img.dataset.campaignId = state.campaign.activeCampaign || "";
   setAssetImage(img, url);
 }
 
-function resolveVisualAsset(entityLike = {}, frontendState = state.frontendState || {}, cachedAssets = state.cachedAssets || []) {
+function resolveVisualAsset(entityLike = {}, frontendState = state.campaign.frontendState || {}, cachedAssets = state.assets.cachedAssets || []) {
   return resolveActorAvatar(entityLike, frontendState, cachedAssets);
 }
 
-function normalizeAssetIdentity(asset = {}, campaignState = state.frontendState || {}) {
+function normalizeAssetIdentity(asset = {}, campaignState = state.campaign.frontendState || {}) {
   const metadata = asset.metadata || {};
   const rawRole = metadata.runtime_role || metadata.role || asset.runtime_role || asset.role || roleFromEntityKey(metadata.entity_key || asset.entity_key || "") || asset.kind || "";
   const runtimeRole = normalizeRuntimeRole(rawRole);
@@ -2777,7 +2793,7 @@ function normalizeAssetIdentity(asset = {}, campaignState = state.frontendState 
   };
 }
 
-function resolveActorIdentity(source = {}, campaignState = state.frontendState || {}, assets = state.cachedAssets || []) {
+function resolveActorIdentity(source = {}, campaignState = state.campaign.frontendState || {}, assets = state.assets.cachedAssets || []) {
   const registry = campaignState.visual_registry || {};
   const avatarIndex = campaignState.avatar_index || registry.avatar_index || {};
   const rawName = source.display_name || source.name || source.title || source.speaker || source.actor_id || source.key || "";
@@ -2803,11 +2819,11 @@ function resolveActorIdentity(source = {}, campaignState = state.frontendState |
     gallery_category: role === "player" || role === "companion" ? "hidden" : normalizeGalleryKind(source.kind) || role,
     visible_in_gallery: !["player", "companion"].includes(role),
     not_in_gallery_filters: ["player", "companion"].includes(role),
-    fallback_seed: `${state.activeCampaign}:${entityKey}:${role}`,
+    fallback_seed: `${state.campaign.activeCampaign}:${entityKey}:${role}`,
   };
 }
 
-function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.cachedAssets || [], expectedVisualHash = "") {
+function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.assets.cachedAssets || [], expectedVisualHash = "") {
   const matches = (Array.isArray(assets) ? assets : []).filter((asset) => {
     if (!asset?.exists || !asset.url) return false;
     if (isAttributeStarAsset(asset)) return false;
@@ -2819,7 +2835,7 @@ function selectBestAvatarAsset(entityKey, portraitAssetKind, assets = state.cach
   return matches[0] || null;
 }
 
-function resolveActorAvatar(source = {}, campaignState = state.frontendState || {}, assets = state.cachedAssets || []) {
+function resolveActorAvatar(source = {}, campaignState = state.campaign.frontendState || {}, assets = state.assets.cachedAssets || []) {
   const identity = resolveActorIdentity(source, campaignState, assets);
   const visualProfile = source.visual_profile || identity.visual_profile || {};
   const expectedVisualHash = visualProfileHash(visualProfile);
@@ -2840,7 +2856,7 @@ function resolveActorAvatar(source = {}, campaignState = state.frontendState || 
     display_name: identity.display_name || source.display_name || source.name || source.title || identity.entity_key,
     visual_profile: visualProfile,
     visual_profile_hash: expectedVisualHash,
-    fallback_seed: identity.fallback_seed || `${state.activeCampaign}:${identity.entity_key}:${identity.runtime_role || identity.role}`,
+    fallback_seed: identity.fallback_seed || `${state.campaign.activeCampaign}:${identity.entity_key}:${identity.runtime_role || identity.role}`,
     renderer: identity.runtime_role === "item" ? "item_icon" : "actor_portrait",
     visible_in_gallery: Boolean(identity.visible_in_gallery),
   };
@@ -2883,8 +2899,8 @@ function avatarPriority(asset = {}) {
 }
 
 function canonicalEntityKeyForBlock(block = {}) {
-  const registry = state.frontendState?.visual_registry || {};
-  const playerName = state.frontendState?.character_card?.name || $("characterName")?.textContent || "";
+  const registry = state.campaign.frontendState?.visual_registry || {};
+  const playerName = state.campaign.frontendState?.character_card?.name || $("characterName")?.textContent || "";
   if (block.type === "player_action") return makeEntityKey("player", playerName || displaySpeaker(block) || block.actor_id || "player");
   if (block.type !== "npc_dialogue") return "";
   const match = findVisualRegistryEntity({
@@ -2901,7 +2917,7 @@ function canonicalEntityKeyForBlock(block = {}) {
   return makeEntityKey(role, candidate || displaySpeaker(block) || block.actor_id || "npc");
 }
 
-function findVisualRegistryEntity(entityLike = {}, registry = state.frontendState?.visual_registry || {}) {
+function findVisualRegistryEntity(entityLike = {}, registry = state.campaign.frontendState?.visual_registry || {}) {
   const actorRows = Object.values(registry.actors || {});
   const objectRows = Object.values(registry.objects || {});
   const rows = [...actorRows, ...objectRows];
@@ -2934,7 +2950,7 @@ function findVisualRegistryEntity(entityLike = {}, registry = state.frontendStat
       asset_kind: "companion_portrait",
       portrait_asset_kind: "companion_portrait",
       display_name: companion.name,
-      fallback_seed: `${state.activeCampaign}:${key}:companion`,
+      fallback_seed: `${state.campaign.activeCampaign}:${key}:companion`,
       renderer: "actor_portrait",
       visible_in_gallery: false,
       gallery_category: "hidden",
@@ -3038,7 +3054,7 @@ async function auditWriteback() {
     setText("writebackDecision", "导演审核中");
     const data = await api("/api/audit-writeback", {
       method: "POST",
-      body: JSON.stringify({ campaign_id: state.activeCampaign }),
+      body: JSON.stringify({ campaign_id: state.campaign.activeCampaign }),
     });
     renderWritebackReview(data);
   } catch (err) {
@@ -3048,13 +3064,13 @@ async function auditWriteback() {
 }
 
 async function applyWriteback() {
-  const decision = state.writebackReview?.decision;
+  const decision = state.writeback.writebackReview?.decision;
   if (!["accept", "revise"].includes(decision)) return;
   if (!window.confirm("写入长期记忆？系统会先备份将被修改的记忆文件。")) return;
   try {
     const data = await api("/api/apply-writeback", {
       method: "POST",
-      body: JSON.stringify({ campaign_id: state.activeCampaign }),
+      body: JSON.stringify({ campaign_id: state.campaign.activeCampaign }),
     });
     setText("writebackDecision", "已写入");
     setText("writebackHint", `更新文件：${(data.updated_files || []).join(", ") || "无"}`);
@@ -3080,7 +3096,7 @@ function renderStoryBlocks(blocks, fallbackText) {
   });
   renderInlineRunProgress();
   scrollActiveFeed();
-  if (state.runProgress.active && blocks.length) scrollStoryToBottom(true);
+  if (state.job.runProgress.active && blocks.length) scrollStoryToBottom(true);
 }
 
 function protocolQuestRows(frontendState = {}, campaignState = {}) {
@@ -3096,8 +3112,8 @@ function protocolQuestRows(frontendState = {}, campaignState = {}) {
 }
 
 function protocolInventoryRows(frontendState = {}, campaignState = {}) {
-  const rows = Array.isArray(state.latestInventoryPayload) && state.latestInventoryPayload.length
-    ? state.latestInventoryPayload
+  const rows = Array.isArray(state.character.latestInventoryPayload) && state.character.latestInventoryPayload.length
+    ? state.character.latestInventoryPayload
     : Array.isArray(frontendState.inventory) ? frontendState.inventory : [];
   if (rows.length) {
     return rows.map((row) => ({
@@ -3537,23 +3553,23 @@ function renderStoryPicker() {
   stories.innerHTML = "";
   const usingDemoCampaigns = !state.campaigns.length;
   const availableCampaigns = state.campaigns.length ? state.campaigns : demoCampaigns();
-  if (!state.selectedCampaign && availableCampaigns[0]) {
-    state.selectedCampaign = availableCampaigns[0].campaign_id;
+  if (!state.campaign.selectedCampaign && availableCampaigns[0]) {
+    state.campaign.selectedCampaign = availableCampaigns[0].campaign_id;
   }
   availableCampaigns.forEach((campaign) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `campaignRailItem${campaign.campaign_id === state.selectedCampaign ? " active" : ""}`;
+    button.className = `campaignRailItem${campaign.campaign_id === state.campaign.selectedCampaign ? " active" : ""}`;
     button.innerHTML = `<b>${escapeHtml(campaign.title || campaign.name || campaign.campaign_id)}</b>`;
     button.addEventListener("click", () => {
-      state.selectedCampaign = campaign.campaign_id;
+      state.campaign.selectedCampaign = campaign.campaign_id;
       renderStoryPicker();
     });
     campaigns.appendChild(button);
   });
-  const selected = availableCampaigns.find((x) => x.campaign_id === state.selectedCampaign) || availableCampaigns[0];
+  const selected = availableCampaigns.find((x) => x.campaign_id === state.campaign.selectedCampaign) || availableCampaigns[0];
   if (!selected) return;
-  const isActive = selected.campaign_id === state.activeCampaign;
+  const isActive = selected.campaign_id === state.campaign.activeCampaign;
   const detail = document.createElement("div");
   detail.className = "pickerCampaignDetail";
   detail.innerHTML = `
@@ -3595,7 +3611,7 @@ async function loadCampaignProfile(campaignId) {
   if (!campaignId) return;
   try {
     const data = await api(`/api/campaign-profile?campaign_id=${encodeURIComponent(campaignId)}`);
-    if (state.selectedCampaign !== campaignId) return;
+    if (state.campaign.selectedCampaign !== campaignId) return;
     const profile = data.profile || {};
     const mechanics = profile.mechanics || {};
     setInputValue("profileTitle", profile.title || "");
@@ -3670,8 +3686,8 @@ async function selectCampaign(campaignId) {
     method: "POST",
     body: JSON.stringify({ campaign_id: campaignId }),
   });
-  state.activeCampaign = campaignId;
-  state.selectedCampaign = campaignId;
+  state.campaign.activeCampaign = campaignId;
+  state.campaign.selectedCampaign = campaignId;
   resetCampaignScopedUiState(campaignId);
   closeStoryPicker();
   await refresh();
@@ -3689,9 +3705,9 @@ async function deleteCampaign(campaignId, title = "") {
     });
     const status = data.status || {};
     state.campaigns = status.campaign_list || [];
-    state.activeCampaign = status.active_campaign || "";
-    state.selectedCampaign = state.activeCampaign || state.campaigns[0]?.campaign_id || "";
-    resetCampaignScopedUiState(state.activeCampaign);
+    state.campaign.activeCampaign = status.active_campaign || "";
+    state.campaign.selectedCampaign = state.campaign.activeCampaign || state.campaigns[0]?.campaign_id || "";
+    resetCampaignScopedUiState(state.campaign.activeCampaign);
     await refresh();
     renderStoryPicker();
     window.alert("故事已删除。");
@@ -3713,7 +3729,7 @@ async function createCampaign() {
       method: "POST",
       body: JSON.stringify({ campaign_id: campaignId, name, template }),
     });
-    state.selectedCampaign = campaignId;
+    state.campaign.selectedCampaign = campaignId;
     await refresh();
     renderStoryPicker();
     setPickerNotice("跑团已创建。请继续绑定固定对话。");
@@ -3725,7 +3741,7 @@ async function createCampaign() {
 async function saveChatGPTBinding() {
   const projectName = $("bindingProject").value.trim();
   const conversationName = $("bindingConversation").value.trim();
-  const campaignId = state.selectedCampaign || state.activeCampaign;
+  const campaignId = state.campaign.selectedCampaign || state.campaign.activeCampaign;
   if (!campaignId) return setPickerNotice("请先选择跑团。");
   if (!projectName || !conversationName) return setPickerNotice("请填写 Project 和固定对话名称。");
   try {
@@ -3742,7 +3758,7 @@ async function saveChatGPTBinding() {
 }
 
 async function saveCampaignProfile() {
-  const campaignId = state.selectedCampaign || state.activeCampaign;
+  const campaignId = state.campaign.selectedCampaign || state.campaign.activeCampaign;
   if (!campaignId) return setPickerNotice("请先选择跑团。");
   try {
     await api("/api/campaign-profile", {
@@ -3769,7 +3785,7 @@ async function saveCampaignProfile() {
 }
 
 async function setCampaignArchiveStatus(status) {
-  const campaignId = state.selectedCampaign || state.activeCampaign;
+  const campaignId = state.campaign.selectedCampaign || state.campaign.activeCampaign;
   if (!campaignId) return setPickerNotice("请先选择跑团。");
   try {
     await api("/api/campaign-status", {
@@ -3777,7 +3793,7 @@ async function setCampaignArchiveStatus(status) {
       body: JSON.stringify({ campaign_id: campaignId, status }),
     });
     await refresh();
-    state.selectedCampaign = campaignId;
+    state.campaign.selectedCampaign = campaignId;
     renderStoryPicker();
     setPickerNotice(status === "archived" ? "跑团已归档，未删除任何文件。" : "跑团已恢复。");
   } catch (err) {
@@ -3791,7 +3807,7 @@ function setPickerNotice(text) {
 }
 
 function showPanel(name) {
-  state.activePanel = name;
+  state.ui.activePanel = name;
   ["story", "director", "writeback", "memory", "logs", "summary"].forEach((item) => {
     const el = $(`${item}Tab`);
     if (el) el.classList.toggle("hidden", item !== name);
@@ -3800,15 +3816,15 @@ function showPanel(name) {
     button.classList.toggle("active", button.dataset.panelTab === name);
   });
   if (["story", "summary", "logs"].includes(name)) {
-    hydrateLazyFrontendModules(state.frontendState?.modules || {}, state.frontendState || {}, state.lastCampaignState || {});
+    hydrateLazyFrontendModules(state.campaign.frontendState?.modules || {}, state.campaign.frontendState || {}, state.campaign.lastCampaignState || {});
   }
   scrollActiveFeed();
 }
 
 function setGalleryFilter(filter) {
-  state.galleryFilter = filter || "all";
+  state.gallery.galleryFilter = filter || "all";
   document.querySelectorAll("#galleryFilters button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.filter === state.galleryFilter);
+    button.classList.toggle("active", button.dataset.filter === state.gallery.galleryFilter);
   });
   let visibleCount = 0;
   document.querySelectorAll("#galleryGrid article").forEach((card) => {
@@ -3819,7 +3835,7 @@ function setGalleryFilter(filter) {
       gallery_category: card.dataset.galleryCategory,
       visible_in_gallery: card.dataset.visibleInGallery !== "false",
       not_in_gallery_filters: card.dataset.notInGalleryFilters === "true",
-    }, state.galleryFilter);
+    }, state.gallery.galleryFilter);
     card.classList.toggle("hidden", !visible);
     card.hidden = !visible;
     if (visible) visibleCount += 1;
@@ -3965,8 +3981,8 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   const fallbackAssets = buildVisualAssets(campaignState).map((asset) => normalizeGalleryAssetForFixedFilters(asset)).filter(Boolean);
   const cachedAssets = cachedGalleryAssets().map((asset) => normalizeGalleryAssetForFixedFilters(asset)).filter(Boolean);
   const assets = markGalleryArchiveState(protocolAssets.length ? mergeGalleryAssets(protocolAssets, cachedAssets) : mergeGalleryAssets(fallbackAssets, cachedAssets))
-    .filter((asset) => !asset.campaign_id || asset.campaign_id === state.activeCampaign);
-  state.galleryAssets = assets;
+    .filter((asset) => !asset.campaign_id || asset.campaign_id === state.campaign.activeCampaign);
+  state.gallery.galleryAssets = assets;
   grid.innerHTML = "";
   assets.forEach((asset) => {
     const card = document.createElement("article");
@@ -4003,17 +4019,17 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
     });
     drawGalleryAsset(image, asset);
   });
-  setGalleryFilter(state.galleryFilter);
+  setGalleryFilter(state.gallery.galleryFilter);
 }
 
-function renderGalleryFilters(filters, taxonomy = state.galleryTaxonomy || {}) {
+function renderGalleryFilters(filters, taxonomy = state.gallery.galleryTaxonomy || {}) {
   const holder = $("galleryFilters");
   if (!holder) return;
   const resolvedFilters = Array.isArray(filters) && filters.length ? filters : galleryFiltersFromTaxonomy(taxonomy);
   if (!resolvedFilters.length) return;
-  state.galleryFilterIds = resolvedFilters.map((filter) => filter.key).filter(Boolean);
-  const current = resolvedFilters.some((filter) => filter.key === state.galleryFilter) ? state.galleryFilter : "all";
-  state.galleryFilter = current;
+  state.gallery.galleryFilterIds = resolvedFilters.map((filter) => filter.key).filter(Boolean);
+  const current = resolvedFilters.some((filter) => filter.key === state.gallery.galleryFilter) ? state.gallery.galleryFilter : "all";
+  state.gallery.galleryFilter = current;
   holder.innerHTML = "";
   resolvedFilters.forEach((filter) => {
     const button = document.createElement("button");
@@ -4021,7 +4037,7 @@ function renderGalleryFilters(filters, taxonomy = state.galleryTaxonomy || {}) {
     button.dataset.filter = filter.key;
     button.textContent = filter.label || filter.key;
     button.title = filter.label || filter.key;
-    button.classList.toggle("active", filter.key === state.galleryFilter);
+    button.classList.toggle("active", filter.key === state.gallery.galleryFilter);
     button.addEventListener("click", () => setGalleryFilter(filter.key));
     holder.appendChild(button);
   });
@@ -4067,8 +4083,8 @@ function protocolGalleryAsset(asset) {
     createdAt: asset.created_at || "",
     visualPrompt: asset.visual_hint || asset.visual_prompt || asset.visualPrompt || {},
     imagePrompt: asset.image_prompt || asset.imagePrompt || {},
-    campaign_id: asset.campaign_id || state.activeCampaign,
-    asset_seed: asset.asset_seed || state.assetSeed,
+    campaign_id: asset.campaign_id || state.campaign.activeCampaign,
+    asset_seed: asset.asset_seed || state.campaign.assetSeed,
     role: role || asset.role || "",
     runtime_role: asset.runtime_role || asset.metadata?.runtime_role || role || "",
     gallery_category: asset.gallery_category || asset.metadata?.gallery_category || kind,
@@ -4100,29 +4116,29 @@ function markGalleryArchiveState(assets) {
 }
 
 function openCurrentMapOverlay() {
-  if (!state.currentMapAsset) return;
-  openGalleryOverlay(state.currentMapAsset.key, state.currentMapAsset);
+  if (!state.map.currentMapAsset) return;
+  openGalleryOverlay(state.map.currentMapAsset.key, state.map.currentMapAsset);
 }
 
 function openGalleryOverlay(assetKey = "", transientAsset = null) {
-  state.transientGalleryAsset = transientAsset;
-  const galleryModule = state.frontendState?.modules?.gallery || {};
+  state.gallery.transientGalleryAsset = transientAsset;
+  const galleryModule = state.campaign.frontendState?.modules?.gallery || {};
   if (galleryModule.payload_ref) {
     loadModulePayload(galleryModule.payload_ref, "gallery").then((data) => {
-      if (!data?.payload || data.campaign_id !== state.activeCampaign) return;
-      renderGalleryFilters(data.payload.filters || state.frontendState?.gallery?.filters || []);
-      renderGallery(state.lastCampaignState || {}, data.payload || {}, { ...galleryModule, payload: data.payload });
-      if (assetKey) state.selectedGalleryKey = assetKey;
+      if (!data?.payload || data.campaign_id !== state.campaign.activeCampaign) return;
+      renderGalleryFilters(data.payload.filters || state.campaign.frontendState?.gallery?.filters || []);
+      renderGallery(state.campaign.lastCampaignState || {}, data.payload || {}, { ...galleryModule, payload: data.payload });
+      if (assetKey) state.gallery.selectedGalleryKey = assetKey;
       renderGalleryDialog();
     }).catch((err) => console.warn("gallery module unavailable", err));
   }
-  const requested = state.galleryAssets.find((asset) => asset.key === assetKey);
-  if (requested && !galleryAssetMatchesFilter(requested, state.galleryFilter)) {
-    state.galleryFilter = fixedGalleryKind(requested.kind) || normalizeGalleryKind(requested.kind) || requested.kind;
-    setGalleryFilter(state.galleryFilter);
+  const requested = state.gallery.galleryAssets.find((asset) => asset.key === assetKey);
+  if (requested && !galleryAssetMatchesFilter(requested, state.gallery.galleryFilter)) {
+    state.gallery.galleryFilter = fixedGalleryKind(requested.kind) || normalizeGalleryKind(requested.kind) || requested.kind;
+    setGalleryFilter(state.gallery.galleryFilter);
   }
   const assets = filteredGalleryAssets();
-  state.selectedGalleryKey = assetKey || state.selectedGalleryKey || assets[0]?.key || state.galleryAssets[0]?.key || "";
+  state.gallery.selectedGalleryKey = assetKey || state.gallery.selectedGalleryKey || assets[0]?.key || state.gallery.galleryAssets[0]?.key || "";
   renderGalleryDialog();
   const overlay = $("galleryOverlay");
   overlay.classList.remove("hidden");
@@ -4134,13 +4150,13 @@ function closeGalleryOverlay() {
   if (!overlay) return;
   overlay.classList.add("hidden");
   overlay.setAttribute("aria-hidden", "true");
-  state.transientGalleryAsset = null;
+  state.gallery.transientGalleryAsset = null;
 }
 
 function filteredGalleryAssets() {
-  const rows = state.galleryAssets.filter((asset) => galleryAssetMatchesFilter(asset, state.galleryFilter));
-  if (state.transientGalleryAsset) {
-    return [state.transientGalleryAsset, ...rows.filter((asset) => asset.key !== state.transientGalleryAsset.key)];
+  const rows = state.gallery.galleryAssets.filter((asset) => galleryAssetMatchesFilter(asset, state.gallery.galleryFilter));
+  if (state.gallery.transientGalleryAsset) {
+    return [state.gallery.transientGalleryAsset, ...rows.filter((asset) => asset.key !== state.gallery.transientGalleryAsset.key)];
   }
   return rows;
 }
@@ -4168,21 +4184,21 @@ function renderGalleryDialog() {
     renderGalleryInspector(null);
     return;
   }
-  if (!assets.some((asset) => asset.key === state.selectedGalleryKey)) {
-    state.selectedGalleryKey = assets[0].key;
+  if (!assets.some((asset) => asset.key === state.gallery.selectedGalleryKey)) {
+    state.gallery.selectedGalleryKey = assets[0].key;
   }
   assets.forEach((asset) => {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = `galleryDialogItem${asset.key === state.selectedGalleryKey ? " active" : ""}`;
+    row.className = `galleryDialogItem${asset.key === state.gallery.selectedGalleryKey ? " active" : ""}`;
     row.innerHTML = `<b>${escapeHtml(asset.title)}</b><small>${escapeHtml(galleryDetail(asset))}</small><span>${escapeHtml(assetStatusLabel(asset))}</span>`;
     row.addEventListener("click", () => {
-      state.selectedGalleryKey = asset.key;
+      state.gallery.selectedGalleryKey = asset.key;
       renderGalleryDialog();
     });
     list.appendChild(row);
   });
-  renderGalleryInspector(assets.find((asset) => asset.key === state.selectedGalleryKey) || assets[0]);
+  renderGalleryInspector(assets.find((asset) => asset.key === state.gallery.selectedGalleryKey) || assets[0]);
 }
 
 function renderGalleryInspector(asset) {
@@ -4212,7 +4228,7 @@ function renderGalleryInspector(asset) {
 }
 
 function useSelectedGalleryAsset() {
-  const asset = state.galleryAssets.find((item) => item.key === state.selectedGalleryKey);
+  const asset = state.gallery.galleryAssets.find((item) => item.key === state.gallery.selectedGalleryKey);
   if (!asset || !canUseGalleryAsset(asset)) return;
   const input = $("actionInput");
   if (!input) return;
@@ -4240,7 +4256,7 @@ function assetStatusLabel(asset) {
 
 async function loadMemoryReport() {
   try {
-    const params = state.activeCampaign ? `?campaign_id=${encodeURIComponent(state.activeCampaign)}` : "";
+    const params = state.campaign.activeCampaign ? `?campaign_id=${encodeURIComponent(state.campaign.activeCampaign)}` : "";
     const data = await api(`/api/memory-report${params}`);
     renderMemoryReport(data);
     showPanel("memory");
@@ -4385,8 +4401,8 @@ function buildVisualAssets(campaignState) {
       title: name,
       meta: "NPC",
       seed: scopedSeed(name),
-      campaign_id: state.activeCampaign,
-      asset_seed: state.assetSeed,
+      campaign_id: state.campaign.activeCampaign,
+      asset_seed: state.campaign.assetSeed,
     });
   });
   itemRows(campaignState).slice(-6).forEach((item, index) => {
@@ -4398,8 +4414,8 @@ function buildVisualAssets(campaignState) {
       meta: item.tag || "物品",
       seed: scopedSeed(`${item.title}:${item.detail}`),
       detail: item.detail,
-      campaign_id: state.activeCampaign,
-      asset_seed: state.assetSeed,
+      campaign_id: state.campaign.activeCampaign,
+      asset_seed: state.campaign.assetSeed,
       role: "",
       entity_key: itemEntity,
       assetKind: "item_icon",
@@ -4411,8 +4427,8 @@ function buildVisualAssets(campaignState) {
   return dedupeAssets([...rows, ...pressureAssets]).slice(0, 16);
 }
 
-function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCampaignState || {})) {
-  const assets = Array.isArray(state.currentPressurePack?.visual_assets) ? state.currentPressurePack.visual_assets : [];
+function pressureVisualAssets(protectedActors = protectedActorNames(state.campaign.lastCampaignState || {})) {
+  const assets = Array.isArray(state.story.currentPressurePack?.visual_assets) ? state.story.currentPressurePack.visual_assets : [];
   return assets.map((asset, index) => {
     const rawKind = String(asset.kind || "").toLowerCase();
     const displayZone = String(asset.display_zone || "").toLowerCase();
@@ -4436,8 +4452,8 @@ function pressureVisualAssets(protectedActors = protectedActorNames(state.lastCa
       sourceMemory: asset.source_memory || "",
       visualPrompt,
       imagePrompt: asset.image_prompt || asset.imagePrompt || buildImagePrompt(title, detail, kind),
-      campaign_id: state.activeCampaign,
-      asset_seed: state.assetSeed,
+      campaign_id: state.campaign.activeCampaign,
+      asset_seed: state.campaign.assetSeed,
     };
   }).filter(Boolean)
     .filter((asset) => asset.kind !== "scene" || asset.displayZone === "map")
@@ -4455,7 +4471,7 @@ function normalizePressureKind(kind) {
 }
 
 function cachedGalleryAssets() {
-  return (state.cachedAssets || []).filter((entry) => {
+  return (state.assets.cachedAssets || []).filter((entry) => {
     if (!isAssetForCurrentCampaign(entry)) return false;
     if (isAttributeStarAsset(entry)) return false;
     const kind = String(entry.kind || "");
@@ -4488,8 +4504,8 @@ function cachedGalleryAssets() {
       sourceObjectId: metadata.object_id || "",
       generatorVersion: entry.generator_version,
       imagePrompt: metadata.image_prompt || {},
-      campaign_id: entry.campaign_id || state.activeCampaign,
-      asset_seed: entry.asset_seed || state.assetSeed,
+      campaign_id: entry.campaign_id || state.campaign.activeCampaign,
+      asset_seed: entry.asset_seed || state.campaign.assetSeed,
       role: entry.role || metadata.role || "",
       runtime_role: metadata.runtime_role || entry.runtime_role || entry.role || metadata.role || "",
       gallery_category: metadata.gallery_category || entry.gallery_category || normalizedKind,
@@ -4503,8 +4519,8 @@ function cachedGalleryAssets() {
 
 function looksLikeGeneratedAssetTitle(title = "", key = "") {
   const text = normalizeActorName(title);
-  const seed = normalizeActorName(state.assetSeed || "");
-  const campaign = normalizeActorName(state.activeCampaign || "");
+  const seed = normalizeActorName(state.campaign.assetSeed || "");
+  const campaign = normalizeActorName(state.campaign.activeCampaign || "");
   const rawKey = normalizeActorName(key || "");
   if (!text) return true;
   if (seed && text.includes(seed.slice(0, 10))) return true;
@@ -4514,8 +4530,8 @@ function looksLikeGeneratedAssetTitle(title = "", key = "") {
   return false;
 }
 
-function protectedActorNames(campaignState = state.lastCampaignState || {}) {
-  const card = buildCharacterCard(campaignState, campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色", campaignState.recent?.current_scene || {});
+function protectedActorNames(campaignState = state.campaign.lastCampaignState || {}) {
+  const card = buildCharacterCard(campaignState, campaignTitle(state.campaign.activeCampaign) || state.campaign.activeCampaign || "玩家角色", campaignState.recent?.current_scene || {});
   return new Set([
     card.name,
     card.companion?.name,
@@ -4524,13 +4540,13 @@ function protectedActorNames(campaignState = state.lastCampaignState || {}) {
 
 function currentCompanion() {
   return buildCharacterCard(
-    state.lastCampaignState || {},
-    campaignTitle(state.activeCampaign) || state.activeCampaign || "玩家角色",
-    state.lastCampaignState?.recent?.current_scene || {},
+    state.campaign.lastCampaignState || {},
+    campaignTitle(state.campaign.activeCampaign) || state.campaign.activeCampaign || "玩家角色",
+    state.campaign.lastCampaignState?.recent?.current_scene || {},
   ).companion;
 }
 
-function buildPlayerVisualProfile(card = {}, campaignState = state.lastCampaignState || {}) {
+function buildPlayerVisualProfile(card = {}, campaignState = state.campaign.lastCampaignState || {}) {
   const profile = normalizeCharacterProfile(card.profile || {});
   const context = [
     card.name,
@@ -4585,7 +4601,7 @@ function buildPlayerVisualProfile(card = {}, campaignState = state.lastCampaignS
   };
 }
 
-function buildCompanionVisualProfile(companion = {}, campaignState = state.lastCampaignState || {}, styleProfile = {}, imageProfile = {}) {
+function buildCompanionVisualProfile(companion = {}, campaignState = state.campaign.lastCampaignState || {}, styleProfile = {}, imageProfile = {}) {
   const existing = companion.visual_profile || companion.meta?.visual_profile;
   if (existing && typeof existing === "object") return existing;
   const meta = companion.meta || {};
@@ -4688,7 +4704,7 @@ function displaySpeaker(block) {
 }
 
 function visibleCompanion() {
-  return protocolCompanionCard(state.frontendState?.companion_card, state.lastCampaignState || {}) || currentCompanion();
+  return protocolCompanionCard(state.campaign.frontendState?.companion_card, state.campaign.lastCampaignState || {}) || currentCompanion();
 }
 
 function insertCompanionMention() {
@@ -4708,7 +4724,7 @@ function openCompanionOverlay() {
   renderCompanionData(companion);
   const image = $("companionDialogImage");
   if (image) {
-    const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.lastCampaignState || {}, {}, {});
+    const visualProfile = companion.visual_profile || buildCompanionVisualProfile(companion, state.campaign.lastCampaignState || {}, {}, {});
     const visualHash = visualProfileHash(visualProfile);
     const resolved = resolveVisualAsset({ ...companion, visual_profile: visualProfile, type: "companion", role: "companion", portrait: companion.portrait || {} });
     if (resolved.url) {
@@ -4846,9 +4862,9 @@ function fixedGalleryKind(kind) {
   if (["hidden", "companion", "companion_portrait"].includes(raw)) return "";
   if (raw.includes("gallery_npc")) return "";
   if (["generated_cg", "gallery_image", "formal_cg", "cg_image"].some((token) => raw.includes(token))) {
-    return (state.galleryFilterIds || []).includes("cg") ? "cg" : "";
+    return (state.gallery.galleryFilterIds || []).includes("cg") ? "cg" : "";
   }
-  const allowed = new Set((state.galleryFilterIds || []).filter((key) => key && key !== "all"));
+  const allowed = new Set((state.gallery.galleryFilterIds || []).filter((key) => key && key !== "all"));
   if (!allowed.size) return normalizeGalleryKind(kind);
   if (allowed.has(raw)) return raw;
   let value = normalizeGalleryKind(kind);
@@ -4917,7 +4933,7 @@ function readableAssetTitle(key, kind) {
     .replace(/^gallery_[^:]+:/, "")
     .replace(/^[^:]+:/, "")
     .replace(/:v\d+$/, "")
-    .replace(new RegExp(`^${escapeRegExp(state.activeCampaign)}:`), "")
+    .replace(new RegExp(`^${escapeRegExp(state.campaign.activeCampaign)}:`), "")
     .replace(/[_-]+/g, " ")
     .trim();
   return text || galleryKindLabel(kind);
@@ -4960,7 +4976,7 @@ function drawGalleryAsset(targetImage, asset) {
   const resolved = resolveVisualAsset({ ...asset, role: asset.role || asset.kind, type: asset.kind });
   if (targetImage) {
     targetImage.dataset.assetKey = resolved.asset_key || asset.key || "";
-    targetImage.dataset.campaignId = state.activeCampaign || "";
+    targetImage.dataset.campaignId = state.campaign.activeCampaign || "";
     targetImage.dataset.fallbackSeed = resolved.fallback_seed || resolved.entity_key || asset.key || asset.title || "";
   }
   if (resolved.url && resolved.asset_key && String(resolved.asset_key).includes(`:v${ASSET_GENERATOR_VERSION}`)) {
@@ -4985,7 +5001,7 @@ function drawGalleryAsset(targetImage, asset) {
     else if (asset.kind === "npc") drawPixelActorPortrait(asset.seed, { cache: false, role: "npc", canvas, targetImage: null });
     else drawPixelItemIcon(asset.seed || asset.title, { cache: false, canvas, targetImage: null, asset });
   };
-  if (state.activeCampaign) {
+  if (state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
@@ -5032,19 +5048,19 @@ function setBusy(running, error = false) {
 }
 
 function beginRunProgress() {
-  clearTimeout(state.runProgress.hideTimer);
+  clearTimeout(state.job.runProgress.hideTimer);
   stopRunStreamPolling();
-  state.runProgress.active = true;
-  state.runProgress.completing = false;
-  state.runProgress.percent = 0;
-  state.runProgress.target = 12;
-  state.runProgress.jobId = "";
-  state.runProgress.streamText = "";
-  state.runProgress.streamError = "";
-  state.runProgress.publicThink = [];
-  state.runProgress.publicNote = "";
-  state.runProgress.stage = "";
-  state.runProgress.needsHumanVerification = false;
+  state.job.runProgress.active = true;
+  state.job.runProgress.completing = false;
+  state.job.runProgress.percent = 0;
+  state.job.runProgress.target = 12;
+  state.job.runProgress.jobId = "";
+  state.job.runProgress.streamText = "";
+  state.job.runProgress.streamError = "";
+  state.job.runProgress.publicThink = [];
+  state.job.runProgress.publicNote = "";
+  state.job.runProgress.stage = "";
+  state.job.runProgress.needsHumanVerification = false;
   const panel = $("runProgress");
   if (panel) panel.classList.add("hidden");
   renderInlineRunProgress();
@@ -5053,64 +5069,64 @@ function beginRunProgress() {
 }
 
 function startRunProgressTween() {
-  if (state.runProgress.timer) return;
-  state.runProgress.timer = setInterval(() => {
-    if (!state.runProgress.active) return;
-    const diff = state.runProgress.target - state.runProgress.percent;
+  if (state.job.runProgress.timer) return;
+  state.job.runProgress.timer = setInterval(() => {
+    if (!state.job.runProgress.active) return;
+    const diff = state.job.runProgress.target - state.job.runProgress.percent;
     if (Math.abs(diff) < 0.35) {
-      state.runProgress.percent = state.runProgress.target;
+      state.job.runProgress.percent = state.job.runProgress.target;
     } else {
-      state.runProgress.percent += diff * 0.14;
+      state.job.runProgress.percent += diff * 0.14;
     }
-    paintRunProgress(state.runProgress.percent);
+    paintRunProgress(state.job.runProgress.percent);
   }, 80);
 }
 
 function setRunProgress(target, label) {
-  state.runProgress.target = Math.max(state.runProgress.target, Math.min(100, Number(target) || 0));
+  state.job.runProgress.target = Math.max(state.job.runProgress.target, Math.min(100, Number(target) || 0));
   setText("runProgressLabel", label || "处理中");
   setText("runProgressInlineLabel", label || "处理中");
   startRunProgressTween();
 }
 
 function startRunStreamPolling(jobId) {
-  state.runProgress.jobId = jobId || "";
-  if (!state.runProgress.jobId) return;
-  if (state.runProgress.streamTimer) clearInterval(state.runProgress.streamTimer);
+  state.job.runProgress.jobId = jobId || "";
+  if (!state.job.runProgress.jobId) return;
+  if (state.job.runProgress.streamTimer) clearInterval(state.job.runProgress.streamTimer);
   pollRunStream();
-  state.runProgress.streamTimer = setInterval(pollRunStream, 700);
+  state.job.runProgress.streamTimer = setInterval(pollRunStream, 700);
 }
 
 function stopRunStreamPolling() {
-  if (state.runProgress.streamTimer) clearInterval(state.runProgress.streamTimer);
-  state.runProgress.streamTimer = null;
+  if (state.job.runProgress.streamTimer) clearInterval(state.job.runProgress.streamTimer);
+  state.job.runProgress.streamTimer = null;
 }
 
 function stopRunProgressTween() {
-  if (state.runProgress.timer) clearInterval(state.runProgress.timer);
-  state.runProgress.timer = null;
+  if (state.job.runProgress.timer) clearInterval(state.job.runProgress.timer);
+  state.job.runProgress.timer = null;
 }
 
 async function pollRunStream() {
-  if (!state.runProgress.jobId) return;
+  if (!state.job.runProgress.jobId) return;
   try {
-    const data = await api(`/api/run-turn-stream?job_id=${encodeURIComponent(state.runProgress.jobId)}`);
-    state.runProgress.publicThink = Array.isArray(data.public_think) ? data.public_think : state.runProgress.publicThink || [];
-    state.runProgress.publicNote = data.public_note || state.runProgress.publicNote || "";
-    state.runProgress.stage = data.stage || state.runProgress.stage || "";
-    state.runProgress.needsHumanVerification = Boolean(data.needs_human_verification);
-    state.runProgress.streamError = data.error_tail || "";
+    const data = await api(`/api/run-turn-stream?job_id=${encodeURIComponent(state.job.runProgress.jobId)}`);
+    state.job.runProgress.publicThink = Array.isArray(data.public_think) ? data.public_think : state.job.runProgress.publicThink || [];
+    state.job.runProgress.publicNote = data.public_note || state.job.runProgress.publicNote || "";
+    state.job.runProgress.stage = data.stage || state.job.runProgress.stage || "";
+    state.job.runProgress.needsHumanVerification = Boolean(data.needs_human_verification);
+    state.job.runProgress.streamError = data.error_tail || "";
     renderInlineRunProgress();
     if (!data.running) stopRunStreamPolling();
   } catch (err) {
-    state.runProgress.streamError = err.message;
+    state.job.runProgress.streamError = err.message;
     renderInlineRunProgress();
     stopRunStreamPolling();
   }
 }
 
 function updateRunProgressFromPipeline(pipeline, job, output) {
-  if (!state.runProgress.active && !job.running) return;
+  if (!state.job.runProgress.active && !job.running) return;
   const stage = pipeline.stage || output.stage || "";
   const labels = {
     director_ready: "导演层完成",
@@ -5124,7 +5140,7 @@ function updateRunProgressFromPipeline(pipeline, job, output) {
   } else if (stage === "pending_parse") {
     setRunProgress(30, labels.pending_parse);
   } else if (job.running) {
-    setRunProgress(Math.max(state.runProgress.target, 18), "后台执行中");
+    setRunProgress(Math.max(state.job.runProgress.target, 18), "后台执行中");
   }
   const succeeded = job.returncode === 0 || job.returncode === undefined || job.returncode === null;
   const failed = job.returncode !== undefined && job.returncode !== null && job.returncode !== 0;
@@ -5141,13 +5157,13 @@ function updateRunProgressFromPipeline(pipeline, job, output) {
 }
 
 async function completeRunProgress() {
-  if (!state.runProgress.active || state.runProgress.completing) return;
-  state.runProgress.completing = true;
+  if (!state.job.runProgress.active || state.job.runProgress.completing) return;
+  state.job.runProgress.completing = true;
   setRunProgress(100, "已同步到页面");
   stopRunStreamPolling();
   stopRunProgressTween();
-  clearTimeout(state.runProgress.hideTimer);
-  state.runProgress.active = false;
+  clearTimeout(state.job.runProgress.hideTimer);
+  state.job.runProgress.active = false;
   const progress = $("runProgress");
   if (progress) progress.classList.add("hidden");
   renderInlineRunProgress();
@@ -5156,7 +5172,7 @@ async function completeRunProgress() {
 }
 
 function failRunProgress() {
-  if (!state.runProgress.active) return;
+  if (!state.job.runProgress.active) return;
   setText("runProgressLabel", "执行失败");
   setText("runProgressInlineLabel", "执行失败");
   const panel = $("runProgress");
@@ -5165,9 +5181,9 @@ function failRunProgress() {
   if (inline) inline.classList.add("failed");
   stopRunStreamPolling();
   stopRunProgressTween();
-  clearTimeout(state.runProgress.hideTimer);
-  state.runProgress.hideTimer = setTimeout(() => {
-    state.runProgress.active = false;
+  clearTimeout(state.job.runProgress.hideTimer);
+  state.job.runProgress.hideTimer = setTimeout(() => {
+    state.job.runProgress.active = false;
     const progress = $("runProgress");
     if (progress) progress.classList.add("hidden");
     renderInlineRunProgress();
@@ -5188,20 +5204,20 @@ function renderInlineRunProgress() {
   const container = $("storyText");
   if (!container) return;
   const existing = $("runProgressInline");
-  if (!state.runProgress.active) {
+  if (!state.job.runProgress.active) {
     existing?.remove();
     return;
   }
   const panel = existing || document.createElement("section");
   panel.id = "runProgressInline";
-  panel.className = `runProgress inline${state.runProgress.percent >= 99 ? " complete" : ""}${state.runProgress.streamError && !state.runProgress.active ? " failed" : ""}`;
+  panel.className = `runProgress inline${state.job.runProgress.percent >= 99 ? " complete" : ""}${state.job.runProgress.streamError && !state.job.runProgress.active ? " failed" : ""}`;
   panel.setAttribute("aria-live", "polite");
   panel.innerHTML = `
     <div class="runProgressHeader">
       <b id="runProgressInlineLabel">${escapeHtml($("runProgressLabel")?.textContent || "AI 正在生成")}</b>
-      <span id="runProgressInlinePercent">${Math.round(Math.max(0, Math.min(100, state.runProgress.percent)))}%</span>
+      <span id="runProgressInlinePercent">${Math.round(Math.max(0, Math.min(100, state.job.runProgress.percent)))}%</span>
     </div>
-    <div class="runProgressTrack"><span id="runProgressInlineBar" style="width:${Math.round(Math.max(0, Math.min(100, state.runProgress.percent)))}%"></span></div>
+    <div class="runProgressTrack"><span id="runProgressInlineBar" style="width:${Math.round(Math.max(0, Math.min(100, state.job.runProgress.percent)))}%"></span></div>
     <div class="runProgressStream" id="runProgressStreamText"></div>
   `;
   if (!existing) container.appendChild(panel);
@@ -5212,10 +5228,10 @@ function renderInlineRunProgress() {
 function renderRunStreamText() {
   const stream = $("runProgressStreamText");
   if (!stream) return;
-  const think = Array.isArray(state.runProgress.publicThink) ? state.runProgress.publicThink : [];
-  const note = String(state.runProgress.publicNote || "").trim();
-  const error = String(state.runProgress.streamError || "").trim();
-  if (state.runProgress.needsHumanVerification) {
+  const think = Array.isArray(state.job.runProgress.publicThink) ? state.job.runProgress.publicThink : [];
+  const note = String(state.job.runProgress.publicNote || "").trim();
+  const error = String(state.job.runProgress.streamError || "").trim();
+  if (state.job.runProgress.needsHumanVerification) {
     stream.textContent = "等待人工验证。请在常驻浏览器里完成验证，完成后系统会继续。";
     stream.classList.remove("empty");
     return;
@@ -5254,15 +5270,15 @@ function campaignTitle(campaignId) {
 }
 
 function scrollActiveFeed() {
-  if (!state.autoScroll) return;
-  const feed = $(`${state.activePanel}Tab`);
+  if (!state.ui.autoScroll) return;
+  const feed = $(`${state.ui.activePanel}Tab`);
   if (feed) feed.scrollTop = feed.scrollHeight;
 }
 
 function scrollStoryToBottom(force = false) {
   const feed = $("storyTab");
   if (!feed) return;
-  if (force || state.activePanel === "story" || state.autoScroll) {
+  if (force || state.ui.activePanel === "story" || state.ui.autoScroll) {
     feed.scrollTo({ top: feed.scrollHeight, behavior: "smooth" });
   }
 }
@@ -5281,7 +5297,7 @@ function hashSeed(text) {
 }
 
 function drawBlockAvatar(targetImage, block, role) {
-  const playerName = state.frontendState?.character_card?.name || $("characterName")?.textContent || "";
+  const playerName = state.campaign.frontendState?.character_card?.name || $("characterName")?.textContent || "";
   const entityKey = canonicalEntityKeyForBlock(block) || makeEntityKey(role, displaySpeaker(block) || block.actor_id || role);
   const canonicalRole = normalizeVisualRole(roleFromEntityKey(entityKey) || role);
   const speakerName = canonicalRole === "player" ? playerName : "";
@@ -5297,7 +5313,7 @@ function drawBlockAvatar(targetImage, block, role) {
   if (resolved.url) {
     if (targetImage) {
       targetImage.dataset.assetKey = resolved.asset_key || "";
-      targetImage.dataset.campaignId = state.activeCampaign || "";
+      targetImage.dataset.campaignId = state.campaign.activeCampaign || "";
       targetImage.dataset.fallbackSeed = resolved.fallback_seed || resolved.entity_key || "";
     }
     setAssetImage(targetImage, resolved.url);
@@ -5310,11 +5326,11 @@ function drawBlockAvatar(targetImage, block, role) {
   let kind, draw;
   if (canonicalRole === "companion") {
     const companion = visibleCompanion();
-    const visualProfile = buildCompanionVisualProfile(companion || { name: actorKey }, state.lastCampaignState || {}, {}, {});
+    const visualProfile = buildCompanionVisualProfile(companion || { name: actorKey }, state.campaign.lastCampaignState || {}, {}, {});
     const companionSeed = scopedSeed(resolved.fallback_seed || companion?.seed || companion?.name || actorKey);
     kind = "companion_portrait";
     draw = () => drawCompanionToCanvas(canvas, companionSeed, visualProfile.companion_type_preset || "custom", visualProfile);
-    if (state.activeCampaign) {
+    if (state.campaign.activeCampaign) {
       cacheCanvasAsset({
         canvas,
         targetImage,
@@ -5357,7 +5373,7 @@ function drawBlockAvatar(targetImage, block, role) {
     draw = () => drawPixelActorPortrait(actorSeed, { cache: false, role: "player", canvas, targetImage: null });
   }
 
-  if (state.activeCampaign) {
+  if (state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
@@ -5403,7 +5419,7 @@ function formalPortraitFeedbackAsset(actorKey = "", speaker = "", role = "") {
     : role === "companion"
       ? new Set(["companion", "companion_portrait"])
       : new Set(["npc_portrait"]);
-  const candidates = (state.cachedAssets || []).filter((asset) => {
+  const candidates = (state.assets.cachedAssets || []).filter((asset) => {
     if (!isAssetForCurrentCampaign(asset)) return false;
     if (!asset?.exists || !asset.url || !roleKinds.has(String(asset.kind || ""))) return false;
     const metadata = asset.metadata || {};
@@ -5501,10 +5517,10 @@ function drawPixelActorPortrait(seedText, options = {}) {
   const role = normalizeVisualRole(options.role || "npc");
   const canvas = options.canvas || createAssetCanvas(["player", "companion"].includes(role) ? 192 : 96, ["player", "companion"].includes(role) ? 192 : 96);
   const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
-  const effectiveSeed = options.seedText || scopedSeed(`${state.activeCampaign}:${seedText}:${role}`);
+  const effectiveSeed = options.seedText || scopedSeed(`${state.campaign.activeCampaign}:${seedText}:${role}`);
   const kind = options.kind || assetKindForRole(role);
   const visualProfile = options.visualProfile || {};
-  if (options.cache && state.activeCampaign) {
+  if (options.cache && state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
@@ -5549,7 +5565,7 @@ function drawPixelItemIcon(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(128, 128);
   const targetImage = options.targetImage || null;
   const asset = options.asset || { title: seedText, detail: "", kind: "item", seed: seedText };
-  if (options.cache && state.activeCampaign) {
+  if (options.cache && state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
@@ -5696,7 +5712,7 @@ function drawPixelAvatar(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(96, 96);
   const targetImage = options.targetImage === undefined ? $("avatarImage") : options.targetImage;
   const effectiveSeed = options.seedText || seedText;
-  if (options.cache && state.activeCampaign) {
+  if (options.cache && state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
@@ -5804,7 +5820,7 @@ function drawPlayerFullBodyToCanvas(canvas, seedText) {
 
 function drawStoryContextBackdrop(canvas, seedText, baseColor = "#d8c7a8", cells = 32) {
   const ctx = canvas.getContext("2d");
-  const seed = hashSeed(`story-bg:${state.activeCampaign}:${currentStoryVisualContext()}:${seedText}`);
+  const seed = hashSeed(`story-bg:${state.campaign.activeCampaign}:${currentStoryVisualContext()}:${seedText}`);
   const cell = canvas.width / cells;
   const fill = (x, y, w, h, color) => {
     ctx.fillStyle = color;
@@ -5812,7 +5828,7 @@ function drawStoryContextBackdrop(canvas, seedText, baseColor = "#d8c7a8", cells
   };
   ctx.fillStyle = baseColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const context = `${currentStoryVisualContext()} ${state.activeCampaign}`.toLowerCase();
+  const context = `${currentStoryVisualContext()} ${state.campaign.activeCampaign}`.toLowerCase();
   const night = /夜|雨|黑|暗|shadow|night|rain/.test(context) || ((seed >>> 4) & 1);
   const warm = /店|灯|市|火|market|light/.test(context) || ((seed >>> 6) & 1);
   fill(0, 0, cells, Math.max(7, Math.floor(cells * .36)), night ? "rgba(34,42,54,.42)" : "rgba(225,215,194,.58)");
@@ -5835,7 +5851,7 @@ function drawCompanionAvatar(seedText, options = {}) {
   const canvas = options.canvas || createAssetCanvas(192, 192);
   const targetImage = options.targetImage === undefined ? $("companionImage") : options.targetImage;
   const effectiveSeed = options.seedText || seedText;
-  const visualProfile = options.visualProfile || buildCompanionVisualProfile({ name: seedText, meta: options.metadata || {}, archetype: options.archetype }, state.lastCampaignState || {}, {}, {});
+  const visualProfile = options.visualProfile || buildCompanionVisualProfile({ name: seedText, meta: options.metadata || {}, archetype: options.archetype }, state.campaign.lastCampaignState || {}, {}, {});
   const profileHash = visualProfileHash(visualProfile);
   const metadata = {
     ...(options.metadata || {
@@ -5866,7 +5882,7 @@ function drawCompanionAvatar(seedText, options = {}) {
     visual_spec: "story_linked_canvas_portrait",
     variant: (options.metadata && options.metadata.variant) || `vp_${profileHash}`,
   };
-  if (options.cache && state.activeCampaign) {
+  if (options.cache && state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       targetImage,
@@ -6037,7 +6053,7 @@ function drawPixelMap(seedText, options = {}) {
   const canvas = options.canvas || $("mapCanvas");
   if (!canvas) return;
   const effectiveSeed = options.seedText || scopedSeed(seedText);
-  if (options.cache && state.activeCampaign) {
+  if (options.cache && state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
       kind: "map",
@@ -7422,11 +7438,11 @@ function isUrlForCurrentCampaign(url = "", assetKey = "") {
   const text = String(url || "");
   if (!text) return false;
   if (text.startsWith("/campaign-assets/")) {
-    return text.startsWith(`/campaign-assets/${encodeURIComponent(state.activeCampaign)}/`)
-      || text.startsWith(`/campaign-assets/${state.activeCampaign}/`);
+    return text.startsWith(`/campaign-assets/${encodeURIComponent(state.campaign.activeCampaign)}/`)
+      || text.startsWith(`/campaign-assets/${state.campaign.activeCampaign}/`);
   }
   if (assetKey) {
-    return String(assetKey).includes(state.activeCampaign || "") && (!state.assetSeed || String(assetKey).includes(state.assetSeed));
+    return String(assetKey).includes(state.campaign.activeCampaign || "") && (!state.campaign.assetSeed || String(assetKey).includes(state.campaign.assetSeed));
   }
   return !text.startsWith("/campaign-assets/");
 }
@@ -7439,7 +7455,7 @@ function showMapEmptyState(message = "暂无区域地图") {
     img.classList.add("hidden");
     img.classList.add("is-empty");
     img.dataset.assetKey = "";
-    img.dataset.campaignId = state.activeCampaign || "";
+    img.dataset.campaignId = state.campaign.activeCampaign || "";
   }
   if (empty) {
     empty.classList.remove("hidden");
@@ -7459,7 +7475,7 @@ function showMapImage(url, assetKey = "") {
   };
   img.onerror = () => showMapEmptyState("地图加载失败");
   img.dataset.assetKey = assetKey;
-  img.dataset.campaignId = state.activeCampaign || "";
+  img.dataset.campaignId = state.campaign.activeCampaign || "";
   setAssetImage(img, url);
 }
 
@@ -7468,8 +7484,8 @@ function clearMapPlaceholder() {
 }
 
 async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, seedText, metadata, draw }) {
-  const campaignId = state.activeCampaign;
-  const campaignSeed = state.assetSeed || campaignId || "campaign";
+  const campaignId = state.campaign.activeCampaign;
+  const campaignSeed = state.campaign.assetSeed || campaignId || "campaign";
   const safeId = slugify(objectId || seedText || kind);
   const key = makeScopedAssetKey(kind, safeId, metadata?.variant || "default");
   const safeSeed = slugify(campaignSeed).slice(0, 24) || "seed";
@@ -7485,11 +7501,11 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
   }
   const locked = lockedAvatarAsset(kind, safeId, metadata);
   if (locked?.url) {
-    state.assetCache[key] = { url: locked.url };
+    state.assets.assetCache[key] = { url: locked.url };
     setAssetImage(targetImage, locked.url);
     return;
   }
-  const memory = state.assetCache[key];
+  const memory = state.assets.assetCache[key];
   if (memory === "pending") {
     draw();
     setAssetImage(targetImage, canvas.toDataURL("image/png"));
@@ -7501,12 +7517,12 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
     drawImageToCanvas(canvas, memory.url, draw);
     return;
   }
-  state.assetCache[key] = "pending";
+  state.assets.assetCache[key] = "pending";
   try {
     const lookup = await api(`/api/asset?campaign_id=${encodeURIComponent(campaignId)}&key=${encodeURIComponent(key)}`);
     if (lookup.exists && lookup.url) {
       if (assetMetadataReusable(metadata, lookup.entry?.metadata)) {
-        state.assetCache[key] = { url: lookup.url };
+        state.assets.assetCache[key] = { url: lookup.url };
         setAssetImage(targetImage, lookup.url);
         if (targetImage && canvas.id !== "mapCanvas") return;
         drawImageToCanvas(canvas, lookup.url, draw);
@@ -7524,23 +7540,23 @@ async function cacheCanvasAsset({ canvas, targetImage, kind, subdir, objectId, s
         subdir,
         filename: `${kind}_${safeSeed}_${safeId}_v${ASSET_GENERATOR_VERSION}`,
         seed: String(seedText || key),
-        asset_seed: state.assetSeed || undefined,
+        asset_seed: state.campaign.assetSeed || undefined,
         style: "local_canvas_pixel",
         generator_version: ASSET_GENERATOR_VERSION,
         metadata: metadata || undefined,
         data_url: dataUrl,
       }),
     });
-    state.assetCache[key] = saved.url ? { url: saved.url } : null;
+    state.assets.assetCache[key] = saved.url ? { url: saved.url } : null;
     setAssetImage(targetImage, saved.url || dataUrl);
     if (saved.url) updateMapImageIfNeeded(canvas, saved.url);
     if (saved.url) {
       await loadCachedAssets();
-      if (state.lastCampaignState) renderGallery(state.lastCampaignState);
+      if (state.campaign.lastCampaignState) renderGallery(state.campaign.lastCampaignState);
     }
   } catch (err) {
     console.warn("asset cache failed", err);
-    state.assetCache[key] = null;
+    state.assets.assetCache[key] = null;
     draw();
     const dataUrl = canvas.toDataURL("image/png");
     setAssetImage(targetImage, dataUrl);
@@ -7553,10 +7569,10 @@ function lockedAvatarAsset(kind, safeId, metadata = {}) {
   const entityKey = metadata.entity_key || metadata.avatar_key || "";
   const portraitKind = metadata.portrait_asset_kind || kind;
   if (entityKey) {
-    const locked = selectBestAvatarAsset(entityKey, portraitKind, state.cachedAssets || []);
+    const locked = selectBestAvatarAsset(entityKey, portraitKind, state.assets.cachedAssets || []);
     if (locked && isVcgAvatarAsset(locked)) return locked;
   }
-  return (state.cachedAssets || []).find((asset) => {
+  return (state.assets.cachedAssets || []).find((asset) => {
     if (!isAssetForCurrentCampaign(asset)) return false;
     if (!asset?.exists || !asset.url || String(asset.kind || "") !== String(kind)) return false;
     if (assetVersionTag(asset) !== "VCG") return false;
@@ -7624,7 +7640,7 @@ function drawImageToCanvas(canvas, url, fallback) {
 
 function updateMapImageIfNeeded(canvas, url) {
   if (canvas.id !== "mapCanvas") return;
-  if (url) showMapImage(url, state.currentMapAsset?.key || "");
+  if (url) showMapImage(url, state.map.currentMapAsset?.key || "");
 }
 
 function slugify(value) {
@@ -7637,7 +7653,7 @@ function slugify(value) {
 }
 
 function scopedSeed(value) {
-  const seed = state.assetSeed || state.activeCampaign || "campaign";
+  const seed = state.campaign.assetSeed || state.campaign.activeCampaign || "campaign";
   const raw = String(value || "asset");
   const prefix = `${seed}:`;
   return raw.startsWith(prefix) ? raw : `${prefix}${raw}`;
@@ -7681,3 +7697,4 @@ function drawBackground() {
 }
 
 init();
+

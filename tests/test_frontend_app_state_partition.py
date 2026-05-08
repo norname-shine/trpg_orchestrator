@@ -51,8 +51,70 @@ def test_state_declares_expected_partitions_and_helpers():
         "currentAssets",
         "currentGalleryState",
         "currentRunProgress",
+        "currentAssetCache",
+        "currentModulePayloadCache",
+        "currentUiState",
+        "currentStoryState",
     ):
         assert f"function {helper}(" in source
+
+
+def test_legacy_state_proxy_remains_available():
+    source = app_source()
+
+    assert "const LEGACY_STATE_FIELDS = {" in source
+    assert "function partitionLegacyState()" in source
+    assert "partitionLegacyState();" in source
+
+    for field in (
+        "activeCampaign",
+        "frontendState",
+        "assetCache",
+        "galleryAssets",
+        "currentMapAsset",
+        "writebackReview",
+        "runProgress",
+        "dragPanels",
+    ):
+        assert re.search(rf"\b{field}\s*:\s*\[", source), f"missing legacy proxy for {field}"
+
+
+def test_low_risk_state_access_uses_partitions():
+    source = app_source()
+    legacy_reads = (
+        "activeCampaign",
+        "selectedCampaign",
+        "frontendState",
+        "lastCampaignState",
+        "assetSeed",
+        "streamingPreview",
+        "assetCache",
+        "cachedAssets",
+        "modulePayloadCache",
+        "galleryAssets",
+        "galleryFilter",
+        "galleryFilterIds",
+        "galleryTaxonomy",
+        "renderedMapKey",
+        "currentMapAsset",
+        "writebackReview",
+        "currentPressurePack",
+        "storyProgressPayload",
+        "storyProgressChapter",
+        "storyProgressNode",
+        "latestInventoryPayload",
+        "latestDossierPayload",
+        "runProgress",
+        "sideTab",
+        "activePanel",
+        "autoScroll",
+        "collapsedPanels",
+        "dragPanels",
+        "activeDragPanel",
+    )
+
+    for field in legacy_reads:
+        assert not re.search(rf"\bstate\.{field}\b", source), f"state.{field} should use a partition"
 
 
 def test_reset_campaign_scoped_state_keeps_drag_panel_layout():
@@ -62,6 +124,8 @@ def test_reset_campaign_scoped_state_keeps_drag_panel_layout():
     assert "collapsedPanels" not in body
     assert "activeDragPanel" not in body
     assert "activeReferenceDrag" not in body
+    for preference in ("sideTab", "activePanel", "autoScroll"):
+        assert preference not in body
 
 
 def test_reset_campaign_scoped_state_clears_cross_campaign_caches():
@@ -70,11 +134,19 @@ def test_reset_campaign_scoped_state_clears_cross_campaign_caches():
     for expected in (
         "state.assets.assetCache = {}",
         "state.assets.cachedAssets = []",
+        "state.assets.visualContracts = {}",
         "state.assets.modulePayloadCache = {}",
         "state.gallery.galleryAssets = []",
+        "state.gallery.selectedGalleryKey = \"\"",
+        "state.gallery.transientGalleryAsset = null",
         "state.map.renderedMapKey = \"\"",
         "state.map.currentMapAsset = null",
         "state.story.currentPressurePack = {}",
+        "state.story.storyProgressPayload = {}",
+        "state.story.storyProgressChapter = {}",
+        "state.story.storyProgressNode = {}",
+        "state.character.latestInventoryPayload = null",
+        "state.character.latestDossierPayload = null",
     ):
         assert expected in body
 

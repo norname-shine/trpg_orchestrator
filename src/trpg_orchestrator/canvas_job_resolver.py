@@ -14,6 +14,7 @@ CANVAS_JOB_KINDS = {
     "monster_portrait",
     "item",
     "prop",
+    "cg",
     "gallery_scene",
 }
 CANVAS_JOB_TRIGGERS = {"user_requested", "director_triggered", "system_required"}

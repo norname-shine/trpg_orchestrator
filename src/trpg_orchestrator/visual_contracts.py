@@ -155,31 +155,51 @@ def build_initial_visual_contract_candidates(
             "negative_constraints": ["do not reuse player face template", "do not draw as ordinary npc unless confirmed"],
             "update_policy": {"cache_policy": "stable", "rebuild_when": ["companion_profile_changed", "visual_identity_changed"]},
         })
-    route = initial_assets.get("map_route") if isinstance(initial_assets.get("map_route"), dict) else {}
-    canvas = initial_assets.get("map_canvas") if isinstance(initial_assets.get("map_canvas"), dict) else {}
-    if route.get("nodes") or canvas.get("points"):
+    initial_map_canvas = initial_assets.get("initial_map_canvas") if isinstance(initial_assets.get("initial_map_canvas"), dict) else {}
+    route = initial_map_canvas.get("map_route") if isinstance(initial_map_canvas.get("map_route"), dict) else initial_assets.get("map_route") if isinstance(initial_assets.get("map_route"), dict) else {}
+    draw_instructions = initial_map_canvas.get("canvas_draw_instructions") if isinstance(initial_map_canvas.get("canvas_draw_instructions"), dict) else {}
+    legacy_canvas = initial_assets.get("map_canvas") if isinstance(initial_assets.get("map_canvas"), dict) else {}
+    if route.get("nodes") or draw_instructions.get("nodes") or legacy_canvas.get("points"):
         title = str(route.get("title") or profile.get("title") or "opening_map")
         candidates.append({
             "entity_key": f"map:{safe_key(title)}",
             "entity_type": "map",
             "display_name": title,
             "source": "campaign_initialization",
-            "memory_refs": ["campaign_profile.json.initial_assets", "map_history.json"],
+            "memory_refs": ["campaign_profile.json.initial_assets.initial_map_canvas", "map_history.json"],
             "visual_identity": {
-                "summary": initial_assets.get("map_generation_instruction", ""),
-                "spatial": {"map_route": route, "map_canvas": canvas},
+                "summary": draw_instructions.get("style") or initial_assets.get("map_generation_instruction", ""),
+                "spatial": {"map_route": route, "canvas_draw_instructions": draw_instructions or legacy_canvas},
             },
-            "render_intent": {"primary": "map_image", "details": {"aspect_ratio": "16:9", "usage": "regional_route_map"}},
+            "render_intent": {"primary": "map_canvas", "details": {"usage": "regional_route_map"}},
             "style_constraints": {"campaign_visual_style": style, "render_rule": render_rules.get("map", {})},
             "negative_constraints": ["empty map", "generic default map", "protected franchise names"],
-            "update_policy": {"cache_policy": "stable", "rebuild_when": ["map_route_changed", "map_canvas_changed"]},
+            "update_policy": {"cache_policy": "stable", "rebuild_when": ["map_route_changed", "canvas_draw_instructions_changed"]},
+        })
+    initial_cg = initial_assets.get("initial_cg") if isinstance(initial_assets.get("initial_cg"), dict) else {}
+    cg_prompt = initial_cg.get("cg_prompt") if isinstance(initial_cg.get("cg_prompt"), dict) else initial_assets.get("cg_prompt") if isinstance(initial_assets.get("cg_prompt"), dict) else {}
+    if cg_prompt:
+        candidates.append({
+            "entity_key": f"cg:{safe_key(profile.get('title') or 'opening_cg')}",
+            "entity_type": "cg",
+            "display_name": f"{profile.get('title') or 'Opening'} CG",
+            "source": "campaign_initialization",
+            "memory_refs": ["campaign_profile.json.initial_assets.initial_cg", "image_profile.json"],
+            "visual_identity": {
+                "summary": initial_cg.get("generation_instruction") or initial_assets.get("cg_generation_instruction", ""),
+                "image_prompt": cg_prompt,
+            },
+            "render_intent": {"primary": "cg_image", "details": {"usage": "opening_cg"}},
+            "style_constraints": {"campaign_visual_style": style, "render_rule": render_rules.get("cg", {})},
+            "negative_constraints": ["map canvas data", "protected franchise names"],
+            "update_policy": {"cache_policy": "stable", "rebuild_when": ["cg_prompt_changed"]},
         })
     item_rules = initial_assets.get("item_canvas_rules") if isinstance(initial_assets.get("item_canvas_rules"), dict) else {}
     for item in initial_assets.get("initial_items", []) if isinstance(initial_assets.get("initial_items"), list) else []:
         if not isinstance(item, dict):
             continue
         item_id = safe_key(item.get("id") or item.get("key") or item.get("name") or "item")
-        name = str(item.get("name") or item.get("title") or item_id)
+        name = str(item.get("name") or item.get("title") or item.get("label") or item_id)
         rule = item_rules.get(item_id) if isinstance(item_rules.get(item_id), dict) else {}
         candidates.append({
             "entity_key": f"item:{item_id}",

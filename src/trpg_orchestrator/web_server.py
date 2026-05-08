@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import math
 import os
@@ -46,6 +47,52 @@ from .writeback import apply_approved_writeback, has_applied_writeback, writebac
 STATIC_DIR = PROJECT_ROOT / "web"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
+REQUIRED_RENDER_RULE_KEYS = (
+    "player_portrait",
+    "companion_portrait",
+    "character_portrait",
+    "map",
+    "item",
+    "prop",
+    "cg",
+)
+DEFAULT_RENDER_RULES: dict[str, dict[str, Any]] = {
+    "player_portrait": {
+        "subject": "player character portrait",
+        "composition": "single character portrait with readable face and outfit details",
+        "avoid": ["licensed character likeness", "text overlay"],
+    },
+    "companion_portrait": {
+        "subject": "companion character portrait",
+        "composition": "single companion portrait with clear silhouette and relationship cues",
+        "avoid": ["licensed character likeness", "text overlay"],
+    },
+    "character_portrait": {
+        "subject": "non-player character portrait",
+        "composition": "single character portrait with distinct role, attire, and mood",
+        "avoid": ["licensed character likeness", "text overlay"],
+    },
+    "map": {
+        "subject": "campaign area map",
+        "composition": "readable adventure map with landmarks, routes, and encounter-relevant spaces",
+        "avoid": ["real-world copyrighted map", "unreadable labels"],
+    },
+    "item": {
+        "subject": "inventory item",
+        "composition": "isolated item illustration with clear material, function, and scale cues",
+        "avoid": ["brand logo", "text overlay"],
+    },
+    "prop": {
+        "subject": "story prop",
+        "composition": "isolated prop illustration with recognizable silhouette and use context",
+        "avoid": ["brand logo", "text overlay"],
+    },
+    "cg": {
+        "subject": "campaign key scene",
+        "composition": "cinematic scene image focused on original characters, setting, and mood",
+        "avoid": ["licensed franchise style", "text overlay"],
+    },
+}
 
 
 class JobState:
@@ -1211,6 +1258,32 @@ def migrateAssetKinds(manifest: dict[str, Any], entityIndex: dict[str, Any] | No
         else:
             role = infer_asset_role({"key": key, **entry, "metadata": metadata})
             normalized_kind = normalize_asset_kind(entry.get("kind"), metadata, key)
+            key_path_text = " ".join(str(value or "") for value in (key, entry.get("path"), metadata.get("object_id"), metadata.get("kind"))).lower()
+            polluted_map_portrait = normalized_kind == "npc_portrait" and ("map_image" in key_path_text or "current_map" in key_path_text or str(metadata.get("kind") or "").lower() in {"scene", "map"})
+            polluted_item_portrait = normalized_kind == "npc_portrait" and ("assets/items/" in str(entry.get("path") or "").replace("\\", "/").lower() or str(metadata.get("kind") or "").lower() in {"item", "prop"})
+            if polluted_map_portrait:
+                if has_route_nodes(metadata.get("map_route")):
+                    normalized_kind = "map_image"
+                    role = "map"
+                    metadata["role"] = "map"
+                    metadata["runtime_role"] = "map"
+                    metadata["entity_key"] = f"map:{safe_segment(str(metadata.get('display_name') or metadata.get('title') or 'current_map'))}"
+                    metadata["gallery_category"] = "scene"
+                    metadata["source"] = metadata.get("source") or "map_route"
+                else:
+                    metadata["visible_in_gallery"] = False
+                    metadata["not_in_gallery_filters"] = True
+                    metadata["debug_only"] = True
+                    entry["visible_in_gallery"] = False
+                    entry["debug_only"] = True
+                    metadata.setdefault("migration_reason", "legacy_map_cached_as_npc_without_route")
+            elif polluted_item_portrait:
+                metadata["visible_in_gallery"] = False
+                metadata["not_in_gallery_filters"] = True
+                metadata["debug_only"] = True
+                entry["visible_in_gallery"] = False
+                entry["debug_only"] = True
+                metadata.setdefault("migration_reason", "legacy_item_cached_as_npc_portrait")
             entry["kind"] = normalized_kind
             if role:
                 metadata["role"] = role
@@ -1430,11 +1503,14 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
     initial_assets = profile.get("initial_assets") if isinstance(profile.get("initial_assets"), dict) else {}
     if not initial_assets:
         return {}
-    route = initial_assets.get("map_route") if isinstance(initial_assets.get("map_route"), dict) else {}
-    map_canvas = initial_assets.get("map_canvas") if isinstance(initial_assets.get("map_canvas"), dict) else {}
+    initial_assets = sanitize_initial_assets(initial_assets)
+    initial_map_canvas = initial_assets.get("initial_map_canvas") if isinstance(initial_assets.get("initial_map_canvas"), dict) else {}
+    initial_cg = initial_assets.get("initial_cg") if isinstance(initial_assets.get("initial_cg"), dict) else {}
+    route = initial_map_canvas.get("map_route") if isinstance(initial_map_canvas.get("map_route"), dict) else {}
+    canvas_draw_instructions = initial_map_canvas.get("canvas_draw_instructions") if isinstance(initial_map_canvas.get("canvas_draw_instructions"), dict) else {}
     jobs: list[dict[str, Any]] = []
     map_panel: dict[str, Any] = {}
-    if _setup_has_payload(initial_assets.get("map_generation_instruction")) and _setup_has_payload(map_canvas) and _valid_setup_map_route(route):
+    if _setup_has_payload(canvas_draw_instructions) and _valid_setup_map_route(route):
         if not any(is_valid_cached_map_asset(asset) for asset in assets):
             title = str(route.get("title") or profile.get("title") or state.get("title") or "opening map").strip()
             map_contract = find_contract(visual_contracts, entity_type="map", display_name=title)
@@ -1444,9 +1520,9 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
                 "update_requested": True,
                 "payload": {
                     "map_route": route,
-                    "map_canvas": map_canvas,
+                    "canvas_draw_instructions": canvas_draw_instructions,
                     "title": title,
-                    "initialization_source": "campaign_profile.initial_assets",
+                    "initialization_source": "campaign_profile.initial_assets.initial_map_canvas",
                     "visual_contract": map_contract,
                     "visual_contract_key": map_contract.get("entity_key", ""),
                     "visual_contract_hash": map_contract.get("visual_contract_hash", ""),
@@ -1459,11 +1535,13 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
                 "kind": "map",
                 "renderer": "pixel_map",
                 "trigger": "system_required",
-                "input_ref": "campaign_profile.initial_assets.map_canvas",
+                "input_ref": "campaign_profile.initial_assets.initial_map_canvas.canvas_draw_instructions",
                 "asset_key": "initial_map",
                 "cache_policy": "stable",
                 "campaign_id": campaign_id,
                 "asset_seed": campaign_asset_seed(campaign_id),
+                "canvas_draw_instructions": canvas_draw_instructions,
+                "map_route": route,
                 "visual_contract": map_contract,
                 "visual_contract_key": map_contract.get("entity_key", ""),
                 "visual_contract_hash": map_contract.get("visual_contract_hash", ""),
@@ -1513,11 +1591,32 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
     if jobs:
         result["canvas_jobs"] = jobs
     cg_contract = {
-        "cg_generation_instruction": initial_assets.get("cg_generation_instruction"),
-        "cg_prompt": initial_assets.get("cg_prompt"),
+        "generation_instruction": initial_cg.get("generation_instruction"),
+        "cg_prompt": initial_cg.get("cg_prompt"),
     }
-    if _setup_has_payload(cg_contract["cg_generation_instruction"]) and _setup_has_payload(cg_contract["cg_prompt"]):
+    if _setup_has_payload(cg_contract["generation_instruction"]) and _setup_has_payload(cg_contract["cg_prompt"]):
+        cg_contract_row = find_contract(visual_contracts, entity_type="cg", display_name=str(profile.get("title") or state.get("title") or "opening cg"))
+        jobs.append({
+            "job_id": "initial_opening_cg",
+            "kind": "cg",
+            "renderer": "pixel_cg",
+            "trigger": "system_required",
+            "input_ref": "campaign_profile.initial_assets.initial_cg.cg_prompt",
+            "asset_key": "initial_opening_cg",
+            "cache_policy": "stable",
+            "campaign_id": campaign_id,
+            "asset_seed": campaign_asset_seed(campaign_id),
+            "title": str(profile.get("title") or state.get("title") or "Opening CG"),
+            "detail": str(cg_contract.get("generation_instruction") or ""),
+            "generation_instruction": cg_contract.get("generation_instruction"),
+            "cg_prompt": cg_contract.get("cg_prompt"),
+            "visual_contract": cg_contract_row,
+            "visual_contract_key": cg_contract_row.get("entity_key", ""),
+            "visual_contract_hash": cg_contract_row.get("visual_contract_hash", ""),
+        })
         result["cg_contract"] = cg_contract
+    if jobs:
+        result["canvas_jobs"] = jobs
     return result
 
 
@@ -2227,6 +2326,27 @@ def frontend_inventory(state: dict[str, Any]) -> list[dict[str, Any]]:
             normalized = normalize_director_inventory_item(item)
             if normalized:
                 source.append(normalized)
+    item_rules = equipment.get("item_canvas_rules") if isinstance(equipment.get("item_canvas_rules"), dict) else {}
+    for item in equipment.get("initial_items", []) if isinstance(equipment.get("initial_items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        item_id = safe_segment(str(item.get("id") or item.get("key") or item.get("name") or item.get("title") or item.get("label") or "initial_item"))
+        rule = item_rules.get(item_id) if isinstance(item_rules.get(item_id), dict) else {}
+        normalized = normalize_director_inventory_item({
+            "id": item_id,
+            "name": item.get("name") or item.get("title") or item.get("label") or item_id,
+            "category": item.get("category") or item.get("kind") or item.get("type") or "item",
+            "item_type": item.get("item_type") or item.get("type") or item.get("category") or "initial",
+            "status": item.get("status") or "confirmed",
+            "owner": item.get("owner") or "party",
+            "owner_ref": item.get("owner_ref") or "player_party_initial_inventory",
+            "short_description": item.get("short_description") or item.get("description") or item.get("detail") or "",
+            "canvas_style": {**rule, **(item.get("canvas_style") if isinstance(item.get("canvas_style"), dict) else {})},
+            "certainty": item.get("certainty") or "confirmed",
+            "source_evidence": item.get("source_evidence") or "campaign_initialization finalized item carried by player or companion party",
+        })
+        if normalized:
+            source.append(normalized)
     merged: dict[str, dict[str, Any]] = {}
     for item in source:
         entity_id = str(item.get("id") or stable_director_inventory_id(item))
@@ -4169,26 +4289,21 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             "visual_style": {"medium": "", "palette": [], "composition": [], "mood": [], "copyright_avoid": []},
         },
         "character_attribute_schema": {
-            "three": [{"key": "body", "label": "体", "description": ""}, {"key": "mind", "label": "心", "description": ""}, {"key": "social", "label": "社", "description": ""}],
-            "six": [{"key": "str", "label": "力", "description": ""}, {"key": "dex", "label": "敏", "description": ""}, {"key": "con", "label": "体", "description": ""}, {"key": "int", "label": "智", "description": ""}, {"key": "wis", "label": "感", "description": ""}, {"key": "cha", "label": "魅", "description": ""}],
+            "three": [{"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}],
+            "six": [{"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}, {"key": "", "label": "", "description": ""}],
         },
-        "render_rules": {
-            "player_portrait": {},
-            "companion_portrait": {},
-            "character_portrait": {},
-            "map": {},
-            "item": {},
-            "prop": {},
-            "cg": {},
-        },
+        "render_rules": {key: copy.deepcopy(DEFAULT_RENDER_RULES[key]) for key in REQUIRED_RENDER_RULE_KEYS},
         "initial_assets": {
-            "map_generation_instruction": "",
-            "map_canvas": {"canvas": {"width": 1280, "height": 720}, "points": [], "routes": [], "hazards": []},
-            "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
+            "initial_map_canvas": {
+                "map_route": {"title": "", "nodes": [], "edges": [], "markers": []},
+                "canvas_draw_instructions": {"style": "", "background": "", "nodes": [], "routes": [], "labels": [], "hazards": [], "legend": []},
+            },
+            "initial_cg": {
+                "generation_instruction": "",
+                "cg_prompt": {"positive": "", "negative": "", "aspect": "2304x2304 dual panel"},
+            },
             "initial_items": [],
             "item_canvas_rules": {},
-            "cg_generation_instruction": "",
-            "cg_prompt": {"positive": "", "negative": "", "aspect": "2304x2304 dual panel"},
         },
         "visual_contract_candidates": [
             {
@@ -4330,7 +4445,7 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Fixed gallery filters are only asset entry points, not story semantics. Do not force campaign-specific entities into a fixed semantic bucket; put campaign-specific semantics in custom_libraries.",
         "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
         "Return render_rules for player_portrait, companion_portrait, character_portrait, map, item, prop, and cg.",
-        "Return initial_assets with map_generation_instruction, map_canvas, map_route.nodes, initial_items, item_canvas_rules, cg_generation_instruction, and cg_prompt. Missing any of these makes setup invalid.",
+        "Return initial_assets.initial_map_canvas with map_route.nodes and canvas_draw_instructions; return initial_assets.initial_cg with generation_instruction and cg_prompt; also return initial_items and item_canvas_rules. Missing any of these makes setup invalid.",
         "Return visual_contract_candidates as campaign-bound visual intent for confirmed player, companion, map, item, scene, monster, or CG entities. Backend will validate and merge them into visual_contracts.json; do not make this a final image prompt or hard-code renderer-only fields.",
         "Return story_memory_seed.custom_libraries or initial_memory_notes.custom_libraries for campaign-specific content libraries. Only declare the generic resource-slot structure; do not rely on backend fixed library names.",
         "Do not use protected franchise, character, trademark, or artist names in visual_style. Describe original medium, palette, composition, and mood instead.",
@@ -4529,34 +4644,50 @@ def _setup_has_payload(value: Any) -> bool:
 
 
 def sanitize_attribute_schema(value: Any) -> dict[str, Any]:
-    source = value if isinstance(value, dict) else {}
+    source = require_dict(value, "character_attribute_schema")
 
-    def rows_for(key: str, fallback: list[dict[str, str]], limit: int) -> list[dict[str, str]]:
-        raw_rows = source.get(key) if isinstance(source.get(key), list) else []
+    def rows_for(key: str, limit: int) -> list[dict[str, str]]:
+        raw_rows = source.get(key)
+        if not isinstance(raw_rows, list) or len(raw_rows) != limit:
+            raise RuntimeError(f"character_attribute_schema.{key} must contain exactly {limit} rows")
         rows: list[dict[str, str]] = []
-        for index, row in enumerate(raw_rows[:limit], start=1):
+        seen: set[str] = set()
+        for index, row in enumerate(raw_rows, start=1):
             if not isinstance(row, dict):
-                continue
-            row_key = safe_segment(str(row.get("key") or f"{key}_{index}").lower())
+                raise RuntimeError(f"character_attribute_schema.{key}[{index}] must be object")
+            row_key = safe_segment(str(row.get("key") or "").lower())
             label = stringify_brief(row.get("label") or row.get("name") or row_key, 12)
-            if row_key and label:
-                rows.append({"key": row_key, "label": label, "description": stringify_brief(row.get("description"), 120)})
-        return rows if len(rows) == limit else fallback
+            if not row_key or not label:
+                raise RuntimeError(f"character_attribute_schema.{key}[{index}] missing key or label")
+            if row_key in seen:
+                raise RuntimeError(f"character_attribute_schema.{key} contains duplicate key: {row_key}")
+            seen.add(row_key)
+            rows.append({"key": row_key, "label": label, "description": stringify_brief(row.get("description"), 120)})
+        return rows
 
     return {
-        "three": rows_for("three", [{"key": "body", "label": "体", "description": ""}, {"key": "mind", "label": "心", "description": ""}, {"key": "social", "label": "社", "description": ""}], 3),
-        "six": rows_for("six", [{"key": "str", "label": "力", "description": ""}, {"key": "dex", "label": "敏", "description": ""}, {"key": "con", "label": "体", "description": ""}, {"key": "int", "label": "智", "description": ""}, {"key": "wis", "label": "感", "description": ""}, {"key": "cha", "label": "魅", "description": ""}], 6),
+        "three": rows_for("three", 3),
+        "six": rows_for("six", 6),
     }
 
 
-def sanitize_render_rules(value: Any) -> dict[str, Any]:
+def normalize_render_rules(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
-    required = ("player_portrait", "companion_portrait", "character_portrait", "map", "item", "prop", "cg")
-    result = {key: (source.get(key) if isinstance(source.get(key), dict) else {}) for key in required}
-    missing = [key for key in required if not _setup_has_payload(result.get(key))]
-    if missing:
-        raise RuntimeError("render_rules missing required rules: " + ", ".join(missing))
+    result: dict[str, Any] = {}
+    for key in REQUIRED_RENDER_RULE_KEYS:
+        default_rule = copy.deepcopy(DEFAULT_RENDER_RULES[key])
+        custom_rule = source.get(key)
+        if isinstance(custom_rule, dict):
+            default_rule.update(custom_rule)
+        result[key] = default_rule
+    for key, custom_rule in source.items():
+        if key not in result and isinstance(custom_rule, dict):
+            result[key] = custom_rule
     return result
+
+
+def sanitize_render_rules(value: Any) -> dict[str, Any]:
+    return normalize_render_rules(value)
 
 
 def _valid_setup_map_route(value: Any) -> bool:
@@ -4619,34 +4750,114 @@ def apply_attribute_schema_to_character_card(character_card: dict[str, Any], sch
     character_card["attributes"] = attrs
 
 
+def normalize_map_route(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    nodes = source.get("nodes") if isinstance(source.get("nodes"), list) else []
+    edges = source.get("edges") if isinstance(source.get("edges"), list) else []
+    markers = source.get("markers") if isinstance(source.get("markers"), list) else []
+    return {
+        "title": stringify_brief(source.get("title") or source.get("name") or "", 120),
+        "nodes": [row for row in nodes if isinstance(row, dict)],
+        "edges": [row for row in edges if isinstance(row, dict)],
+        "markers": [row for row in markers if isinstance(row, dict)],
+    }
+
+
+def normalize_canvas_draw_instructions(value: Any, *, legacy_map_canvas: Any = None, legacy_instruction: Any = "") -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    legacy = legacy_map_canvas if isinstance(legacy_map_canvas, dict) else {}
+    nodes = source.get("nodes")
+    if not isinstance(nodes, list):
+        nodes = legacy.get("points") if isinstance(legacy.get("points"), list) else []
+    routes = source.get("routes")
+    if not isinstance(routes, list):
+        routes = legacy.get("routes") if isinstance(legacy.get("routes"), list) else []
+    hazards = source.get("hazards")
+    if not isinstance(hazards, list):
+        hazards = legacy.get("hazards") if isinstance(legacy.get("hazards"), list) else []
+    legend = source.get("legend")
+    if isinstance(legend, dict):
+        legend = [{"symbol": key, "label": value} for key, value in legend.items()]
+    if not isinstance(legend, list):
+        legend = []
+    labels = source.get("labels") if isinstance(source.get("labels"), list) else []
+    return {
+        "style": stringify_brief(source.get("style") or legacy.get("style") or legacy_instruction or "", 160),
+        "background": stringify_brief(source.get("background") or legacy.get("background") or "", 160),
+        "nodes": [row for row in nodes if isinstance(row, dict)],
+        "routes": [row for row in routes if isinstance(row, dict)],
+        "labels": [row for row in labels if isinstance(row, dict) or str(row or "").strip()],
+        "hazards": [row for row in hazards if isinstance(row, dict)],
+        "legend": [row for row in legend if isinstance(row, dict)],
+    }
+
+
+def normalize_initial_map_canvas(source: dict[str, Any]) -> dict[str, Any]:
+    nested = source.get("initial_map_canvas") if isinstance(source.get("initial_map_canvas"), dict) else {}
+    route = normalize_map_route(nested.get("map_route") or source.get("map_route"))
+    draw = normalize_canvas_draw_instructions(
+        nested.get("canvas_draw_instructions"),
+        legacy_map_canvas=source.get("map_canvas") or source.get("MapCanvas"),
+        legacy_instruction=source.get("map_generation_instruction") or source.get("map_instruction"),
+    )
+    return {"map_route": route, "canvas_draw_instructions": draw}
+
+
+def normalize_initial_cg(source: dict[str, Any]) -> dict[str, Any]:
+    nested = source.get("initial_cg") if isinstance(source.get("initial_cg"), dict) else {}
+    return {
+        "generation_instruction": nested.get("generation_instruction") or source.get("cg_generation_instruction") or source.get("cg_instruction") or "",
+        "cg_prompt": nested.get("cg_prompt") or source.get("cg_prompt") or source.get("opening_cg_prompt") or source.get("image_prompt") or {},
+    }
+
+
 def sanitize_initial_assets(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
-    aliases = {
-        "initial_items": source.get("initial_items", source.get("items", source.get("props", []))),
-        "item_canvas_rules": source.get("item_canvas_rules", source.get("item_canvas", source.get("canvas_rules", {}))),
-        "cg_prompt": source.get("cg_prompt", source.get("opening_cg_prompt", source.get("image_prompt", {}))),
-    }
+    initial_map_canvas = normalize_initial_map_canvas(source)
+    initial_cg = normalize_initial_cg(source)
+    initial_items = source.get("initial_items", source.get("items", source.get("props", [])))
+    item_canvas_rules = source.get("item_canvas_rules", source.get("item_canvas", source.get("canvas_rules", {})))
     result = {
-        "map_generation_instruction": source.get("map_generation_instruction") or source.get("map_instruction") or "",
-        "map_canvas": source.get("map_canvas") or source.get("MapCanvas") or {},
-        "map_route": source.get("map_route") or {},
-        "initial_items": aliases["initial_items"],
-        "item_canvas_rules": aliases["item_canvas_rules"],
-        "cg_generation_instruction": source.get("cg_generation_instruction") or source.get("cg_instruction") or "",
-        "cg_prompt": aliases["cg_prompt"],
+        "initial_map_canvas": initial_map_canvas,
+        "initial_cg": initial_cg,
+        "initial_items": initial_items,
+        "item_canvas_rules": item_canvas_rules,
+        # Legacy aliases are kept for old consumers and existing campaign files.
+        "map_generation_instruction": initial_map_canvas["canvas_draw_instructions"].get("style", ""),
+        "map_canvas": {
+            "points": initial_map_canvas["canvas_draw_instructions"].get("nodes", []),
+            "routes": initial_map_canvas["canvas_draw_instructions"].get("routes", []),
+            "hazards": initial_map_canvas["canvas_draw_instructions"].get("hazards", []),
+            "legend": initial_map_canvas["canvas_draw_instructions"].get("legend", []),
+        },
+        "map_route": initial_map_canvas["map_route"],
+        "cg_generation_instruction": initial_cg["generation_instruction"],
+        "cg_prompt": initial_cg["cg_prompt"],
     }
-    missing = [key for key, item in result.items() if not _setup_has_payload(item)]
+    required = {
+        "initial_map_canvas.map_route": initial_map_canvas.get("map_route"),
+        "initial_map_canvas.canvas_draw_instructions": initial_map_canvas.get("canvas_draw_instructions"),
+        "initial_items": result.get("initial_items"),
+        "item_canvas_rules": result.get("item_canvas_rules"),
+        "initial_cg.generation_instruction": initial_cg.get("generation_instruction"),
+        "initial_cg.cg_prompt": initial_cg.get("cg_prompt"),
+    }
+    missing = [key for key, item in required.items() if not _setup_has_payload(item)]
     if missing:
         raise RuntimeError("initial_assets missing required fields: " + ", ".join(missing))
-    if not _valid_setup_map_route(result.get("map_route")):
+    if not _valid_setup_map_route(initial_map_canvas.get("map_route")):
         raise RuntimeError("initial_assets missing required fields: map_route.nodes")
     for index, item in enumerate(result.get("initial_items", []), start=1):
         if not isinstance(item, dict):
             raise RuntimeError(f"initial_assets.initial_items[{index}] must be object")
-        if not str(item.get("id") or item.get("key") or "").strip():
+        item_id = str(item.get("id") or item.get("key") or "").strip()
+        item_name = str(item.get("name") or item.get("title") or item.get("label") or "").strip()
+        if not item_id:
             raise RuntimeError(f"initial_assets.initial_items[{index}] missing id")
-        if not str(item.get("name") or item.get("title") or "").strip():
+        if not item_name:
             raise RuntimeError(f"initial_assets.initial_items[{index}] missing name")
+        item.setdefault("id", item_id)
+        item.setdefault("name", item_name)
     return result
 
 
@@ -4666,7 +4877,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     taxonomy = normalize_campaign_taxonomy(raw_taxonomy)
     taxonomy["campaign_categories"] = normalize_campaign_gallery_categories(raw_taxonomy.get("campaign_categories"), fail_on_too_many=True)
     character_attribute_schema = sanitize_attribute_schema(data.get("character_attribute_schema"))
-    render_rules = sanitize_render_rules(data.get("render_rules"))
+    render_rules = normalize_render_rules(data.get("render_rules"))
     initial_assets = sanitize_initial_assets(data.get("initial_assets"))
     visual_contract_candidates = data.get("visual_contract_candidates") if isinstance(data.get("visual_contract_candidates"), list) else []
     custom_libraries = sanitize_custom_libraries(story_memory_seed.get("custom_libraries", memory_notes.get("custom_libraries", [])))
@@ -5063,8 +5274,10 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     v4_safety = v4_setup.get("safety_interpretation", {}) if isinstance(v4_setup.get("safety_interpretation"), dict) else {}
     v4_memory = v4_setup.get("initial_memory_notes", {}) if isinstance(v4_setup.get("initial_memory_notes"), dict) else {}
     character_attribute_schema = v4_setup.get("character_attribute_schema", {}) if isinstance(v4_setup.get("character_attribute_schema"), dict) else {}
-    render_rules = v4_setup.get("render_rules", {}) if isinstance(v4_setup.get("render_rules"), dict) else {}
-    initial_assets = v4_setup.get("initial_assets", {}) if isinstance(v4_setup.get("initial_assets"), dict) else {}
+    render_rules = normalize_render_rules(v4_setup.get("render_rules"))
+    initial_assets = sanitize_initial_assets(v4_setup.get("initial_assets"))
+    initial_map_canvas = initial_assets.get("initial_map_canvas", {}) if isinstance(initial_assets.get("initial_map_canvas"), dict) else {}
+    initial_cg = initial_assets.get("initial_cg", {}) if isinstance(initial_assets.get("initial_cg"), dict) else {}
     campaign_taxonomy = normalize_campaign_taxonomy(v4_setup.get("campaign_taxonomy") if isinstance(v4_setup, dict) else {})
     mode = next((row for row in ai_mode_options() if row["id"] == model_config.get("model_mode")), ai_mode_options()[0])
     profile.update({
@@ -5075,8 +5288,14 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         "genre": analysis.get("genre", ""),
         "tone": analysis.get("tone", ""),
         "analysis": analysis,
-        "initial_prompt": config.get("user_prompt", ""),
-        "user_prompt": config.get("user_prompt", ""),
+        "initial_prompt": "",
+        "user_prompt": "",
+        "setup_prompt_source": "raw_user_input_used_for_generation_only",
+        "finalized_ai_content": {
+            "premise": analysis.get("premise", ""),
+            "core_concept": v4_direction.get("core_concept", ""),
+            "opening_situation": v4_direction.get("opening_situation", ""),
+        },
         "model_config": model_config,
         "rules_config": rules_config,
         "story_config": story_config,
@@ -5089,6 +5308,8 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         "character_attribute_schema": character_attribute_schema,
         "render_rules": render_rules,
         "initial_assets": initial_assets,
+        "initial_map_canvas": initial_map_canvas,
+        "initial_cg": initial_cg,
         "story_memory_seed": v4_memory,
         "safety_lines": safety_lines,
         "ai_mode": mode,
@@ -5142,6 +5363,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     direction.setdefault("initial_memory_notes", {}).update(v4_memory)
     direction.setdefault("custom_rule_slots", []).extend(sanitize_string_list(v4_memory.get("custom_rule_slots")))
     direction["initial_assets"] = initial_assets
+    direction["initial_map_canvas"] = initial_map_canvas
     direction["render_rules"] = render_rules
     direction["campaign_taxonomy"] = campaign_taxonomy
 
@@ -5150,6 +5372,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     image["campaign_taxonomy_visual_style"] = campaign_taxonomy.get("visual_style", {})
     image["render_rules"] = render_rules
     image["initial_assets"] = initial_assets
+    image["initial_cg"] = initial_cg
     npc.setdefault("voice_rules", {})["custom_actor_rules"] = routing.get("actor_rules", [])
     npc.setdefault("personality_library", {})
     for index, seed in enumerate(sanitize_string_list(v4_memory.get("npc_seeds")), start=1):
@@ -5264,7 +5487,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
             "visual_contract_key": map_contract.get("entity_key", ""),
             "visual_contract_hash": map_contract.get("visual_contract_hash", ""),
             "map_route": spatial.get("map_route", {}),
-            "map_canvas": spatial.get("map_canvas", {}),
+            "canvas_draw_instructions": spatial.get("canvas_draw_instructions", {}),
             "source": "campaign_initialization",
         }
         write_json(map_history_path, map_history)

@@ -362,17 +362,18 @@ def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
         if not isinstance(entry, dict):
             continue
         normalized = _normalized_asset_entry(campaign_id, key, entry)
-        if normalized.get("campaign_id") != campaign_id:
+        payload = _asset_entry_payload(campaign_id, key, normalized)
+        if payload.get("campaign_id") != campaign_id:
             continue
-        if normalized.get("placeholder") or normalized.get("metadata", {}).get("placeholder"):
+        if payload.get("placeholder") or payload.get("metadata", {}).get("placeholder"):
             continue
-        if ws.is_attribute_star_asset(normalized):
+        if ws.is_attribute_star_asset(payload):
             continue
-        if normalize_asset_kind(normalized.get("kind"), normalized.get("metadata", {}), normalized.get("key", "")) == "map_image" and not ws.is_valid_cached_map_asset(normalized):
+        normalized_kind = normalize_asset_kind(payload.get("kind"), payload.get("metadata", {}), payload.get("key", ""))
+        if normalized_kind == "map_image" and not ws.is_valid_cached_map_asset(payload):
             continue
         if kind and str(entry.get("kind", "")) != kind:
             continue
-        payload = _asset_entry_payload(campaign_id, key, normalized)
         if payload:
             entries.append(payload)
     entries.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)

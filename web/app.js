@@ -78,6 +78,11 @@
   },
 };
 
+document.documentElement.setAttribute("translate", "no");
+document.documentElement.classList.add("notranslate");
+document.body?.setAttribute("translate", "no");
+document.body?.classList.add("notranslate");
+
 const LEGACY_STATE_FIELDS = {
   campaigns: ["campaign", "campaigns"],
   activeCampaign: ["campaign", "activeCampaign"],
@@ -925,7 +930,7 @@ function renderCachedMap(scene, mapPanel = {}) {
   const updateRequested = mapPanel.update_requested === true;
   const seed = scene.location || state.campaign.activeCampaign || "map";
   const route = modulePayload.map_route || {};
-  const mapCanvas = modulePayload.map_canvas || {};
+  const mapCanvas = modulePayload.map_canvas || mapCanvasFromDrawInstructions(modulePayload.canvas_draw_instructions || {});
   const routeKey = mapCanvas.title || route.title || (route.nodes || []).map((node) => node.label || node.id).join("_");
   const visualContract = hasVisualContract(modulePayload.visual_contract) ? modulePayload.visual_contract : visualContractFor(modulePayload.visual_contract_key || "", "map", route.title || modulePayload.title || scene.location || "");
   setText("mapLabel", route.title || modulePayload.title || scene.location || "当前路线");
@@ -1010,6 +1015,22 @@ function galleryMapAssetFromEntry(entry, modulePayload = {}, scene = {}, route =
     status: "cached",
     campaign_id: state.campaign.activeCampaign,
     asset_seed: state.campaign.assetSeed,
+  };
+}
+
+function mapCanvasFromDrawInstructions(draw = {}) {
+  if (!draw || typeof draw !== "object" || Array.isArray(draw)) return {};
+  const nodes = Array.isArray(draw.nodes) ? draw.nodes : [];
+  const routes = Array.isArray(draw.routes) ? draw.routes : [];
+  const hazards = Array.isArray(draw.hazards) ? draw.hazards : [];
+  const legend = Array.isArray(draw.legend) ? draw.legend : [];
+  return {
+    style: draw.style || "",
+    background: draw.background || "",
+    points: nodes,
+    routes,
+    hazards,
+    legend,
   };
 }
 
@@ -1300,7 +1321,8 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
         payload.visual_contract_hash = visualContract.visual_contract_hash || "";
       }
       const route = payload.map_route || {};
-      const hasCanvas = hasSemanticMapCanvas(payload.map_canvas || campaignState?.recent?.current_scene?.map_canvas || {});
+      const mapCanvasPayload = payload.map_canvas || mapCanvasFromDrawInstructions(payload.canvas_draw_instructions || {});
+      const hasCanvas = hasSemanticMapCanvas(mapCanvasPayload) || hasSemanticMapCanvas(campaignState?.recent?.current_scene?.map_canvas || {});
       if (!isValidMapRoute(route) && !hasCanvas) {
         console.warn("skip map canvas job without route or MapCanvas", job);
         return;
@@ -1405,6 +1427,54 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           visual_contract_hash: visualContract.visual_contract_hash || job.visual_contract_hash || "",
           visual_contract: visualContract,
         },
+      });
+      return;
+    }
+    if (job.kind === "cg") {
+      const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : visualContractFor(job.visual_contract_key || "", "cg", job.title || job.asset_key || "");
+      const prompt = job.cg_prompt && typeof job.cg_prompt === "object" ? job.cg_prompt : {};
+      const seedText = [
+        state.campaign.activeCampaign,
+        job.asset_key,
+        job.title,
+        job.detail,
+        prompt.positive,
+      ].filter(Boolean).join(":");
+      const canvas = createAssetCanvas(192, 128);
+      cacheCanvasAsset({
+        canvas,
+        kind: "cg_image",
+        subdir: "generated",
+        objectId: slugify(job.asset_key || job.job_id || job.title || "opening_cg"),
+        seedText: scopedSeed(seedText || "opening_cg"),
+        metadata: {
+          title: job.title || "Opening CG",
+          display_name: job.title || "Opening CG",
+          detail: job.detail || prompt.positive || "",
+          meta: "CG",
+          role: "cg",
+          runtime_role: "cg",
+          entity_key: visualContract.entity_key || makeEntityKey("cg", job.title || job.asset_key || "opening_cg"),
+          gallery_category: "cg",
+          source: "director_canvas_job",
+          generation_instruction: job.generation_instruction || "",
+          cg_prompt: prompt,
+          image_prompt: prompt,
+          visual_contract_key: visualContract.entity_key || job.visual_contract_key || "",
+          visual_contract_hash: visualContract.visual_contract_hash || job.visual_contract_hash || "",
+          visual_contract: visualContract,
+        },
+        draw: () => drawPixelItemIcon(seedText || job.title || "opening_cg", {
+          cache: false,
+          canvas,
+          targetImage: null,
+          asset: {
+            title: job.title || "Opening CG",
+            kind: "cg",
+            detail: job.detail || prompt.positive || "",
+            imagePrompt: prompt,
+          },
+        }),
       });
       return;
     }
@@ -2994,6 +3064,11 @@ function normalizeVisualRole(value = "") {
   if (raw.includes("player") || raw.includes("protagonist") || raw.includes("主角") || raw.includes("玩家")) return "player";
   if (raw.includes("key_character") || raw.includes("key character") || raw.includes("关键")) return "key_character";
   if (raw.includes("master") || raw.includes("servant") || raw.includes("御主") || raw.includes("从者")) return "key_character";
+  if (raw.includes("monster") || raw.includes("enemy") || raw.includes("boss") || raw.includes("怪物")) return "monster";
+  if (raw.includes("item") || raw.includes("weapon") || raw.includes("equipment") || raw.includes("物品") || raw.includes("装备")) return "item";
+  if (raw.includes("prop") || raw.includes("tool") || raw.includes("道具")) return "prop";
+  if (raw.includes("scene") || raw.includes("map") || raw.includes("location") || raw.includes("场景") || raw.includes("地图")) return "scene";
+  if (raw.includes("cg") || raw.includes("剧情图") || raw.includes("生图")) return "cg";
   if (raw.includes("npc")) return "npc";
   return "npc";
 }
@@ -3015,6 +3090,12 @@ function assetKindForRole(role) {
     companion: "companion_portrait",
     key_character: "key_character_portrait",
     npc: "npc_portrait",
+    monster: "monster_image",
+    item: "item_icon",
+    prop: "item_icon",
+    scene: "scene_image",
+    map: "map_image",
+    cg: "cg_image",
   }[role] || "npc_portrait";
 }
 
@@ -4993,8 +5074,8 @@ function drawGalleryAsset(targetImage, asset) {
     return;
   }
   const canvas = createAssetCanvas(128, 128);
-  const kind = asset.kind === "scene" ? "map_image" : resolved.asset_kind || (asset.kind === "npc" ? "npc_portrait" : asset.kind === "companion" ? "companion_portrait" : asset.kind === "item" ? "item_icon" : `gallery_${asset.kind}`);
-  const subdir = asset.kind === "scene" ? "maps" : asset.kind === "npc" || asset.kind === "companion" ? "portraits" : asset.kind === "cg" ? "generated" : "items";
+  const kind = galleryRenderKindForAsset(asset, resolved);
+  const subdir = gallerySubdirForRenderKind(kind, asset.kind);
   const draw = () => {
     if (asset.kind === "scene") drawPixelMap(asset.seed, { cache: false, canvas, scene: asset.scene, compact: true });
     else if (asset.kind === "companion") drawPixelCompanionPortrait(asset.seed || resolved.fallback_seed || asset.title, { cache: false, canvas, targetImage: null, archetype: "companion" });
@@ -5033,6 +5114,32 @@ function drawGalleryAsset(targetImage, asset) {
   }
   draw();
   setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function galleryRenderKindForAsset(asset = {}, resolved = {}) {
+  const explicit = String(asset.assetKind || asset.asset_kind || asset.render_kind || resolved.asset_kind || "").toLowerCase();
+  const galleryKind = String(asset.kind || "").toLowerCase();
+  if (["map", "map_image", "scene", "scene_image"].includes(explicit)) return explicit === "scene" ? "scene_image" : explicit === "map" ? "map_image" : explicit;
+  if (["cg", "cg_image", "gallery_image"].includes(explicit)) return explicit === "cg" ? "cg_image" : explicit;
+  if (["item", "prop", "item_icon"].includes(explicit)) return "item_icon";
+  if (["monster", "monster_image"].includes(explicit)) return "monster_image";
+  if (["player", "player_portrait", "portrait"].includes(explicit)) return "player_portrait";
+  if (["companion", "companion_portrait"].includes(explicit)) return "companion_portrait";
+  if (["npc", "character", "npc_portrait"].includes(explicit)) return "npc_portrait";
+  if (galleryKind === "scene") return "map_image";
+  if (galleryKind === "cg") return "cg_image";
+  if (galleryKind === "item" || galleryKind === "prop") return "item_icon";
+  if (galleryKind === "companion") return "companion_portrait";
+  if (galleryKind === "npc" || galleryKind === "character") return "npc_portrait";
+  return `gallery_${slugify(galleryKind || "asset")}`;
+}
+
+function gallerySubdirForRenderKind(renderKind = "", galleryKind = "") {
+  const kind = String(renderKind || "").toLowerCase();
+  if (kind === "map_image" || kind === "scene_image" || String(galleryKind || "").toLowerCase() === "scene") return "maps";
+  if (kind === "cg_image" || kind === "gallery_image" || String(galleryKind || "").toLowerCase() === "cg") return "generated";
+  if (kind.includes("portrait")) return "portraits";
+  return "items";
 }
 
 function setBusy(running, error = false) {

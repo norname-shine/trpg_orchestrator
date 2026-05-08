@@ -6,6 +6,8 @@
 
 - `lazy_context_rules.md`：导演/审计懒加载上下文。
 - `output_contract_rules.md`：导演/审计输出契约边界。
+- `director_actor_dispatch_rules.md` / `director_actor_dispatch_rules_CN.md`：导演输出 `actor_dispatch` 的后台分发规则。
+- `director_forecast_rules.md` / `director_forecast_rules_CN.md`：导演输出 backend-only `orchestration_forecast` 的下一回合热加载规则。
 
 ## 演员层裁剪归档
 
@@ -21,4 +23,3 @@
 
 - 演员层 Prompt 接收精简可见能力、当前剧情位置、场景简报，以及允许的证据/检定区域。
 - 原始 `Capability Plan`、`Scene Control Pack`、路由元数据、debug 字段和空占位不进入演员层剧情 Prompt。
-

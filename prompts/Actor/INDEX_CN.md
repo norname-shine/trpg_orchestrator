@@ -11,6 +11,11 @@
 
 ## 演员层懒加载模块
 
+- `actor_style_min.md` / `actor_style_min_CN.md`：最小正文风格约束。
+- `actor_npc_voice_min.md` / `actor_npc_voice_min_CN.md`：最小 NPC 台词约束。
+- `actor_choice_pressure.md` / `actor_choice_pressure_CN.md`：选择压力呈现。
+- `actor_recap_rules.md` / `actor_recap_rules_CN.md`：短复盘表达边界。
+- `actor_progress_rules.md` / `actor_progress_rules_CN.md`：玩家可见进度表达。
 - `actor_context_rules.md`：可见上下文纪律。
 - `actor_writeback_rules.md`：证据写回边界。
 - `actor_dice_check_rules.md`：玩家可见系统检定处理。
@@ -29,4 +34,3 @@
 - 演员正文 Prompt 接收场景简报和证据/检定标签，不接收原始 `output_requests` 或 `payloads`。
 - 演员层生图 Prompt 可以接收清理后的生图指令和可见场景上下文。
 - `_CN.md` 中文包必须与英文文件放在同一目录。
-

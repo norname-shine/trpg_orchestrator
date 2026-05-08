@@ -105,6 +105,37 @@ def test_orchestration_forecast_writeback_preloads_next_turn_capability():
     assert forecast["source_turn"] == 4
     assert forecast["expires_at_turn"] == 6
     assert "hidden_reason" not in forecast["upcoming_assets"][0]
+    assert "visual_assets" not in plan["loaded_capabilities"]
+    assert "map" not in plan["loaded_capabilities"]
+    assert plan["output_contract"]["allow_visual_assets"] is False
+    assert plan["output_contract"]["allow_map_payload"] is False
+
+
+def test_orchestration_forecast_ignored_when_expired_or_node_mismatch():
+    expired = default_memory("demo")
+    expired["recent_context.json"]["turn_index"] = 5
+    expired["recent_context.json"]["orchestration_forecast"] = {
+        "for_backend_only": True,
+        "source_turn": 1,
+        "expires_at_turn": 4,
+        "hotload_next_turn": {"director_modules": ["director_visual_payload_min"]},
+    }
+    expired_plan = build_capability_plan("demo", "继续", expired)
+
+    mismatch = default_memory("demo")
+    mismatch["recent_context.json"]["turn_index"] = 2
+    mismatch["story_progress.json"]["current_node_id"] = "node_a"
+    mismatch["recent_context.json"]["orchestration_forecast"] = {
+        "for_backend_only": True,
+        "source_turn": 1,
+        "expires_at_turn": 3,
+        "valid_until_node_id": "node_b",
+        "hotload_next_turn": {"director_modules": ["director_map_payload_min"]},
+    }
+    mismatch_plan = build_capability_plan("demo", "继续", mismatch)
+
+    assert "visual_preload" not in expired_plan["loaded_capabilities"]
+    assert "map_preload" not in mismatch_plan["loaded_capabilities"]
 
 
 def test_actor_memory_does_not_include_forecast_fields():

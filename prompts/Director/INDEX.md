@@ -12,6 +12,8 @@ Director prompts decide macro scene control, pacing, boundaries, and structured 
 
 ## Control Modules
 
+- `director_visual_payload_min.md` / `director_visual_payload_min_CN.md`: director-side minimal visual payload preload rules.
+- `director_map_payload_min.md` / `director_map_payload_min_CN.md`: director-side minimal map payload preload rules.
 - `visual_asset_protocol.md`: visual and map payload protocol.
 - `visual_contract_director_rules.md`: campaign-bound visual contract candidate rules.
 - `chatgpt_map_rules.md`: director-side map-control boundary.

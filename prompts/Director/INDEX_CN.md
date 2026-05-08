@@ -12,6 +12,8 @@
 
 ## 控制模块
 
+- `director_visual_payload_min.md` / `director_visual_payload_min_CN.md`：导演侧最小视觉 payload 预加载规则。
+- `director_map_payload_min.md` / `director_map_payload_min_CN.md`：导演侧最小地图 payload 预加载规则。
 - `visual_asset_protocol.md`：视觉与地图 payload 协议。
 - `visual_contract_director_rules.md`：团级视觉契约候选规则。
 - `chatgpt_map_rules.md`：导演侧地图控制边界。

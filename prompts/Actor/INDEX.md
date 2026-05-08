@@ -11,6 +11,11 @@ Actor prompts perform player-facing prose, dialogue, visible checks, evidence ca
 
 ## Actor Lazy Modules
 
+- `actor_style_min.md` / `actor_style_min_CN.md`: minimal prose-style constraint.
+- `actor_npc_voice_min.md` / `actor_npc_voice_min_CN.md`: minimal NPC voice constraint.
+- `actor_choice_pressure.md` / `actor_choice_pressure_CN.md`: choice-pressure presentation.
+- `actor_recap_rules.md` / `actor_recap_rules_CN.md`: short recap boundary.
+- `actor_progress_rules.md` / `actor_progress_rules_CN.md`: player-visible progress wording.
 - `actor_context_rules.md`: visible-context discipline.
 - `actor_writeback_rules.md`: evidence writeback boundary.
 - `actor_dice_check_rules.md`: visible system-check handling.
@@ -29,4 +34,3 @@ Actor prompts perform player-facing prose, dialogue, visible checks, evidence ca
 - Actor text prompts receive scene brief and evidence/check labels, not raw `output_requests` or `payloads`.
 - Actor image prompts may receive sanitized image instructions and visible scene context.
 - Keep `_CN.md` counterparts beside English files.
-

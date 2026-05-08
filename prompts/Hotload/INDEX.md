@@ -6,6 +6,8 @@ Hotload files support runtime prompt selection, capability injection, output con
 
 - `lazy_context_rules.md`: director/audit lazy context loading.
 - `output_contract_rules.md`: director/audit output contract boundary.
+- `director_actor_dispatch_rules.md` / `director_actor_dispatch_rules_CN.md`: director-side `actor_dispatch` backend dispatch rules.
+- `director_forecast_rules.md` / `director_forecast_rules_CN.md`: backend-only `orchestration_forecast` next-turn hotload rules.
 
 ## Actor-Pruning Archive
 
@@ -21,4 +23,3 @@ Hotload files support runtime prompt selection, capability injection, output con
 
 - Actor prompts receive compact visible capability summaries, current story position, scene brief, and allowed evidence/check areas.
 - Raw `Capability Plan`, `Scene Control Pack`, routing metadata, debug fields, and empty placeholders remain out of actor story prompts.
-

@@ -48,7 +48,15 @@ def test_actor_modules_without_dispatch_keep_existing_trigger_logic():
 
     assert "actor_context_rules" in modules
     assert "actor_inventory_rules" in modules
-    assert "actor_style_min" not in modules
+    assert "actor_style_min" in modules
+    assert "style_core" not in modules
+
+
+def test_npc_present_uses_min_voice_without_long_voice_rules():
+    modules = select_prompt_modules(_plan(["base_actor", "npc_present"]), "actor", _pressure_pack())
+
+    assert "actor_npc_voice_min" in modules
+    assert "npc_voice_rules" not in modules
 
 
 def test_actor_dispatch_min_modules_select_min_prompt_modules():
@@ -77,6 +85,14 @@ def test_actor_dispatch_heavy_npc_voice_selects_long_rules_only_when_requested()
     assert "npc_voice_rules" not in light_modules
     assert "actor_npc_voice_min" in light_modules
     assert "npc_voice_rules" in heavy_modules
+
+
+def test_preload_capabilities_select_min_director_payload_modules():
+    visual_modules = select_prompt_modules(_plan(["base_director", "visual_preload"]), "director", _pressure_pack())
+    map_modules = select_prompt_modules(_plan(["base_director", "map_preload"]), "director", _pressure_pack())
+
+    assert "director_visual_payload_min" in visual_modules
+    assert "director_map_payload_min" in map_modules
 
 
 def test_orchestration_forecast_writeback_preloads_next_turn_capability():

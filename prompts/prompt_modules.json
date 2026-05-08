@@ -85,15 +85,15 @@
   "style_core": {
     "path": "Actor/chatgpt_style_rules.md",
     "layers": ["actor"],
-    "triggers": ["base_actor", "always_actor"],
-    "responsibility": "只约束 actor 的玩家可见正文风格",
+    "triggers": ["style_deep", "climax", "rewrite_style"],
+    "responsibility": "只在深度风格、高潮或改写修复时约束 actor 的玩家可见正文风格",
     "allowed_outputs": ["turn_title", "blocks", "summary"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "输出未授权 payload", "直接落盘记忆", "替代 audit 判断写回可信度"]
   },
   "actor_style_min": {
     "path": "Actor/actor_style_min.md",
     "layers": ["actor"],
-    "triggers": ["actor_style_min"],
+    "triggers": ["base_actor"],
     "responsibility": "只提供 actor 最小正文风格约束",
     "allowed_outputs": ["turn_title", "blocks", "summary"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
@@ -101,7 +101,7 @@
   "actor_npc_voice_min": {
     "path": "Actor/actor_npc_voice_min.md",
     "layers": ["actor"],
-    "triggers": ["actor_npc_voice_min"],
+    "triggers": ["npc_present", "npc_voice"],
     "responsibility": "只提供 actor 最小 NPC 台词约束",
     "allowed_outputs": ["turn_title", "blocks", "summary", "state_writeback"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
@@ -165,7 +165,7 @@
   "actor_recap_rules": {
     "path": "Actor/actor_recap_rules.md",
     "layers": ["actor"],
-    "triggers": ["actor_recap_rules"],
+    "triggers": ["recap"],
     "responsibility": "只约束 actor 进行简短复盘表达",
     "allowed_outputs": ["turn_title", "blocks", "summary"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]
@@ -173,7 +173,7 @@
   "actor_progress_rules": {
     "path": "Actor/actor_progress_rules.md",
     "layers": ["actor"],
-    "triggers": ["actor_progress_rules"],
+    "triggers": ["progress", "story_progress"],
     "responsibility": "只约束 actor 呈现已授权的进度变化",
     "allowed_outputs": ["turn_title", "blocks", "summary", "progress_writeback"],
     "must_not": ["决定本回合隐藏真相", "覆盖 pressure_pack", "直接落盘记忆"]

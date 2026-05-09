@@ -115,7 +115,9 @@ const LEGACY_STATE_FIELDS = {
   characterProfileExpanded: ["character", "characterProfileExpanded"],
   characterProfileCampaign: ["character", "characterProfileCampaign"],
   lastCharacterCardForRender: ["character", "lastCharacterCardForRender"],
-  latestInventoryPayload: ["character", "latestInventoryPayload"],
+  rawInventoryState: ["character", "rawInventoryState"],
+  rawInventoryItems: ["character", "rawInventoryItems"],
+  inventoryEvents: ["character", "inventoryEvents"],
   latestDossierPayload: ["character", "latestDossierPayload"],
   writebackReview: ["writeback", "writebackReview"],
   polling: ["job", "polling"],
@@ -321,17 +323,6 @@ function bindControls() {
     button.addEventListener("click", () => {
       state.ui.sideTab = button.dataset.sideTab;
       document.querySelectorAll("[data-side-tab]").forEach((x) => x.classList.toggle("active", x === button));
-      if (state.ui.sideTab === "items") {
-        const inventoryModule = state.campaign.frontendState?.modules?.inventory || {};
-        if (inventoryModule.payload_ref) {
-          loadModulePayload(inventoryModule.payload_ref, "inventory").then((data) => {
-            if (data?.payload && data.campaign_id === state.campaign.activeCampaign) {
-              state.character.latestInventoryPayload = data.payload;
-              renderSidePanel(state.campaign.lastCampaignState);
-            }
-          }).catch((err) => console.warn("inventory module unavailable", err));
-        }
-      }
       renderSidePanel(state.campaign.lastCampaignState);
     });
   });
@@ -652,6 +643,7 @@ async function refresh() {
     }
     if (previousCampaign !== nextCampaign) await loadCachedAssets();
     await loadRawGallery(nextCampaign);
+    await loadRawInventory(nextCampaign);
     renderStatus(data);
     updateRunProgressFromPipeline(data.pipeline || {}, data.job || {}, data.output || {});
     renderFrontendState(state.campaign.frontendState, data.campaign_state || {});
@@ -780,6 +772,30 @@ async function loadRawGallery(campaignId = state.campaign.activeCampaign) {
   return state.gallery.rawAssets;
 }
 
+async function loadRawInventory(campaignId = state.campaign.activeCampaign) {
+  if (!campaignId) {
+    state.character.rawInventoryState = {};
+    state.character.rawInventoryItems = [];
+    state.character.inventoryEvents = [];
+    return [];
+  }
+  try {
+    const data = await api(`/api/extensions/inventory?campaign_id=${encodeURIComponent(campaignId)}`);
+    if (campaignId && campaignId !== state.campaign.activeCampaign) return state.character.rawInventoryItems || [];
+    const rawState = data.state && typeof data.state === "object" ? data.state : {};
+    const rawEvents = data.events && typeof data.events === "object" ? data.events : {};
+    state.character.rawInventoryState = rawState;
+    state.character.rawInventoryItems = Array.isArray(rawState.items) ? rawState.items : [];
+    state.character.inventoryEvents = Array.isArray(rawEvents.events) ? rawEvents.events : [];
+  } catch (err) {
+    console.warn("raw inventory unavailable", err);
+    state.character.rawInventoryState = {};
+    state.character.rawInventoryItems = [];
+    state.character.inventoryEvents = [];
+  }
+  return state.character.rawInventoryItems;
+}
+
 function invalidateModulePayloadCache(moduleName) {
   const needle = `:${moduleName}:`;
   Object.keys(state.assets.modulePayloadCache || {}).forEach((key) => {
@@ -804,7 +820,9 @@ function resetCampaignScopedUiState(campaignId) {
   state.story.storyProgressPayload = {};
   state.story.storyProgressChapter = {};
   state.story.storyProgressNode = {};
-  state.character.latestInventoryPayload = null;
+  state.character.rawInventoryState = {};
+  state.character.rawInventoryItems = [];
+  state.character.inventoryEvents = [];
   state.character.latestDossierPayload = null;
   clearImageElement("avatarImage");
   clearImageElement("companionImage");
@@ -1302,9 +1320,6 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
           });
         } else if (name === "map_panel") {
           updateMapModule(data.payload || {}, campaignState);
-        } else if (name === "inventory") {
-          state.character.latestInventoryPayload = data.payload || [];
-          renderSidePanel(campaignState, frontendState);
         } else if (name === "dossier") {
           state.character.latestDossierPayload = data.payload || [];
         }
@@ -1394,8 +1409,7 @@ function renderLayout() {
 }
 
 function updateInventoryModule(moduleState = {}) {
-  if (moduleState.mode !== "update" || moduleState.update_requested !== true) return;
-  state.character.latestInventoryPayload = moduleState.payload || [];
+  return;
 }
 
 function updateDossierModule(moduleState = {}) {
@@ -2496,8 +2510,9 @@ function renderSidePanel(campaignState, frontendState = state.campaign.frontendS
   if (!list) return;
   const rows = state.ui.sideTab === "items" ? protocolInventoryRows(frontendState, campaignState) : protocolQuestRows(frontendState, campaignState);
   const fallback = state.ui.sideTab === "items" ? ["暂无物品记录"] : ["暂无任务记录"];
+  const visibleRows = state.ui.sideTab === "items" ? rows : rows.slice(-5);
   list.innerHTML = "";
-  (rows.length ? rows.slice(-5) : fallback.map((title) => ({ title, tag: "记录" }))).forEach((row, index) => {
+  (visibleRows.length ? visibleRows : fallback.map((title) => ({ title, tag: "record" }))).forEach((row, index) => {
     const li = document.createElement("li");
     const b = document.createElement("b");
     b.textContent = row.title || row;
@@ -3301,17 +3316,47 @@ function protocolQuestRows(frontendState = {}, campaignState = {}) {
 }
 
 function protocolInventoryRows(frontendState = {}, campaignState = {}) {
-  const rows = Array.isArray(state.character.latestInventoryPayload) && state.character.latestInventoryPayload.length
-    ? state.character.latestInventoryPayload
-    : Array.isArray(frontendState.inventory) ? frontendState.inventory : [];
-  if (rows.length) {
-    return rows.map((row) => ({
-      title: row.short_name || row.raw_name || row.id,
-      detail: row.detail || "",
-      tag: row.category || row.role || "物品",
-    }));
-  }
-  return itemRows(campaignState);
+  const rows = Array.isArray(state.character.rawInventoryItems) ? state.character.rawInventoryItems : [];
+  return rows.map(protocolRawInventoryItem).filter(Boolean);
+}
+
+function protocolRawInventoryItem(item = {}) {
+  if (!item || typeof item !== "object") return null;
+  const itemId = String(item.item_id || "").trim();
+  const title = String(item.title || itemId || "").trim();
+  if (!itemId || !title) return null;
+  const rawState = item.state && typeof item.state === "object" ? item.state : {};
+  const rawPayload = item.payload && typeof item.payload === "object" ? item.payload : {};
+  const sourceItemId = String(item.source_item_id || "").trim();
+  const detailParts = [
+    ...inventoryKeyValueRows(rawState),
+    ...inventoryKeyValueRows(rawPayload),
+  ];
+  if (sourceItemId) detailParts.push(`source_item_id: ${sourceItemId}`);
+  return {
+    id: itemId,
+    item_id: itemId,
+    title,
+    detail: detailParts.join(" | "),
+    tag: sourceItemId ? "derived" : "item",
+    state: rawState,
+    payload: rawPayload,
+    source_item_id: sourceItemId,
+    raw_item: item,
+  };
+}
+
+function inventoryKeyValueRows(value = {}) {
+  return Object.entries(value || {})
+    .filter(([key]) => String(key || "").trim())
+    .map(([key, row]) => `${key}: ${inventoryDisplayValue(row)}`);
+}
+
+function inventoryDisplayValue(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return value.map(inventoryDisplayValue).join(", ");
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return String(value ?? "");
 }
 
 function renderMessageBlock(block) {

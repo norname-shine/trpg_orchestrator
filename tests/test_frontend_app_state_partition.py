@@ -111,7 +111,9 @@ def test_low_risk_state_access_uses_partitions():
         "storyProgressPayload",
         "storyProgressChapter",
         "storyProgressNode",
-        "latestInventoryPayload",
+        "rawInventoryState",
+        "rawInventoryItems",
+        "inventoryEvents",
         "latestDossierPayload",
         "runProgress",
         "sideTab",
@@ -176,7 +178,9 @@ def test_reset_campaign_scoped_state_clears_cross_campaign_caches():
         "state.story.storyProgressPayload = {}",
         "state.story.storyProgressChapter = {}",
         "state.story.storyProgressNode = {}",
-        "state.character.latestInventoryPayload = null",
+        "state.character.rawInventoryState = {}",
+        "state.character.rawInventoryItems = []",
+        "state.character.inventoryEvents = []",
         "state.character.latestDossierPayload = null",
     ):
         assert expected in body
@@ -267,3 +271,48 @@ def test_gallery_visibility_and_map_candidate_logic_follow_new_contract():
     assert "protocolRawGalleryAsset(rawMap)" in map_body
     assert "scene" not in map_body
     assert "metadata" not in map_body
+
+
+def test_inventory_loads_from_extension_endpoint():
+    source = app_source()
+    refresh_body = function_body(source, "refresh")
+    load_body = function_body(source, "loadRawInventory")
+    hydrate_body = function_body(source, "hydrateLazyFrontendModules")
+
+    assert "loadRawInventory(nextCampaign)" in refresh_body
+    assert "/api/extensions/inventory" in load_body
+    assert "rawState.items" in load_body
+    assert "rawEvents.events" in load_body
+    assert "/api/module/inventory" not in source
+    assert "latestInventoryPayload" not in source
+    assert 'name === "inventory"' not in hydrate_body
+
+
+def test_inventory_rendering_uses_raw_inventory_items_only():
+    source = app_source()
+    body = function_body(source, "protocolInventoryRows")
+    raw_body = function_body(source, "protocolRawInventoryItem")
+
+    assert "state.character.rawInventoryItems" in body
+    assert "frontendState.inventory" not in body
+    assert "itemRows(campaignState)" not in body
+    assert "item.item_id" in raw_body
+    assert "item.title" in raw_body
+    assert "item.state" in raw_body
+    assert "item.payload" in raw_body
+    assert "source_item_id" in raw_body
+    assert "raw_item: item" in raw_body
+    for forbidden in ("title.includes", "category.includes", "detail.includes", "slugify(", "dedupeInventoryRows"):
+        assert forbidden not in body + raw_body
+
+
+def test_inventory_empty_state_and_duplicate_titles_are_preserved():
+    source = app_source()
+    side_body = function_body(source, "renderSidePanel")
+    raw_body = function_body(source, "protocolInventoryRows") + function_body(source, "protocolRawInventoryItem")
+
+    assert "暂无物品" in side_body or "鏆傛棤鐗╁搧" in side_body
+    assert 'state.ui.sideTab === "items" ? rows : rows.slice(-5)' in side_body
+    assert ".map(protocolRawInventoryItem).filter(Boolean)" in raw_body
+    assert "new Map" not in raw_body
+    assert "byKey" not in raw_body

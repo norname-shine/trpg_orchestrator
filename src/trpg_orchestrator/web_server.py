@@ -35,6 +35,8 @@ from .services.asset_rules import asset_contract_payload
 from .services.raw_gallery_store import RAW_GALLERY_SCHEMA
 from .services.raw_gallery_store import gallery_response as raw_gallery_response
 from .services.raw_gallery_store import save_gallery_raw
+from .services.inventory_state_store import apply_inventory_payload
+from .services.inventory_state_store import inventory_response
 from .story_progress import build_frontend_story_progress
 from .visual_contracts import (
     CONTRACT_FILE,
@@ -339,6 +341,10 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             self._json(raw_gallery_response(first_query(query, "campaign_id")))
             return
+        if parsed.path == "/api/extensions/inventory":
+            query = parse_qs(parsed.query)
+            self._json(inventory_response(first_query(query, "campaign_id")))
+            return
         if parsed.path == "/api/asset-contract":
             query = parse_qs(parsed.query)
             self._json(asset_contract_response(first_query(query, "campaign_id")))
@@ -446,6 +452,13 @@ class Handler(BaseHTTPRequestHandler):
                 campaign_id = str(payload.get("campaign_id") or "").strip()
                 save_gallery_raw(campaign_id, payload.get("gallery"))
                 self._json(raw_gallery_response(campaign_id))
+                return
+            if parsed.path == "/api/extensions/inventory/apply":
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    raise RuntimeError("inventory request payload must be object")
+                campaign_id = str(payload.get("campaign_id") or "").strip()
+                self._json(apply_inventory_payload(campaign_id, payload.get("item")))
                 return
             if parsed.path == "/api/rebuild-assets":
                 payload = self._read_json()

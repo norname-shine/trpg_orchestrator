@@ -3,6 +3,7 @@ import pytest
 from trpg_orchestrator import web_server
 from trpg_orchestrator.encoding_utils import looks_mojibake
 from trpg_orchestrator.memory_store import default_memory
+from trpg_orchestrator.services import raw_gallery_store
 from trpg_orchestrator.visual_contracts import build_initial_visual_contract_candidates, merge_visual_contracts
 from trpg_orchestrator.web_server import campaign_initialization_frontend_payload, validate_v4_campaign_setup
 
@@ -11,6 +12,35 @@ def write_default_campaign(root, campaign_id="campaign_test", name="Test Campaig
     root.mkdir(parents=True, exist_ok=True)
     for filename, content in default_memory(campaign_id, name).items():
         (root / filename).write_text(web_server.json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def smart_campaign_config(setup):
+    return {
+        "name": "Test Campaign",
+        "template": "custom",
+        "user_prompt": "player raw input should not be stored",
+        "analysis": setup["analysis"],
+        "routing": {"director_rules": [], "actor_rules": []},
+        "model_config": {},
+        "rules_config": {"character_card_enabled": True, "stat_visibility": "numeric", "attribute_config": {"enabled": True}, "dice_enabled": False, "rules_strictness": "light"},
+        "story_config": {"story_length": "short", "target_total_chars": 30000, "target_chapters": 3, "target_nodes": 9},
+        "character_card": {
+            "identity": {"name": "Hero", "role": "Scout", "title": "", "summary": ""},
+            "profile": {"background": "", "motivation": "", "personality": ""},
+            "attributes": {
+                "enabled": True,
+                "visible": True,
+                "cap": 20,
+                "float_ratio": 1.2,
+                "float_cap": 24,
+                "three": {"items": [{"value": 12}, {"value": 13}, {"value": 14}]},
+                "six": {"items": [{"value": 10}, {"value": 11}, {"value": 12}, {"value": 13}, {"value": 14}, {"value": 15}]},
+            },
+        },
+        "companion_config": {"companion_enabled": False},
+        "safety_lines": [],
+        "v4_setup": setup,
+    }
 
 
 def setup_payload(custom_categories=None):
@@ -67,6 +97,26 @@ def setup_payload(custom_categories=None):
             },
             "initial_items": [{"id": "kit", "name": "Hunter kit", "category": "prop"}],
             "item_canvas_rules": {"kit": {"shape": "satchel"}},
+        },
+        "gallery_raw": {
+            "schema": "trpg.gallery_raw.v2",
+            "campaign_id": "",
+            "updated_turn": 0,
+            "assets": [
+                {
+                    "id": "opening_map",
+                    "type": "map",
+                    "title": "Opening Route",
+                    "detail": "Director-authored map card",
+                    "display_zone": "gallery",
+                    "payload": {"media": {"image": "assets/map/opening.png"}},
+                },
+                {
+                    "id": "kit",
+                    "type": "item",
+                    "title": "Hunter kit",
+                },
+            ],
         },
         "story_memory_seed": {
             "custom_libraries": [
@@ -196,6 +246,36 @@ def test_campaign_initial_items_accept_label_as_name_alias():
     result = validate_v4_campaign_setup(payload)
 
     assert result["initial_assets"]["initial_items"][0]["name"] == "Old Letter"
+
+
+def test_validate_v4_campaign_setup_requires_gallery_raw():
+    payload = setup_payload()
+    payload.pop("gallery_raw")
+
+    with pytest.raises(RuntimeError, match="gallery_raw must be object"):
+        validate_v4_campaign_setup(payload)
+
+
+def test_validate_v4_campaign_setup_does_not_generate_gallery_from_initial_assets():
+    payload = setup_payload()
+    payload["gallery_raw"]["assets"] = []
+
+    result = validate_v4_campaign_setup(payload)
+
+    assert result["gallery_raw"]["assets"] == []
+
+
+def test_gallery_raw_asset_extra_fields_are_preserved():
+    payload = setup_payload()
+    asset = payload["gallery_raw"]["assets"][0]
+    asset["category"] = "custom_map"
+    asset["payload"]["director_only"] = {"nested": ["keep", "as", "is"]}
+
+    result = validate_v4_campaign_setup(payload)
+
+    assert result["gallery_raw"]["assets"][0] is asset
+    assert result["gallery_raw"]["assets"][0]["category"] == "custom_map"
+    assert result["gallery_raw"]["assets"][0]["payload"]["director_only"] == {"nested": ["keep", "as", "is"]}
 
 
 def test_legacy_initial_assets_keys_are_rejected():
@@ -472,6 +552,7 @@ def test_asset_list_keeps_valid_cached_map_after_payload_url_materialized(tmp_pa
 
 def test_apply_smart_config_stores_finalized_content_not_raw_user_input(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", tmp_path)
     campaign_id = "campaign_test"
     root = tmp_path / campaign_id
     write_default_campaign(root, campaign_id)
@@ -516,6 +597,28 @@ def test_apply_smart_config_stores_finalized_content_not_raw_user_input(tmp_path
     assert profile["finalized_ai_content"]["premise"] == setup["analysis"]["premise"]
     assert player["character_card"]["attributes"]["three"]["items"][0]["key"] == "vigor"
     assert frontend_items[0]["short_name"] == "Hunter kit"
+
+
+def test_apply_smart_config_persists_gallery_raw_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", tmp_path)
+    campaign_id = "campaign_test"
+    root = tmp_path / campaign_id
+    write_default_campaign(root, campaign_id)
+    setup = validate_v4_campaign_setup(setup_payload())
+    expected_assets = web_server.json.loads(web_server.json.dumps(setup["gallery_raw"]["assets"], ensure_ascii=False))
+    config = smart_campaign_config(setup)
+
+    web_server.apply_smart_campaign_config(root, config)
+
+    stored_raw = web_server.read_json(root / "extensions" / "gallery_raw.json")
+    stored_index = web_server.read_json(root / "extensions" / "gallery_index.json")
+    assert stored_raw["schema"] == "trpg.gallery_raw.v2"
+    assert stored_raw["campaign_id"] == campaign_id
+    assert stored_raw["assets"] == expected_assets
+    assert setup["gallery_raw"]["campaign_id"] == ""
+    assert stored_index["by_id"] == {"opening_map": 0, "kit": 1}
+    assert stored_index["by_type"] == {"map": ["opening_map"], "item": ["kit"]}
 
 
 def test_visual_contract_candidates_are_accepted_and_generic():

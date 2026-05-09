@@ -32,6 +32,7 @@ from .prompt_builder import build_audit_user_prompt, read_prompt
 from .deepseek_client import DeepSeekClient
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_writeback
 from .services.asset_rules import asset_contract_payload
+from .services.raw_gallery_store import RAW_GALLERY_SCHEMA
 from .services.raw_gallery_store import gallery_response as raw_gallery_response
 from .services.raw_gallery_store import save_gallery_raw
 from .story_progress import build_frontend_story_progress
@@ -4232,6 +4233,12 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             "initial_items": [],
             "item_canvas_rules": {},
         },
+        "gallery_raw": {
+            "schema": "trpg.gallery_raw.v2",
+            "campaign_id": "",
+            "updated_turn": 0,
+            "assets": [],
+        },
         "visual_contract_candidates": [
             {
                 "entity_key": "",
@@ -4373,6 +4380,7 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
         "Return render_rules for player_portrait, companion_portrait, character_portrait, map, item, prop, and cg.",
         "Return initial_assets.initial_map_canvas with map_route.nodes and canvas_draw_instructions; return initial_assets.initial_cg with generation_instruction and cg_prompt; also return initial_items and item_canvas_rules. Missing any of these makes setup invalid.",
+        "Return gallery_raw as the director-authored gallery source with schema trpg.gallery_raw.v2, campaign_id as an empty string, updated_turn, and assets. Each asset must include non-empty string id/type/title. Do not rely on backend inference for category, detail, display_zone, or payload.",
         "Return visual_contract_candidates as campaign-bound visual intent for confirmed player, companion, map, item, scene, monster, or CG entities. Backend will validate and merge them into visual_contracts.json; do not make this a final image prompt or hard-code renderer-only fields.",
         "Return story_memory_seed.custom_libraries or initial_memory_notes.custom_libraries for campaign-specific content libraries. Only declare the generic resource-slot structure; do not rely on backend fixed library names.",
         "Do not use protected franchise, character, trademark, or artist names in visual_style. Describe original medium, palette, composition, and mood instead.",
@@ -4804,6 +4812,31 @@ def sanitize_initial_assets(value: Any) -> dict[str, Any]:
     return result
 
 
+def sanitize_setup_gallery_raw(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError("gallery_raw must be object")
+    if value.get("schema") != RAW_GALLERY_SCHEMA:
+        raise RuntimeError(f"gallery_raw.schema must be {RAW_GALLERY_SCHEMA}")
+    if value.get("campaign_id") not in ("", None):
+        raise RuntimeError("gallery_raw.campaign_id must be empty during campaign setup")
+    assets = value.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("gallery_raw.assets must be list")
+    seen: set[str] = set()
+    for index, asset in enumerate(assets):
+        if not isinstance(asset, dict):
+            raise RuntimeError(f"gallery_raw.assets[{index}] must be object")
+        for key in ("id", "type", "title"):
+            item = asset.get(key)
+            if not isinstance(item, str) or not item.strip():
+                raise RuntimeError(f"gallery_raw.assets[{index}] missing required fields: {key}")
+        asset_id = asset["id"]
+        if asset_id in seen:
+            raise RuntimeError(f"duplicate gallery_raw asset id: {asset_id}")
+        seen.add(asset_id)
+    return value
+
+
 def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     data = require_dict(raw, "root")
     public_think = data.get("public_think") if isinstance(data.get("public_think"), list) else []
@@ -4822,6 +4855,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     character_attribute_schema = sanitize_attribute_schema(data.get("character_attribute_schema"))
     render_rules = normalize_render_rules(data.get("render_rules"))
     initial_assets = sanitize_initial_assets(data.get("initial_assets"))
+    gallery_raw = sanitize_setup_gallery_raw(data.get("gallery_raw"))
     visual_contract_candidates = data.get("visual_contract_candidates") if isinstance(data.get("visual_contract_candidates"), list) else []
     custom_libraries = sanitize_custom_libraries(story_memory_seed.get("custom_libraries", memory_notes.get("custom_libraries", [])))
     for key in ("early_goals", "known_boundaries", "secrets_not_to_reveal_early", "director_notes"):
@@ -4851,6 +4885,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
         "character_attribute_schema": character_attribute_schema,
         "render_rules": render_rules,
         "initial_assets": initial_assets,
+        "gallery_raw": gallery_raw,
         "visual_contract_candidates": visual_contract_candidates,
         "campaign_direction": {
             "core_concept": stringify_brief(direction.get("core_concept"), 240),
@@ -5221,6 +5256,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     initial_assets = sanitize_initial_assets(v4_setup.get("initial_assets"))
     initial_map_canvas = initial_assets.get("initial_map_canvas", {}) if isinstance(initial_assets.get("initial_map_canvas"), dict) else {}
     initial_cg = initial_assets.get("initial_cg", {}) if isinstance(initial_assets.get("initial_cg"), dict) else {}
+    gallery_raw = sanitize_setup_gallery_raw(v4_setup.get("gallery_raw"))
     campaign_taxonomy = normalize_campaign_taxonomy(v4_setup.get("campaign_taxonomy") if isinstance(v4_setup, dict) else {})
     mode = next((row for row in ai_mode_options() if row["id"] == model_config.get("model_mode")), ai_mode_options()[0])
     profile.update({
@@ -5434,6 +5470,10 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
             "source": "campaign_initialization",
         }
         write_json(map_history_path, map_history)
+
+    gallery_payload = copy.deepcopy(gallery_raw)
+    gallery_payload["campaign_id"] = str(profile.get("campaign_id") or root.name)
+    save_gallery_raw(gallery_payload["campaign_id"], gallery_payload)
 
     blueprint_path = root / "story_blueprint.json"
     blueprint = read_json(blueprint_path) if blueprint_path.exists() else {}

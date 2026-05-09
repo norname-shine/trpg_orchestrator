@@ -9,7 +9,7 @@ from typing import Any
 from ..config import CAMPAIGNS_DIR, REGISTRY_PATH
 from ..json_utils import read_json, write_json
 from .asset_normalizer import normalize_regular_asset
-from .asset_rules import ASSET_USE_TO_KIND, asset_kind_for_use, safe_segment
+from .asset_rules import ASSET_USE_TO_KIND, safe_segment
 
 
 MANIFEST_SCHEMA = "trpg_asset_manifest"
@@ -23,6 +23,7 @@ ASSET_USE_SUBDIR = {
     "cg": "cg",
 }
 
+# Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration.
 ROLE_PRIORITY = {
     "player": 10,
     "companion": 20,
@@ -32,6 +33,7 @@ ROLE_PRIORITY = {
     "map": 60,
 }
 
+# Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration.
 ROLE_ASSET_KIND = {
     "player": "character_portrait",
     "companion": "character_portrait",
@@ -46,6 +48,7 @@ ROLE_ASSET_KIND = {
     "cg": "cg_image",
 }
 
+# Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration.
 GALLERY_VISIBLE_KINDS = {
     "character_portrait",
     "item_icon",
@@ -84,6 +87,7 @@ def scoped_asset_key(campaign_id: str, kind: str, object_id: Any, variant: str =
 
 
 def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key: str = "") -> str:
+    """Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration."""
     value = str(kind or "").lower()
     if value in ASSET_USE_TO_KIND:
         return ASSET_USE_TO_KIND[value]
@@ -103,6 +107,7 @@ def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key:
 
 
 def infer_asset_role(asset: dict[str, Any]) -> str:
+    """Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration."""
     if not isinstance(asset, dict):
         return ""
     role = str(asset.get("actor_role") or asset.get("role") or "").lower()
@@ -121,6 +126,7 @@ def asset_display_name(asset: dict[str, Any]) -> str:
 
 
 def entity_key_for_asset(asset: dict[str, Any]) -> str:
+    """Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration."""
     return str(asset.get("subject_key") or asset.get("key") or "").strip()
 
 
@@ -133,7 +139,7 @@ def default_manifest(campaign_id: str, asset_seed: str = "") -> dict[str, Any]:
         "manifest_schema": MANIFEST_SCHEMA,
         "manifest_version": MANIFEST_VERSION,
         "campaign_id": campaign_id,
-        "asset_seed": asset_seed,
+        "asset_seed": asset_seed or campaign_asset_seed(campaign_id),
         "assets": {},
     }
 
@@ -151,7 +157,9 @@ def load_asset_manifest(campaign_id: str, asset_seed: str = "") -> dict[str, Any
     data["manifest_schema"] = MANIFEST_SCHEMA
     data["manifest_version"] = MANIFEST_VERSION
     data["campaign_id"] = campaign_id
-    data.setdefault("asset_seed", asset_seed)
+    data.setdefault("asset_seed", asset_seed or campaign_asset_seed(campaign_id))
+    if not data.get("asset_seed"):
+        data["asset_seed"] = asset_seed or campaign_asset_seed(campaign_id)
     data.setdefault("assets", {})
     if not isinstance(data["assets"], dict):
         data["assets"] = {}
@@ -260,6 +268,9 @@ def save_asset(payload: dict[str, Any]) -> dict[str, Any]:
 
 def register_cg_asset(payload: dict[str, Any], asset_seed: str = "") -> dict[str, Any]:
     payload = dict(payload)
+    display_zone = str(payload.get("display_zone") or "gallery").strip() or "gallery"
+    certainty = str(payload.get("certainty") or "confirmed").strip() or "confirmed"
+    cache_policy = str(payload.get("cache_policy") or "scene_only").strip() or "scene_only"
     payload.update({
         "kind": "cg",
         "id": payload.get("id") or payload.get("key") or "cg",
@@ -267,9 +278,9 @@ def register_cg_asset(payload: dict[str, Any], asset_seed: str = "") -> dict[str
         "gallery_category": "cg",
         "asset_use": "cg",
         "actor_role": "unknown",
-        "certainty": payload.get("certainty") or "confirmed",
-        "display_zone": payload.get("display_zone") or "gallery",
-        "cache_policy": payload.get("cache_policy") or "scene_only",
+        "certainty": certainty,
+        "display_zone": display_zone,
+        "cache_policy": cache_policy,
         "source_type": "image_job",
     })
     campaign_id = str(payload.get("campaign_id") or "").strip()
@@ -283,11 +294,11 @@ def register_cg_asset(payload: dict[str, Any], asset_seed: str = "") -> dict[str
         "asset_kind": ASSET_USE_TO_KIND["cg"],
         "asset_use": "cg",
         "gallery_category": "cg",
-        "display_zone": "gallery",
+        "display_zone": display_zone,
         "actor_role": "unknown",
         "display_name": str(payload.get("display_name") or payload.get("title") or "CG"),
-        "certainty": "confirmed",
-        "cache_policy": "scene_only",
+        "certainty": certainty,
+        "cache_policy": cache_policy,
         "source_type": "image_job",
         "asset_subtype": "cg",
         "asset_tags": payload.get("asset_tags", []),
@@ -302,6 +313,11 @@ def register_cg_asset(payload: dict[str, Any], asset_seed: str = "") -> dict[str
 
 
 def register_canvas_map_asset(payload: dict[str, Any], asset_seed: str = "") -> dict[str, Any]:
+    """
+    Register an already-rendered map PNG.
+    This does not render map_canvas/map_route JSON yet.
+    map_canvas/map_route -> PNG belongs to the later map_renderer phase.
+    """
     payload = dict(payload)
     payload.update({
         "kind": payload.get("kind") or "map",
@@ -309,6 +325,8 @@ def register_canvas_map_asset(payload: dict[str, Any], asset_seed: str = "") -> 
         "asset_use": "map",
         "actor_role": "unknown",
         "display_zone": payload.get("display_zone") or "map",
+        "certainty": payload.get("certainty") or "confirmed",
+        "cache_policy": payload.get("cache_policy") or "stable",
         "source_type": "server_canvas",
     })
     return register_regular_asset(payload, asset_seed)

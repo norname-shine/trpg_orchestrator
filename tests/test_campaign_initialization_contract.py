@@ -115,7 +115,7 @@ def test_campaign_custom_gallery_categories_allow_zero_to_three(count):
     result = validate_v4_campaign_setup(payload)
 
     assert len(result["campaign_taxonomy"]["campaign_categories"]) == count
-    assert {row["id"] for row in result["campaign_taxonomy"]["asset_categories"]} == {"prop", "item", "character", "scene", "cg"}
+    assert {row["id"] for row in result["campaign_taxonomy"]["asset_categories"]} == {"prop", "item", "character", "map", "cg"}
 
 
 def test_campaign_custom_gallery_categories_reject_four_or_more():
@@ -146,14 +146,14 @@ def test_fixed_asset_categories_do_not_count_against_campaign_categories():
         {"id": "prop", "label": "Prop"},
         {"id": "item", "label": "Item"},
         {"id": "character", "label": "Character"},
-        {"id": "scene", "label": "Scene"},
+        {"id": "map", "label": "Map"},
         {"id": "cg", "label": "CG"},
     ]
 
     result = validate_v4_campaign_setup(payload)
 
     assert [row["id"] for row in result["campaign_taxonomy"]["campaign_categories"]] == ["rumor", "relic"]
-    assert {row["id"] for row in result["campaign_taxonomy"]["asset_categories"]} == {"prop", "item", "character", "scene", "cg"}
+    assert {row["id"] for row in result["campaign_taxonomy"]["asset_categories"]} == {"prop", "item", "character", "map", "cg"}
 
 
 @pytest.mark.parametrize("field", ["initial_items", "item_canvas_rules"])
@@ -318,27 +318,30 @@ def test_initialization_payload_materializes_map_and_item_jobs_without_cg_canvas
 
 def test_asset_list_keeps_valid_cached_map_after_payload_url_materialized(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr("trpg_orchestrator.services.assets.CAMPAIGNS_DIR", tmp_path)
     campaign_id = "campaign_test"
     root = tmp_path / campaign_id
     map_file = root / "assets" / "maps" / "opening_map.png"
     map_file.parent.mkdir(parents=True)
     map_file.write_bytes(b"\x89PNG\r\n\x1a\n")
     manifest = {
+        "manifest_schema": "trpg_asset_manifest",
+        "manifest_version": 1,
         "campaign_id": campaign_id,
         "asset_seed": "seed123",
         "assets": {
             "campaign_test:seed123:map:opening:default:v19": {
-                "campaign_id": campaign_id,
                 "key": "campaign_test:seed123:map:opening:default:v19",
                 "path": "assets/maps/opening_map.png",
-                "kind": "map_image",
-                "asset_seed": "seed123",
-                "metadata": {
-                    "title": "Opening Map",
-                    "source": "map_route",
-                    "gallery_category": "scene",
-                    "map_route": {"title": "Opening Map", "nodes": [{"id": "camp", "label": "Camp"}]},
-                },
+                "asset_kind": "map_image",
+                "asset_use": "map",
+                "gallery_category": "map",
+                "display_zone": "map",
+                "actor_role": "unknown",
+                "display_name": "Opening Map",
+                "certainty": "confirmed",
+                "cache_policy": "stable",
+                "source_type": "server_canvas",
             }
         },
     }
@@ -347,37 +350,8 @@ def test_asset_list_keeps_valid_cached_map_after_payload_url_materialized(tmp_pa
     result = web_server.asset_list(campaign_id)
 
     assert len(result["assets"]) == 1
-    assert result["assets"][0]["kind"] == "map_image"
+    assert result["assets"][0]["asset_kind"] == "map_image"
     assert result["assets"][0]["url"].endswith("/maps/opening_map.png")
-
-
-def test_legacy_map_cached_as_npc_is_hidden_by_manifest_migration():
-    manifest = {
-        "campaign_id": "campaign_test",
-        "assets": {
-            "campaign_test:seed123:map_image:npc_Opening_Map:default:v19": {
-                "kind": "npc_portrait",
-                "path": "assets/maps/map_image_seed_npc_Opening_Map_v19.png",
-                "metadata": {
-                    "title": "Opening Map",
-                    "display_name": "Opening Map",
-                    "kind": "scene",
-                    "source": "gallery",
-                    "entity_key": "npc:Opening_Map",
-                    "gallery_category": "npc",
-                    "visible_in_gallery": True,
-                },
-            }
-        },
-    }
-
-    migrated = web_server.migrateAssetKinds(manifest, {})
-    entry = migrated["assets"]["campaign_test:seed123:map_image:npc_Opening_Map:default:v19"]
-
-    assert entry["visible_in_gallery"] is False
-    assert entry["debug_only"] is True
-    assert entry["metadata"]["not_in_gallery_filters"] is True
-    assert entry["metadata"]["migration_reason"] == "legacy_map_cached_as_npc_without_route"
 
 
 def test_apply_smart_config_stores_finalized_content_not_raw_user_input(tmp_path, monkeypatch):

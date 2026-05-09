@@ -17,12 +17,25 @@ REQUIRED_FIELDS = [
 ]
 
 
-def asset_contract_error(asset_id: str, missing_fields: list[str], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def asset_contract_error(
+    asset_id: str,
+    missing_fields: list[str] | None = None,
+    invalid_fields: list[str] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(invalid_fields, dict) and extra is None:
+        legacy_extra = invalid_fields
+        legacy_invalid = legacy_extra.get("invalid_fields")
+        extra = legacy_extra
+        invalid_fields = legacy_invalid if isinstance(legacy_invalid, list) else None
+        if invalid_fields and list(missing_fields or []) == invalid_fields:
+            missing_fields = []
     payload: dict[str, Any] = {
         "ok": False,
         "error_type": "asset_contract_error",
         "asset_id": asset_id,
-        "missing_fields": missing_fields,
+        "missing_fields": list(missing_fields or []),
+        "invalid_fields": list(invalid_fields or []),
         "repair_instruction": {
             "required_fields": list(REQUIRED_FIELDS),
         },
@@ -87,7 +100,7 @@ def normalize_regular_asset(payload: dict[str, Any], campaign_id: str) -> dict[s
     if source_type not in allowed_sources:
         invalid.append("source_type")
     if invalid:
-        return asset_contract_error(asset_id, invalid, {"invalid_fields": invalid})
+        return asset_contract_error(asset_id, invalid_fields=invalid)
 
     asset_kind = ASSET_USE_TO_KIND[asset_use]
     return {

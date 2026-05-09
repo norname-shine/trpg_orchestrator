@@ -24,31 +24,37 @@ def _campaign_root(tmp_path: Path) -> Path:
 
 
 def _asset_key(campaign_id: str) -> str:
-    return assets.scoped_asset_key(campaign_id, "npc_portrait", "npc:keeper")
+    return assets.scoped_asset_key(campaign_id, "character_portrait", "npc_keeper")
 
 
-def _write_asset_entry(tmp_path: Path, *, kind: str = "npc_portrait", metadata: dict | None = None) -> str:
+def _write_asset_entry(tmp_path: Path, *, asset_kind: str = "character_portrait") -> str:
     campaign_root = _campaign_root(tmp_path)
     campaign_id = "demo"
     key = _asset_key(campaign_id)
-    rel_path = Path("assets") / kind / "keeper.png"
+    rel_path = Path("assets") / "character" / "keeper.png"
     target = campaign_root / rel_path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(b"x" * 256)
     write_json(campaign_root / "assets" / "manifest.json", {
+        "manifest_schema": assets.MANIFEST_SCHEMA,
+        "manifest_version": assets.MANIFEST_VERSION,
         "campaign_id": campaign_id,
         "asset_seed": assets.campaign_asset_seed(campaign_id),
         "assets": {
             key: {
-                "campaign_id": campaign_id,
                 "key": key,
                 "path": rel_path.as_posix(),
-                "kind": kind,
-                "asset_seed": assets.campaign_asset_seed(campaign_id),
-                "style": "canvas_pixel",
-                "generator_version": 17,
+                "asset_kind": asset_kind,
+                "asset_use": "portrait",
+                "gallery_category": "character",
+                "display_zone": "gallery",
+                "actor_role": "npc",
+                "display_name": "守门人",
+                "certainty": "confirmed",
+                "cache_policy": "stable",
+                "source_type": "image_api",
+                "is_placeholder": False,
                 "created_at": "2026-05-08T00:00:00Z",
-                "metadata": metadata or {"display_name": "守门人", "entity_key": "npc:keeper", "visible_in_gallery": True},
             }
         },
     })
@@ -121,6 +127,7 @@ class FakeWritebackStore:
 
 def test_assets_load_empty_manifest_returns_compatible_shape(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(assets, "CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_load_asset_manifest_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
 
     manifest = assets.load_asset_manifest("demo")
@@ -133,9 +140,9 @@ def test_assets_load_empty_manifest_returns_compatible_shape(tmp_path, monkeypat
 def test_assets_normalize_legacy_kind_keeps_compatibility_without_web_impl(monkeypatch):
     monkeypatch.setattr(web_server, "_normalize_asset_kind_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
 
-    assert assets.normalize_asset_kind("npc") == "npc_portrait"
-    assert assets.normalize_asset_kind("monster_image") == "monster_image"
-    assert assets.normalize_asset_kind("document") == "item_icon"
+    assert assets.normalize_asset_kind("npc") == "character_portrait"
+    assert assets.normalize_asset_kind("monster") == "character_portrait"
+    assert assets.normalize_asset_kind("document") == "document"
     assert assets.normalize_asset_kind("map") == "map_image"
 
 
@@ -144,23 +151,24 @@ def test_assets_infer_role_without_web_impl(monkeypatch):
 
     role = assets.infer_asset_role({"kind": "npc", "metadata": {"display_name": "守门人"}})
 
-    assert role == "npc"
+    assert role == ""
 
 
 def test_assets_infer_role_uses_utf8_companion_keywords():
     role = assets.infer_asset_role({"kind": "portrait", "metadata": {"title": "同行伙伴"}})
 
-    assert role == "companion"
+    assert role == ""
 
 
 def test_assets_infer_role_uses_utf8_master_keywords():
     role = assets.infer_asset_role({"kind": "portrait", "metadata": {"title": "御主立绘"}})
 
-    assert role == "master"
+    assert role == ""
 
 
 def test_asset_list_runs_from_service_without_web_impl(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(assets, "CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_asset_list_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
     key = _write_asset_entry(tmp_path)
 
@@ -169,12 +177,14 @@ def test_asset_list_runs_from_service_without_web_impl(tmp_path, monkeypatch):
     assert payload["ok"] is True
     assert payload["campaign_id"] == "demo"
     assert payload["assets"][0]["key"] == key
-    assert payload["assets"][0]["metadata"]["display_name"] == "守门人"
-    assert payload["assets"][0]["url"].endswith("/npc_portrait/keeper.png")
+    assert payload["assets"][0]["title"] == "守门人"
+    assert payload["assets"][0]["asset_kind"] == "character_portrait"
+    assert payload["assets"][0]["url"].endswith("/character/keeper.png")
 
 
 def test_asset_lookup_runs_from_service_without_web_impl(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(assets, "CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_asset_lookup_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
     key = _write_asset_entry(tmp_path)
 
@@ -183,12 +193,15 @@ def test_asset_lookup_runs_from_service_without_web_impl(tmp_path, monkeypatch):
     assert payload["ok"] is True
     assert payload["exists"] is True
     assert payload["key"] == key
-    assert payload["entry"]["display_name"] == "守门人"
-    assert payload["url"].endswith("/npc_portrait/keeper.png")
+    assert payload["entry"]["title"] == "守门人"
+    assert payload["entry"]["asset_kind"] == "character_portrait"
+    assert payload["url"].endswith("/character/keeper.png")
 
 
 def test_save_asset_then_lookup_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(assets, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_save_asset_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
     monkeypatch.setattr(web_server, "_asset_lookup_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
     _campaign_root(tmp_path)
@@ -198,26 +211,36 @@ def test_save_asset_then_lookup_round_trip(tmp_path, monkeypatch):
         "campaign_id": "demo",
         "key": key,
         "asset_seed": assets.campaign_asset_seed("demo"),
-        "kind": "npc",
+        "kind": "character",
+        "id": "npc_keeper",
+        "title": "守门人",
+        "gallery_category": "character",
+        "asset_use": "portrait",
+        "actor_role": "npc",
+        "certainty": "confirmed",
+        "display_zone": "gallery",
+        "cache_policy": "stable",
         "filename": "keeper",
         "data_url": _png_data_url(),
-        "metadata": {"display_name": "守门人", "entity_key": "npc:keeper"},
     })
 
     manifest = read_json(tmp_path / "campaigns" / "demo" / "assets" / "manifest.json")
 
     assert saved["ok"] is True
     assert saved["exists"] is True
-    assert saved["entry"]["kind"] == "npc_portrait"
-    assert manifest["assets"][key]["kind"] == "npc_portrait"
-    assert (tmp_path / "campaigns" / "demo" / "assets" / "npc" / "keeper.png").exists()
+    assert saved["entry"]["asset_kind"] == "character_portrait"
+    assert manifest["assets"][key]["asset_kind"] == "character_portrait"
+    assert "kind" not in manifest["assets"][key]
+    assert "metadata" not in manifest["assets"][key]
+    assert (tmp_path / "campaigns" / "demo" / "assets" / "character" / "keeper.png").exists()
 
 
 def test_delete_asset_updates_manifest_and_removes_file(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(assets, "CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_delete_asset_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
     key = _write_asset_entry(tmp_path)
-    target = tmp_path / "campaigns" / "demo" / "assets" / "npc_portrait" / "keeper.png"
+    target = tmp_path / "campaigns" / "demo" / "assets" / "character" / "keeper.png"
 
     payload = assets.delete_asset({"campaign_id": "demo", "key": key})
     manifest = read_json(tmp_path / "campaigns" / "demo" / "assets" / "manifest.json")
@@ -230,14 +253,15 @@ def test_delete_asset_updates_manifest_and_removes_file(tmp_path, monkeypatch):
 
 def test_rebuild_assets_removes_matching_entries(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path / "campaigns")
+    monkeypatch.setattr(assets, "CAMPAIGNS_DIR", tmp_path / "campaigns")
     monkeypatch.setattr(web_server, "_rebuild_assets_impl", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("should not be used")), raising=False)
-    key = _write_asset_entry(tmp_path, kind="npc_portrait")
+    key = _write_asset_entry(tmp_path, asset_kind="character_portrait")
 
-    payload = assets.rebuild_assets({"campaign_id": "demo", "kind": "npc_portrait"})
+    payload = assets.rebuild_assets({"campaign_id": "demo", "kind": "character_portrait", "dry_run": False})
     manifest = read_json(tmp_path / "campaigns" / "demo" / "assets" / "manifest.json")
 
     assert payload["ok"] is True
-    assert payload["removed"] == [key]
+    assert payload["matched"] == [key]
     assert manifest["assets"] == {}
 
 

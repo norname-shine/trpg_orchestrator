@@ -60,7 +60,9 @@ def validate_custom_gallery_categories(rows: Any) -> tuple[list[dict[str, str]],
         return [], ["custom_gallery_categories must be a list"]
     if len(rows) > max_rows:
         warnings.append(f"custom_gallery_categories may contain at most {max_rows} rows")
-    for row in rows[:max_rows]:
+    for row in rows:
+        if len(normalized) >= max_rows:
+            break
         if not isinstance(row, dict):
             warnings.append("custom_gallery_categories row must be an object")
             continue

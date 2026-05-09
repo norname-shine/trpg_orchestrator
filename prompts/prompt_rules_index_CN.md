@@ -41,7 +41,7 @@
 
 - 架构与模型边界：`Backend/codex_system_architecture_rules.md`、`Backend/model_layer_contract_rules.md`。
 - 运行时安全与体验：`Backend/encoding_rules.md`、`Backend/frontend_interaction_rules.md`、`Backend/campaign_data_lifecycle_rules.md`。
-- 资产与 QA：`Backend/asset_cache_lifecycle_rules.md`、`Backend/visual_contract_lifecycle_rules.md`、`Backend/canvas_asset_generation_rules.md`、`Backend/gallery_asset_rules.md`、`Backend/ai_flavor_check_rules.md`。
+- 资产与 QA：`Backend/asset_cache_lifecycle_rules.md`、`Backend/visual_contract_lifecycle_rules.md`、`PromptModules/asset_output_rules.md`、`Backend/canvas_asset_generation_rules.md`、`Backend/gallery_asset_rules.md`、`Backend/ai_flavor_check_rules.md`。
 
 ## Hotload 层
 

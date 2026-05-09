@@ -138,11 +138,11 @@ These rules describe how the local frontend generates visual assets. They are ru
 ## Fixed Gallery Category Admission
 
 - A Canvas asset may enter the gallery only after it maps to the current campaign's `gallery_taxonomy` allowlist.
-- `gallery_taxonomy.core_categories` are system-stable and fixed to `prop`, `item`, `character`, `scene`, and `cg`.
+- `gallery_taxonomy.core_categories` are system-stable and fixed to `prop`, `item`, `character`, `map`, and `cg`.
 - `gallery_taxonomy.campaign_categories` are 0-3 campaign-defined extensions from director setup.
 - `all` is a frontend aggregate filter only; it is not a gallery category ID.
 - `companion` is not a gallery category. Current player and current bound companion/sub-player assets default to `gallery_category: hidden`.
 - Fixed gallery categories are display slots only. Use explicit `gallery_category` when an asset should be visible in one of them; clue/document-like visible objects use `item` or `prop`.
-- CG is separate from maps/scenes: CG assets use `cg`; map and location thumbnails use `scene`.
+- CG is separate from maps/scenes: CG assets use `cg`; map and location thumbnails use `map`.
 - Undefined kinds, temporary visual records, backend system notes, and ordinary visual assets that cannot map to a stable entity must not create gallery cards merely because a PNG exists.
 - When a card already exists for the same character, item, or scene, the new Canvas PNG may update that card's thumbnail, status, or detail, but must not create a duplicate card.

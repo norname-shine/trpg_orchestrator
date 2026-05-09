@@ -15,12 +15,12 @@ All UI changes must be implemented through reusable multi-campaign structures fi
 
 - Filter buttons must update the visible gallery immediately.
 - The full gallery modal uses the same active filter as the side gallery.
-- Gallery filters show the fixed baseline `prop`, `item`, `character`, `scene`, and `cg`, plus at most 3 director-initialized custom categories. Temporary visual assets must not introduce new filters or card categories during play.
+- Gallery filters show the fixed baseline `prop`, `item`, `character`, `map`, and `cg`, plus at most 3 director-initialized custom categories. Temporary visual assets must not introduce new filters or card categories during play.
 - The frontend should render only cards whose kind maps to the fixed category ID allowlist. Unknown kinds, undefined IDs, backend notes, and temporary visual records must not create standalone gallery cards.
 - `cg` is a universal filter. Formal story CGs, generated scene images, and player-viewable large image assets go to `cg`.
 - Fixed gallery filters are display slots only. Campaign-specific semantics must come from director-declared custom libraries or explicit `gallery_category`, not backend guessing.
 - Clue/document-like visible objects use `item` or `prop`; they must not create fixed `clue` or `document` filters.
-- CG is separate from maps/scenes: CG uses `cg`; maps and locations use `scene`.
+- CG is separate from maps/scenes: CG uses `cg`; maps and locations use `map`.
 - Status changes for the same character, item, or scene should update the existing card in place instead of creating duplicate cards.
 - NPC and item rows can be cited into the player action input.
 - Scene/map rows are view-only by default. Campaign-specific long-term details are shown through explicit asset links or custom story-library views.

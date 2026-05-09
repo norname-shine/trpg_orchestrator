@@ -41,7 +41,7 @@ The backend layer maintains local orchestration, encoding, persistence, assets, 
 
 - Architecture and model boundaries: `Backend/codex_system_architecture_rules.md`, `Backend/model_layer_contract_rules.md`.
 - Runtime safety and UX: `Backend/encoding_rules.md`, `Backend/frontend_interaction_rules.md`, `Backend/campaign_data_lifecycle_rules.md`.
-- Assets and QA: `Backend/asset_cache_lifecycle_rules.md`, `Backend/visual_contract_lifecycle_rules.md`, `Backend/canvas_asset_generation_rules.md`, `Backend/gallery_asset_rules.md`, `Backend/ai_flavor_check_rules.md`.
+- Assets and QA: `Backend/asset_cache_lifecycle_rules.md`, `Backend/visual_contract_lifecycle_rules.md`, `PromptModules/asset_output_rules.md`, `Backend/canvas_asset_generation_rules.md`, `Backend/gallery_asset_rules.md`, `Backend/ai_flavor_check_rules.md`.
 
 ## Hotload Layer
 

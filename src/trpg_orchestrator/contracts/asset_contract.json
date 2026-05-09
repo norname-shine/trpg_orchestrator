@@ -1,0 +1,23 @@
+{
+  "core_gallery_categories": [
+    { "id": "prop", "label": "道具", "source": "core" },
+    { "id": "item", "label": "物品", "source": "core" },
+    { "id": "character", "label": "角色", "source": "core" },
+    { "id": "map", "label": "地图", "source": "core" },
+    { "id": "cg", "label": "CG", "source": "core" }
+  ],
+  "max_custom_gallery_categories": 3,
+  "asset_uses": ["portrait", "item", "prop", "map", "cg"],
+  "asset_kinds": [
+    "character_portrait",
+    "item_icon",
+    "prop_icon",
+    "map_image",
+    "cg_image"
+  ],
+  "actor_roles": ["player", "companion", "npc", "enemy", "neutral", "unknown"],
+  "display_zones": ["gallery", "map", "portrait", "hidden", "review"],
+  "certainty_values": ["confirmed", "clue", "uncertain"],
+  "cache_policies": ["stable", "scene_only", "rebuild_on_version"],
+  "source_types": ["image_api", "server_canvas", "image_job"]
+}

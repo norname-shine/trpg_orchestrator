@@ -11,6 +11,7 @@ from ..memory_store import MemoryStore
 from ..schema_validator import normalize_pressure_pack_compat
 from ..visual_contracts import CONTRACT_FILE, contract_public_payload
 from .assets import asset_list, campaign_asset_seed
+from .asset_rules import asset_contract_payload
 
 
 def _web_server():
@@ -194,6 +195,7 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
         "character_card": ws.frontend_character_card(campaign_id, state, setup["rules_config"]),
         "companion_card": ws.frontend_companion_card(campaign_id, state, setup["companion_config"]),
         "visual_contracts": contract_public_payload(visual_contracts),
+        "asset_contract": asset_contract_payload(campaign_id),
         "map_panel": map_panel,
         "quests": ws.frontend_quests(state),
         "inventory": ws.frontend_inventory(state),

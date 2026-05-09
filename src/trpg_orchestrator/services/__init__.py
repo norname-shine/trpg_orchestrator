@@ -1,2 +1,1 @@
-"""Service-layer helpers for the local TRPG web server."""
-
+"""Service helpers for runtime contracts."""

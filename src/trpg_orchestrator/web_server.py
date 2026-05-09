@@ -31,6 +31,7 @@ from .output_parser import parse_chatgpt_output, public_output, visible_prose_ch
 from .prompt_builder import build_audit_user_prompt, read_prompt
 from .deepseek_client import DeepSeekClient
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_writeback
+from .services.asset_rules import asset_contract_payload
 from .story_progress import build_frontend_story_progress
 from .visual_contracts import (
     CONTRACT_FILE,
@@ -331,6 +332,10 @@ class Handler(BaseHTTPRequestHandler):
                 first_query(query, "kind"),
             ))
             return
+        if parsed.path == "/api/asset-contract":
+            query = parse_qs(parsed.query)
+            self._json(asset_contract_response(first_query(query, "campaign_id")))
+            return
         if parsed.path == "/api/writeback-review":
             query = parse_qs(parsed.query)
             self._json(writeback_review_payload(first_query(query, "campaign_id")))
@@ -582,7 +587,7 @@ CORE_GALLERY_CATEGORIES = [
     {"id": "prop", "label": "道具", "base": True},
     {"id": "item", "label": "物品", "base": True},
     {"id": "character", "label": "角色", "base": True},
-    {"id": "scene", "label": "场景", "base": True},
+    {"id": "map", "label": "地图", "base": True},
     {"id": "cg", "label": "CG", "base": True},
 ]
 CORE_GALLERY_CATEGORY_IDS = {row["id"] for row in CORE_GALLERY_CATEGORIES}
@@ -1121,6 +1126,8 @@ def has_route_nodes(value: Any) -> bool:
 def is_valid_cached_map_asset(asset: dict[str, Any]) -> bool:
     if not isinstance(asset, dict):
         return False
+    if asset.get("asset_use") == "map" and asset.get("asset_kind") == "map_image":
+        return bool(asset.get("url")) and asset.get("exists") is not False
     metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
     kind = str(asset.get("kind") or "")
     key_text = " ".join(str(value or "") for value in (
@@ -2399,111 +2406,52 @@ def frontend_dossier(state: dict[str, Any]) -> list[dict[str, Any]]:
 def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
     taxonomy = gallery_taxonomy_for_campaign(campaign_id, state)
     filters = gallery_filters_from_taxonomy(taxonomy)
-    allowed_kinds = gallery_allowed_filter_ids(filters)
-    rows = []
-    context = actor_identity_context_from_state(campaign_id, state)
-    scene = state.get("recent", {}).get("current_scene", {}) if isinstance(state.get("recent"), dict) else {}
-    protected = protected_actor_names(state)
-    active_npc_names = [str(name) for name in scene.get("active_npcs", []) if str(name).strip()] if isinstance(scene.get("active_npcs"), list) else []
-    active_npc_ids = {stable_actor_entity_id(name) for name in active_npc_names}
-    npc_row_by_id: dict[str, dict[str, Any]] = {}
-    inventory = frontend_inventory(state)
-    inventory_titles = {normalized_name(item.get("short_name")) for item in inventory}
-    inventory_ids = {str(item.get("id") or "") for item in inventory}
-    inventory_row_by_id = {str(item.get("id") or ""): item for item in inventory}
-    for name in active_npc_names:
-        if normalized_name(name) in protected:
-            continue
-        actor_id = stable_actor_entity_id(name)
-        row = {"kind": "npc", "key": f"npc:{actor_id}", "title": name, "meta": "NPC", "detail": "当前场景角色", "entity_key": f"npc:{actor_id}", "role": "npc", "runtime_role": "npc", "gallery_category": "character"}
-        npc_row_by_id[actor_id] = row
-        rows.append(row)
-    for item in inventory[:8]:
-        rows.append({"kind": "item", "key": item["asset_key"], "title": item["short_name"], "meta": item["category"], "detail": item["detail"], "visual_prompt": item.get("visual_prompt", {})})
-    pressure = output.get("pressure_pack", {}) if isinstance(output.get("pressure_pack"), dict) else {}
+    rows: list[dict[str, Any]] = []
     parsed = output.get("parsed", {}) if isinstance(output.get("parsed"), dict) else {}
     for block in parsed.get("blocks", []) if isinstance(parsed.get("blocks"), list) else []:
         if not isinstance(block, dict) or block.get("type") != "cg_image":
-            continue
-        kind = coerce_gallery_kind_to_allowed("cg", allowed_kinds)
-        if not kind:
             continue
         cached_url = str(block.get("cached_url") or block.get("image_url") or block.get("url") or "")
         if not cached_url:
             continue
         rows.append({
-            "kind": kind,
+            "kind": "cg",
             "key": str(block.get("asset_key") or block.get("id") or cached_url),
             "title": "CG",
             "meta": "CG",
             "detail": str(block.get("image_detail") or block.get("body") or ""),
             "cached_url": cached_url,
+            "gallery_category": "cg",
+            "asset_use": "cg",
+            "asset_kind": "cg_image",
+            "display_zone": "gallery",
+            "actor_role": "unknown",
             "status": "current",
         })
-    for index, asset in enumerate(pressure.get("visual_assets", []) if isinstance(pressure.get("visual_assets"), list) else []):
-        asset = normalize_visual_asset_prompt(asset)
-        kind = normalize_frontend_gallery_kind(asset.get("kind"))
-        display_zone = str(asset.get("display_zone") or "").lower()
-        if kind == "scene" and display_zone != "map":
-            kind = "item"
-        kind = coerce_gallery_kind_to_allowed(kind, allowed_kinds)
-        if not kind:
-            continue
-        title = str(asset.get("title") or asset.get("id") or kind)
-        detail = str(asset.get("detail") or asset.get("source_memory") or "")
-        if kind == "npc":
-            actor_id = stable_actor_entity_id(title)
-            if actor_id in npc_row_by_id:
-                npc_row_by_id[actor_id]["detail"] = merge_detail_text(npc_row_by_id[actor_id].get("detail", ""), detail)
-                npc_row_by_id[actor_id]["meta"] = asset.get("certainty") or npc_row_by_id[actor_id].get("meta") or "NPC"
-                continue
-        row = {"kind": kind, "key": f"director:{kind}:{asset.get('id') or index}", "title": title, "meta": asset.get("certainty") or kind, "detail": detail, "image_prompt": asset.get("image_prompt", {})}
-        if kind in {"item", "clue", "document", "anomaly"}:
-            normalized_item = normalize_director_inventory_item(asset)
-            entity_id = str(normalized_item.get("id") or "")
-            if not entity_id or entity_id not in inventory_row_by_id:
-                continue
-            inventory_row_by_id[entity_id]["detail"] = merge_detail_text(inventory_row_by_id[entity_id].get("detail", ""), detail)
-            continue
-        rows.append(row)
     for asset in assets:
-        identity = resolve_entity_role(asset, context, asset)
-        if identity.get("runtime_role") in {"player", "companion"}:
+        if not isinstance(asset, dict):
             continue
-        if not is_gallery_visible_asset(asset):
+        category = str(asset.get("gallery_category") or "").strip()
+        if not category or category == "hidden":
             continue
-        metadata = asset.get("metadata", {}) if isinstance(asset.get("metadata"), dict) else {}
-        kind = str(metadata.get("gallery_category") or asset.get("gallery_category") or identity.get("gallery_category") or normalize_frontend_gallery_kind(asset.get("kind")))
-        kind = coerce_gallery_kind_to_allowed(kind, allowed_kinds)
-        if not kind:
-            continue
-        title = asset.get("display_name") or metadata.get("display_name") or metadata.get("title") or readable_asset_name(asset.get("key", ""), kind)
-        if not is_gallery_cache_asset(asset, protected, inventory_titles, inventory_ids, active_npc_ids, kind, title):
-            continue
-        selected = select_best_avatar_asset(str(identity.get("entity_key") or asset.get("entity_key") or ""), str(identity.get("portrait_asset_kind") or asset.get("kind") or ""), assets)
-        selected_key = selected.get("key") or asset.get("key", "")
-        cached_url = selected.get("url") or asset.get("url", "")
         rows.append({
-            "kind": kind,
-            "key": selected_key,
-            "title": title,
-            "meta": metadata.get("meta") or kind,
-            "detail": metadata.get("detail") or "",
-            "cached_url": cached_url,
-            "entity_key": identity.get("entity_key") or asset.get("entity_key", ""),
-            "role": identity.get("role") or asset.get("role", ""),
-            "runtime_role": identity.get("runtime_role", ""),
-            "gallery_category": kind,
-            "asset_kind": asset.get("kind", ""),
-            "visible_in_gallery": asset.get("visible_in_gallery", True),
-            "visual_prompt": metadata.get("visual_prompt") or {},
-            "image_prompt": metadata.get("image_prompt") or {},
-            "status": metadata.get("status") or metadata.get("current_status") or asset.get("status") or "",
+            "kind": category,
+            "key": asset.get("key", ""),
+            "title": asset.get("title") or asset.get("display_name") or asset.get("key", ""),
+            "meta": category,
+            "detail": asset.get("detail") or "",
+            "cached_url": asset.get("url") or "",
+            "subject_key": asset.get("subject_key", ""),
+            "actor_role": asset.get("actor_role", "unknown"),
+            "gallery_category": category,
+            "asset_use": asset.get("asset_use", ""),
+            "asset_kind": asset.get("asset_kind", ""),
+            "display_zone": asset.get("display_zone", ""),
+            "certainty": asset.get("certainty", ""),
+            "cache_policy": asset.get("cache_policy", ""),
             "created_at": asset.get("created_at", ""),
-            "archived": bool(metadata.get("archived") or metadata.get("superseded")),
         })
-    return {"filters": filters, "taxonomy": taxonomy, "assets": mark_frontend_scene_archive_state(dedupe_frontend_assets(rows))[:120]}
-
+    return {"filters": filters, "taxonomy": taxonomy, "assets": dedupe_frontend_assets(rows)[:120]}
 
 def copyright_safe_prompt_text(text: str) -> str:
     result = str(text or "")
@@ -3016,8 +2964,8 @@ def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
     if value in allowed:
         return value
     aliases = {
-        "location": "scene",
-        "map": "scene",
+        "location": "map",
+        "scene": "map",
         "npc": "character",
         "master": "character",
         "servant": "character",
@@ -3045,7 +2993,7 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
     if value == "master_portrait":
         return "character"
     if value in {"scene_image", "map_image"}:
-        return "scene"
+        return "map"
     if value == "npc_portrait":
         return "character"
     if "monster" in value or "enemy" in value or "boss" in value or "怪物" in value:
@@ -3065,7 +3013,7 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
     if "anomaly" in value or "异常" in value:
         return "prop"
     if "map" in value or "scene" in value or "location" in value:
-        return "scene"
+        return "map"
     if "npc" in value or "portrait" in value:
         return "character"
     if "quest" in value or "任务" in value:
@@ -3080,54 +3028,19 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
 
 
 def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
-    root = CAMPAIGNS_DIR / safe_segment(campaign_id)
-    profile = read_json(root / "campaign_profile.json") if (root / "campaign_profile.json").exists() else {}
-    profile = profile if isinstance(profile, dict) else {}
-    campaign_taxonomy = normalize_campaign_taxonomy(profile.get("campaign_taxonomy") if isinstance(profile.get("campaign_taxonomy"), dict) else {})
-    taxonomy = profile.get("gallery_taxonomy") if isinstance(profile.get("gallery_taxonomy"), dict) else {}
-    configured_core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
-    configured_core = configured_core or campaign_taxonomy.get("asset_categories", [])
-    configured_by_id = {
-        str(normalize_gallery_taxonomy_row(row, "configured_core").get("id") or ""): normalize_gallery_taxonomy_row(row, "configured_core")
-        for row in configured_core
-        if normalize_gallery_taxonomy_row(row, "configured_core")
-    }
-    core = [{**row, **{k: v for k, v in configured_by_id.get(row["id"], {}).items() if k in {"label"}}} for row in CORE_GALLERY_CATEGORIES]
-    campaign_rows = []
-    for row in taxonomy.get("campaign_categories", []) if isinstance(taxonomy.get("campaign_categories"), list) else []:
-        normalized = normalize_gallery_taxonomy_row(row, "campaign_profile")
-        if normalized:
-            campaign_rows.append(normalized)
-    for source_key, source_name in (
-        ("gallery_categories", "campaign_profile"),
-        ("campaign_categories", "campaign_profile"),
-    ):
-        for row in profile.get(source_key, []) if isinstance(profile.get(source_key), list) else []:
-            normalized = normalize_gallery_taxonomy_row(row, source_name)
-            if normalized:
-                campaign_rows.append(normalized)
-    rules = profile.get("rules_config") if isinstance(profile.get("rules_config"), dict) else {}
-    for row in rules.get("gallery_categories", []) if isinstance(rules.get("gallery_categories"), list) else []:
-        normalized = normalize_gallery_taxonomy_row(row, "rules_config")
-        if normalized:
-            campaign_rows.append(normalized)
-    campaign_rows.extend([
-        {"id": row.get("id"), "label": row.get("label"), "source": "campaign_taxonomy"}
-        for row in campaign_taxonomy.get("campaign_categories", [])
-        if isinstance(row, dict) and row.get("id")
-    ])
-    campaign_rows = dedupe_taxonomy_rows(campaign_rows, {row.get("id") for row in core if isinstance(row, dict)})
+    payload = asset_contract_payload(campaign_id)
     return {
-        "core_categories": dedupe_taxonomy_rows([normalize_gallery_taxonomy_row(row, "system") for row in core], set()),
-        "campaign_categories": campaign_rows,
+        "core_categories": payload.get("core_gallery_categories", []),
+        "campaign_categories": payload.get("custom_gallery_categories", []),
+        "max_custom_gallery_categories": payload.get("max_custom_gallery_categories", 3),
         "hidden_runtime_roles": ["player", "companion"],
         "rules": {
-            "exclude_current_player_from_gallery": True,
-            "exclude_current_companion_from_gallery": True,
-            "dedupe_by_entity_key": True,
+            "gallery_category_controls_frontend_filter_only": True,
+            "asset_use_controls_backend_processing": True,
+            "actor_role_controls_story_identity": True,
+            "scene_assets_use_map_category": True,
         },
     }
-
 
 def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[str, Any]:
     if isinstance(row, str):
@@ -3144,8 +3057,8 @@ def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[s
         "npc": "character",
         "master": "character",
         "servant": "character",
-        "map": "scene",
-        "location": "scene",
+        "scene": "map",
+        "location": "map",
         "clue": "item",
         "document": "item",
         "anomaly": "prop",
@@ -3203,8 +3116,8 @@ def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
     if value in {"hidden", "companion"}:
         return ""
     aliases = {
-        "location": "scene",
-        "map": "scene",
+        "location": "map",
+        "scene": "map",
         "ecology": "monster",
         "weapon": "item",
         "supply": "item",
@@ -4281,7 +4194,7 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
                 {"id": "prop", "label": "道具"},
                 {"id": "item", "label": "物品"},
                 {"id": "character", "label": "角色"},
-                {"id": "scene", "label": "场景"},
+                {"id": "map", "label": "地图"},
                 {"id": "cg", "label": "CG"}
             ],
             "campaign_categories": [],
@@ -4440,7 +4353,7 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Only put truly player-owned details in unknown_or_player_owned. Do not use unknown_or_player_owned as a substitute for generating the requested setup.",
         "If companion_config.companion_enabled is true and companion_mode is auto, create a concrete companion_patch with a usable name, role, personality, and relationship_to_protagonist.",
         "If user_prompt is auto, generate campaign premise, background, opening situation, main conflict, early goals, and story seeds from the selected template and title.",
-        "Return campaign_taxonomy.asset_categories exactly as prop/item/character/scene/cg. Do not add clue, document, npc, map, monster, anomaly, or quest as fixed gallery filters.",
+        "Return campaign_taxonomy.asset_categories exactly as prop/item/character/map/cg. Do not add clue, document, npc, scene, monster, anomaly, or quest as fixed gallery filters.",
         "Return campaign_taxonomy.campaign_categories as 0-3 story-specific custom gallery folders. Never output 4 or more.",
         "Fixed gallery filters are only asset entry points, not story semantics. Do not force campaign-specific entities into a fixed semantic bucket; put campaign-specific semantics in custom_libraries.",
         "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
@@ -6381,6 +6294,12 @@ def raw_output_payload(campaign_id: str = "") -> dict[str, Any]:
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+def asset_contract_response(campaign_id: str = "") -> dict[str, Any]:
+    resolved = MemoryStore().resolve_campaign_id(campaign_id or None) if campaign_id else ""
+    payload = asset_contract_payload(resolved) if resolved else asset_contract_payload("")
+    return {"ok": True, "campaign_id": resolved, **payload}
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ if str(SRC) not in sys.path:
 
 from trpg_orchestrator.capability_resolver import build_capability_plan
 from trpg_orchestrator.config import PROMPTS_DIR
-from trpg_orchestrator.encoding_utils import read_runtime_text
+from trpg_orchestrator.encoding_utils import read_runtime_text, write_text_utf8
 from trpg_orchestrator.memory_store import default_memory
 from trpg_orchestrator.prompt_builder import build_chatgpt_input, build_director_user_prompt
 from trpg_orchestrator.prompt_module_registry import load_prompt_module_registry, select_prompt_modules
@@ -168,7 +168,7 @@ def main() -> int:
     if args.output:
         path = Path(args.output)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text + "\n", encoding="utf-8")
+        write_text_utf8(path, text + "\n")
     print(text)
     return 0
 

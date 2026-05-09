@@ -22,6 +22,7 @@ MEMORY_FILE_NAMES = [
     "style_profile.json",
     "image_profile.json",
     "visual_contracts.json",
+    "asset_presentation.json",
     "player_state.json",
     "npc_memory.json",
     "world_state.json",

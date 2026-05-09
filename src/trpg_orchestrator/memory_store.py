@@ -152,6 +152,9 @@ def default_memory(campaign_id: str, name: str = "") -> dict[str, Any]:
             "do_not_generate": [],
         },
         "visual_contracts.json": default_visual_contracts(campaign_id),
+        "asset_presentation.json": {
+            "custom_gallery_categories": [],
+        },
         "player_state.json": player_memory(campaign_id),
         "npc_memory.json": base_memory(campaign_id, "npcs"),
         "world_state.json": base_memory(campaign_id, "world"),

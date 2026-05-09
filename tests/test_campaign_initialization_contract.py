@@ -198,7 +198,7 @@ def test_campaign_initial_items_accept_label_as_name_alias():
     assert result["initial_assets"]["initial_items"][0]["name"] == "Old Letter"
 
 
-def test_legacy_initial_assets_convert_to_split_contracts():
+def test_legacy_initial_assets_keys_are_rejected():
     payload = setup_payload()
     payload["initial_assets"] = {
         "map_generation_instruction": "Draw a field map.",
@@ -210,11 +210,95 @@ def test_legacy_initial_assets_convert_to_split_contracts():
         "cg_prompt": {"positive": "camp", "negative": "brand"},
     }
 
-    result = validate_v4_campaign_setup(payload)
+    with pytest.raises(RuntimeError, match="legacy initial_assets keys"):
+        validate_v4_campaign_setup(payload)
 
-    assert result["initial_assets"]["initial_map_canvas"]["map_route"]["title"] == "Legacy Route"
-    assert result["initial_assets"]["initial_map_canvas"]["canvas_draw_instructions"]["nodes"][0]["id"] == "camp"
-    assert result["initial_assets"]["initial_cg"]["cg_prompt"]["positive"] == "camp"
+
+@pytest.mark.parametrize("legacy_key", [
+    "MapCanvas",
+    "map_instruction",
+    "cg_instruction",
+    "opening_cg_prompt",
+    "image_prompt",
+    "items",
+    "props",
+    "item_canvas",
+    "canvas_rules",
+])
+def test_legacy_initial_asset_alias_keys_are_rejected(legacy_key):
+    payload = setup_payload()
+    payload["initial_assets"][legacy_key] = {"legacy": True}
+
+    with pytest.raises(RuntimeError, match="legacy initial_assets keys"):
+        validate_v4_campaign_setup(payload)
+
+
+def test_initial_assets_must_be_object():
+    payload = setup_payload()
+    payload["initial_assets"] = []
+
+    with pytest.raises(RuntimeError, match="initial_assets must be object"):
+        validate_v4_campaign_setup(payload)
+
+
+def test_initial_map_does_not_generate_npc_portrait_contract():
+    setup = validate_v4_campaign_setup(setup_payload())
+
+    contracts = build_initial_visual_contract_candidates(
+        "campaign_test",
+        {"campaign_id": "campaign_test", "title": "Test Campaign", "asset_seed": "seed123", "render_rules": setup["render_rules"]},
+        {},
+        {},
+        setup["initial_assets"],
+        setup["campaign_taxonomy"],
+        setup,
+    )
+    map_contracts = [row for row in contracts if row.get("entity_type") == "map"]
+
+    assert map_contracts
+    assert all(row["entity_key"].startswith("map:") for row in map_contracts)
+    assert all(row.get("render_intent", {}).get("primary") != "npc_portrait" for row in map_contracts)
+    assert not [row for row in contracts if row.get("entity_type") == "npc" or str(row.get("entity_key", "")).startswith("npc:")]
+
+
+def test_visual_contract_entity_type_npc_is_rejected():
+    with pytest.raises(RuntimeError, match="unknown visual contract entity_type: npc"):
+        merge_visual_contracts(
+            {},
+            [{
+                "entity_key": "npc:guide",
+                "entity_type": "npc",
+                "display_name": "Guide",
+                "render_intent": {"primary": "npc_portrait"},
+            }],
+            "campaign_test",
+            "test",
+        )
+
+
+def test_initial_visual_contracts_ignore_legacy_initial_asset_fields():
+    payload = setup_payload()
+    initial_assets = {
+        "map_route": {"title": "Legacy Route", "nodes": [{"id": "legacy"}]},
+        "map_canvas": {"points": [{"id": "legacy"}]},
+        "cg_prompt": {"positive": "legacy cg"},
+        "map_generation_instruction": "legacy map instruction",
+        "cg_generation_instruction": "legacy cg instruction",
+        "initial_items": [],
+        "item_canvas_rules": {},
+    }
+
+    contracts = build_initial_visual_contract_candidates(
+        "campaign_test",
+        {"campaign_id": "campaign_test", "title": "Test Campaign", "asset_seed": "seed123", "render_rules": payload["render_rules"]},
+        {},
+        {},
+        initial_assets,
+        payload["campaign_taxonomy"],
+        payload,
+    )
+
+    assert not [row for row in contracts if row.get("entity_type") in {"map", "cg"}]
 
 
 def test_campaign_render_rules_fill_required_defaults_when_missing():

@@ -4676,18 +4676,17 @@ def normalize_map_route(value: Any) -> dict[str, Any]:
     }
 
 
-def normalize_canvas_draw_instructions(value: Any, *, legacy_map_canvas: Any = None, legacy_instruction: Any = "") -> dict[str, Any]:
+def normalize_canvas_draw_instructions(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
-    legacy = legacy_map_canvas if isinstance(legacy_map_canvas, dict) else {}
     nodes = source.get("nodes")
     if not isinstance(nodes, list):
-        nodes = legacy.get("points") if isinstance(legacy.get("points"), list) else []
+        nodes = []
     routes = source.get("routes")
     if not isinstance(routes, list):
-        routes = legacy.get("routes") if isinstance(legacy.get("routes"), list) else []
+        routes = []
     hazards = source.get("hazards")
     if not isinstance(hazards, list):
-        hazards = legacy.get("hazards") if isinstance(legacy.get("hazards"), list) else []
+        hazards = []
     legend = source.get("legend")
     if isinstance(legend, dict):
         legend = [{"symbol": key, "label": value} for key, value in legend.items()]
@@ -4695,8 +4694,8 @@ def normalize_canvas_draw_instructions(value: Any, *, legacy_map_canvas: Any = N
         legend = []
     labels = source.get("labels") if isinstance(source.get("labels"), list) else []
     return {
-        "style": stringify_brief(source.get("style") or legacy.get("style") or legacy_instruction or "", 160),
-        "background": stringify_brief(source.get("background") or legacy.get("background") or "", 160),
+        "style": stringify_brief(source.get("style") or "", 160),
+        "background": stringify_brief(source.get("background") or "", 160),
         "nodes": [row for row in nodes if isinstance(row, dict)],
         "routes": [row for row in routes if isinstance(row, dict)],
         "labels": [row for row in labels if isinstance(row, dict) or str(row or "").strip()],
@@ -4707,11 +4706,9 @@ def normalize_canvas_draw_instructions(value: Any, *, legacy_map_canvas: Any = N
 
 def normalize_initial_map_canvas(source: dict[str, Any]) -> dict[str, Any]:
     nested = source.get("initial_map_canvas") if isinstance(source.get("initial_map_canvas"), dict) else {}
-    route = normalize_map_route(nested.get("map_route") or source.get("map_route"))
+    route = normalize_map_route(nested.get("map_route"))
     draw = normalize_canvas_draw_instructions(
         nested.get("canvas_draw_instructions"),
-        legacy_map_canvas=source.get("map_canvas") or source.get("MapCanvas"),
-        legacy_instruction=source.get("map_generation_instruction") or source.get("map_instruction"),
     )
     return {"map_route": route, "canvas_draw_instructions": draw}
 
@@ -4719,33 +4716,52 @@ def normalize_initial_map_canvas(source: dict[str, Any]) -> dict[str, Any]:
 def normalize_initial_cg(source: dict[str, Any]) -> dict[str, Any]:
     nested = source.get("initial_cg") if isinstance(source.get("initial_cg"), dict) else {}
     return {
-        "generation_instruction": nested.get("generation_instruction") or source.get("cg_generation_instruction") or source.get("cg_instruction") or "",
-        "cg_prompt": nested.get("cg_prompt") or source.get("cg_prompt") or source.get("opening_cg_prompt") or source.get("image_prompt") or {},
+        "generation_instruction": nested.get("generation_instruction") or "",
+        "cg_prompt": nested.get("cg_prompt") or {},
     }
 
 
 def sanitize_initial_assets(value: Any) -> dict[str, Any]:
-    source = value if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        raise RuntimeError("initial_assets must be object")
+    source = value
+    allowed_keys = {
+        "initial_map_canvas",
+        "initial_cg",
+        "initial_items",
+        "item_canvas_rules",
+    }
+    legacy_keys = {
+        "MapCanvas",
+        "canvas_rules",
+        "cg_generation_instruction",
+        "cg_instruction",
+        "cg_prompt",
+        "image_prompt",
+        "item_canvas",
+        "items",
+        "map_generation_instruction",
+        "map_instruction",
+        "map_canvas",
+        "map_route",
+        "opening_cg_prompt",
+        "props",
+    }
+    found_legacy = sorted(key for key in legacy_keys if key in source)
+    if found_legacy:
+        raise RuntimeError("legacy initial_assets keys are not supported: " + ", ".join(found_legacy))
+    unsupported = sorted(key for key in source if key not in allowed_keys)
+    if unsupported:
+        raise RuntimeError("unsupported initial_assets keys: " + ", ".join(unsupported))
     initial_map_canvas = normalize_initial_map_canvas(source)
     initial_cg = normalize_initial_cg(source)
-    initial_items = source.get("initial_items", source.get("items", source.get("props", [])))
-    item_canvas_rules = source.get("item_canvas_rules", source.get("item_canvas", source.get("canvas_rules", {})))
+    initial_items = source.get("initial_items", [])
+    item_canvas_rules = source.get("item_canvas_rules", {})
     result = {
         "initial_map_canvas": initial_map_canvas,
         "initial_cg": initial_cg,
         "initial_items": initial_items,
         "item_canvas_rules": item_canvas_rules,
-        # Legacy aliases are kept for old consumers and existing campaign files.
-        "map_generation_instruction": initial_map_canvas["canvas_draw_instructions"].get("style", ""),
-        "map_canvas": {
-            "points": initial_map_canvas["canvas_draw_instructions"].get("nodes", []),
-            "routes": initial_map_canvas["canvas_draw_instructions"].get("routes", []),
-            "hazards": initial_map_canvas["canvas_draw_instructions"].get("hazards", []),
-            "legend": initial_map_canvas["canvas_draw_instructions"].get("legend", []),
-        },
-        "map_route": initial_map_canvas["map_route"],
-        "cg_generation_instruction": initial_cg["generation_instruction"],
-        "cg_prompt": initial_cg["cg_prompt"],
     }
     required = {
         "initial_map_canvas.map_route": initial_map_canvas.get("map_route"),

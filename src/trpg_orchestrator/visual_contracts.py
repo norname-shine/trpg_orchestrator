@@ -34,7 +34,11 @@ def stable_contract_hash(contract: dict[str, Any]) -> str:
 def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source: str = "") -> dict[str, Any]:
     if not isinstance(candidate, dict):
         return {}
-    entity_type = safe_key(candidate.get("entity_type") or candidate.get("type") or candidate.get("kind") or "")
+    raw_entity_type = str(candidate.get("entity_type") or candidate.get("type") or candidate.get("kind") or "").strip()
+    entity_type = safe_key(raw_entity_type) if raw_entity_type else ""
+    allowed_entity_types = {"player", "companion", "character", "map", "cg", "item", "prop"}
+    if entity_type and entity_type not in allowed_entity_types:
+        raise RuntimeError(f"unknown visual contract entity_type: {entity_type}")
     display = str(candidate.get("display_name") or candidate.get("title") or candidate.get("name") or "").strip()
     entity_key = str(candidate.get("entity_key") or "").strip()
     if not entity_key and entity_type and display:
@@ -43,7 +47,14 @@ def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source
         return {}
     if ":" in entity_key and not entity_type:
         entity_type = safe_key(entity_key.split(":", 1)[0])
-    entity_type = entity_type or "asset"
+    if not entity_type:
+        raise RuntimeError("visual contract entity_type is required")
+    if entity_type not in allowed_entity_types:
+        raise RuntimeError(f"unknown visual contract entity_type: {entity_type}")
+    render_intent = object_or_empty(candidate.get("render_intent"))
+    primary = safe_key(render_intent.get("primary") or "")
+    if "portrait" in primary and entity_type not in {"player", "companion", "character"}:
+        raise RuntimeError(f"{entity_type} visual contract cannot use portrait render intent")
     contract = {
         "entity_key": entity_key,
         "entity_type": entity_type,
@@ -53,7 +64,7 @@ def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source
         "visibility": str(candidate.get("visibility") or "player_visible"),
         "confidence": str(candidate.get("confidence") or "confirmed"),
         "visual_identity": object_or_empty(candidate.get("visual_identity")),
-        "render_intent": object_or_empty(candidate.get("render_intent")),
+        "render_intent": render_intent,
         "style_constraints": object_or_empty(candidate.get("style_constraints")),
         "negative_constraints": list_of_strings(candidate.get("negative_constraints")),
         "update_policy": object_or_empty(candidate.get("update_policy")),
@@ -156,10 +167,9 @@ def build_initial_visual_contract_candidates(
             "update_policy": {"cache_policy": "stable", "rebuild_when": ["companion_profile_changed", "visual_identity_changed"]},
         })
     initial_map_canvas = initial_assets.get("initial_map_canvas") if isinstance(initial_assets.get("initial_map_canvas"), dict) else {}
-    route = initial_map_canvas.get("map_route") if isinstance(initial_map_canvas.get("map_route"), dict) else initial_assets.get("map_route") if isinstance(initial_assets.get("map_route"), dict) else {}
+    route = initial_map_canvas.get("map_route") if isinstance(initial_map_canvas.get("map_route"), dict) else {}
     draw_instructions = initial_map_canvas.get("canvas_draw_instructions") if isinstance(initial_map_canvas.get("canvas_draw_instructions"), dict) else {}
-    legacy_canvas = initial_assets.get("map_canvas") if isinstance(initial_assets.get("map_canvas"), dict) else {}
-    if route.get("nodes") or draw_instructions.get("nodes") or legacy_canvas.get("points"):
+    if route.get("nodes") or draw_instructions.get("nodes"):
         title = str(route.get("title") or profile.get("title") or "opening_map")
         candidates.append({
             "entity_key": f"map:{safe_key(title)}",
@@ -168,8 +178,8 @@ def build_initial_visual_contract_candidates(
             "source": "campaign_initialization",
             "memory_refs": ["campaign_profile.json.initial_assets.initial_map_canvas", "map_history.json"],
             "visual_identity": {
-                "summary": draw_instructions.get("style") or initial_assets.get("map_generation_instruction", ""),
-                "spatial": {"map_route": route, "canvas_draw_instructions": draw_instructions or legacy_canvas},
+                "summary": draw_instructions.get("style") or "",
+                "spatial": {"map_route": route, "canvas_draw_instructions": draw_instructions},
             },
             "render_intent": {"primary": "map_canvas", "details": {"usage": "regional_route_map"}},
             "style_constraints": {"campaign_visual_style": style, "render_rule": render_rules.get("map", {})},
@@ -177,7 +187,7 @@ def build_initial_visual_contract_candidates(
             "update_policy": {"cache_policy": "stable", "rebuild_when": ["map_route_changed", "canvas_draw_instructions_changed"]},
         })
     initial_cg = initial_assets.get("initial_cg") if isinstance(initial_assets.get("initial_cg"), dict) else {}
-    cg_prompt = initial_cg.get("cg_prompt") if isinstance(initial_cg.get("cg_prompt"), dict) else initial_assets.get("cg_prompt") if isinstance(initial_assets.get("cg_prompt"), dict) else {}
+    cg_prompt = initial_cg.get("cg_prompt") if isinstance(initial_cg.get("cg_prompt"), dict) else {}
     if cg_prompt:
         candidates.append({
             "entity_key": f"cg:{safe_key(profile.get('title') or 'opening_cg')}",
@@ -186,7 +196,7 @@ def build_initial_visual_contract_candidates(
             "source": "campaign_initialization",
             "memory_refs": ["campaign_profile.json.initial_assets.initial_cg", "image_profile.json"],
             "visual_identity": {
-                "summary": initial_cg.get("generation_instruction") or initial_assets.get("cg_generation_instruction", ""),
+                "summary": initial_cg.get("generation_instruction") or "",
                 "image_prompt": cg_prompt,
             },
             "render_intent": {"primary": "cg_image", "details": {"usage": "opening_cg"}},

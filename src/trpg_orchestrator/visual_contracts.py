@@ -53,6 +53,8 @@ def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source
         raise RuntimeError(f"unknown visual contract entity_type: {entity_type}")
     render_intent = object_or_empty(candidate.get("render_intent"))
     primary = safe_key(render_intent.get("primary") or "")
+    if "npc_portrait" in primary:
+        raise RuntimeError("visual contract must use character_portrait with actor_role=npc, not npc_portrait")
     if "portrait" in primary and entity_type not in {"player", "companion", "character"}:
         raise RuntimeError(f"{entity_type} visual contract cannot use portrait render intent")
     contract = {

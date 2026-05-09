@@ -276,6 +276,38 @@ def test_visual_contract_entity_type_npc_is_rejected():
         )
 
 
+def test_visual_contract_npc_portrait_render_intent_is_rejected():
+    with pytest.raises(RuntimeError, match="character_portrait with actor_role=npc"):
+        merge_visual_contracts(
+            {},
+            [{
+                "entity_key": "character:guide",
+                "entity_type": "character",
+                "actor_role": "npc",
+                "display_name": "Guide",
+                "render_intent": {"primary": "npc_portrait"},
+            }],
+            "campaign_test",
+            "test",
+        )
+
+
+@pytest.mark.parametrize("entity_type", ["map", "cg", "item", "prop"])
+def test_non_character_visual_contracts_cannot_use_portrait_render_intent(entity_type):
+    with pytest.raises(RuntimeError, match=f"{entity_type} visual contract cannot use portrait"):
+        merge_visual_contracts(
+            {},
+            [{
+                "entity_key": f"{entity_type}:sample",
+                "entity_type": entity_type,
+                "display_name": "Sample",
+                "render_intent": {"primary": "character_portrait"},
+            }],
+            "campaign_test",
+            "test",
+        )
+
+
 def test_initial_visual_contracts_ignore_legacy_initial_asset_fields():
     payload = setup_payload()
     initial_assets = {

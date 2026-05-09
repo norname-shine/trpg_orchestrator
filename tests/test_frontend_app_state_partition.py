@@ -182,3 +182,62 @@ def test_main_frontend_entry_functions_exist():
 
     for name in ("refresh", "renderStatus", "renderFrontendState", "renderOutput"):
         assert f"function {name}(" in source or f"async function {name}(" in source
+
+
+def test_gallery_filters_load_from_asset_contract_without_scene_fallback():
+    source = app_source()
+    fallback_block = source.split("const FALLBACK_ASSET_CONTRACT = {", 1)[1].split("};", 1)[0]
+
+    assert "/api/asset-contract" in function_body(source, "loadAssetContract")
+    for category in ('id: "prop"', 'id: "item"', 'id: "character"', 'id: "map"', 'id: "cg"'):
+        assert category in fallback_block
+    assert 'id: "scene"' not in fallback_block
+    assert "galleryFiltersFromTaxonomy" not in source
+
+
+def test_gallery_filtering_uses_new_frontend_asset_fields_only():
+    source = app_source()
+    bodies = "\n".join(
+        function_body(source, name)
+        for name in (
+            "renderGallery",
+            "renderGalleryFilters",
+            "protocolGalleryAsset",
+            "cachedGalleryAssets",
+            "galleryAssetMatchesFilter",
+            "galleryMapAssetFromEntry",
+        )
+    )
+
+    assert "gallery_category" in bodies
+    assert "display_zone" in bodies
+    for forbidden in (
+        ".metadata",
+        "metadata.",
+        "entity_key",
+        "visible_in_gallery",
+        "runtime_role",
+        "portrait_asset_kind",
+        "normalizeGalleryKind",
+        "fixedGalleryKind",
+        "normalizeAssetIdentity",
+        "asset.kind",
+        "asset.role",
+        "title.includes",
+        "key.includes",
+    ):
+        assert forbidden not in bodies
+
+
+def test_gallery_visibility_and_map_candidate_logic_follow_new_contract():
+    source = app_source()
+    match_body = function_body(source, "galleryAssetMatchesFilter")
+    map_body = function_body(source, "isValidCachedMapAsset") + function_body(source, "mapAssetPriority")
+
+    assert 'value === "all") return zone === "gallery"' in match_body
+    assert 'value === "map" && zone === "map"' in match_body
+    assert 'category === "map"' in map_body
+    assert 'use === "map"' in map_body
+    assert 'zone === "map"' in map_body
+    assert "scene" not in map_body
+    assert "metadata" not in map_body

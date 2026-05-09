@@ -200,6 +200,17 @@ const PORTRAIT_SPEC_VERSION = "story_linked_canvas_portrait.v1";
 const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v18";
 const PREVIOUS_DRAG_PANEL_STORAGE_KEYS = ["trpg.dragPanels.layout2.v17"];
 const LEGACY_DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels";
+const FALLBACK_ASSET_CONTRACT = {
+  core_gallery_categories: [
+    { id: "prop", label: "道具", source: "core" },
+    { id: "item", label: "物品", source: "core" },
+    { id: "character", label: "角色", source: "core" },
+    { id: "map", label: "地图", source: "core" },
+    { id: "cg", label: "CG", source: "core" },
+  ],
+  custom_gallery_categories: [],
+  max_custom_gallery_categories: 3,
+};
 
 function init() {
   drawBackground();
@@ -209,6 +220,7 @@ function init() {
   applyCollapseState();
   resetCampaignScopedUiState("");
   loadCanvasRules();
+  loadAssetContract();
   refresh();
   state.job.polling = setInterval(refresh, 2500);
 }
@@ -630,6 +642,7 @@ async function refresh() {
     state.campaign.assetSeed = state.campaign.frontendState.asset_seed || state.campaign.frontendState.campaign?.asset_seed || nextCampaign || "";
     if (previousCampaign !== nextCampaign) {
       resetCampaignScopedUiState(nextCampaign);
+      await loadAssetContract(nextCampaign);
     }
     state.story.currentPressurePack = data.output?.pressure_pack || {};
     if (Array.isArray(data.assets)) {
@@ -686,6 +699,48 @@ async function loadCanvasRules() {
   }
 }
 
+function normalizeAssetContract(raw = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const fallback = FALLBACK_ASSET_CONTRACT;
+  const maxCustom = Number(source.max_custom_gallery_categories || fallback.max_custom_gallery_categories) || 3;
+  return {
+    ...source,
+    core_gallery_categories: normalizeAssetContractRows(source.core_gallery_categories, "core", fallback.core_gallery_categories),
+    custom_gallery_categories: normalizeAssetContractRows(source.custom_gallery_categories, "campaign", []).slice(0, maxCustom),
+    max_custom_gallery_categories: maxCustom,
+  };
+}
+
+function normalizeAssetContractRows(rows, source, fallback = []) {
+  const input = Array.isArray(rows) && rows.length ? rows : fallback;
+  const seen = new Set();
+  return input.map((row) => {
+    const id = String(row?.id || row?.key || "").trim().toLowerCase();
+    const label = String(row?.label || row?.title || id).trim();
+    if (!id || id === "scene" || id === "all" || id === "hidden" || seen.has(id)) return null;
+    seen.add(id);
+    return { id, label: label || id, source: row?.source || source };
+  }).filter(Boolean);
+}
+
+async function loadAssetContract(campaignId = state.campaign.activeCampaign) {
+  if (!campaignId) {
+    state.assets.assetContract = normalizeAssetContract(FALLBACK_ASSET_CONTRACT);
+    renderGalleryFilters();
+    return state.assets.assetContract;
+  }
+  try {
+    const data = await api(`/api/asset-contract?campaign_id=${encodeURIComponent(campaignId)}`);
+    if (campaignId && campaignId !== state.campaign.activeCampaign) return state.assets.assetContract || normalizeAssetContract(FALLBACK_ASSET_CONTRACT);
+    state.assets.assetContract = normalizeAssetContract(data);
+  } catch (err) {
+    console.warn("asset contract unavailable", err);
+    state.assets.assetContract = normalizeAssetContract(FALLBACK_ASSET_CONTRACT);
+  }
+  renderGalleryFilters();
+  return state.assets.assetContract;
+}
+
 async function loadCachedAssets() {
   if (!state.campaign.activeCampaign) {
     state.assets.cachedAssets = [];
@@ -712,6 +767,7 @@ function resetCampaignScopedUiState(campaignId) {
   state.map.currentMapAsset = null;
   state.assets.assetCache = {};
   state.assets.cachedAssets = [];
+  state.assets.assetContract = normalizeAssetContract(FALLBACK_ASSET_CONTRACT);
   state.assets.visualContracts = {};
   state.assets.modulePayloadCache = {};
   state.gallery.galleryAssets = [];
@@ -837,7 +893,7 @@ function isAssetForCurrentCampaign(asset) {
   const seed = asset.asset_seed || asset.assetSeed || "";
   if (!cid || cid !== state.campaign.activeCampaign) return false;
   if (seed && state.campaign.assetSeed && seed !== state.campaign.assetSeed) return false;
-  if (asset.placeholder || asset.is_placeholder || asset.metadata?.placeholder) return false;
+  if (asset.placeholder || asset.is_placeholder) return false;
   return true;
 }
 
@@ -914,14 +970,30 @@ function isAttributeStarAsset(asset = {}) {
 }
 
 function isValidCachedMapAsset(asset = {}) {
-  const metadata = asset.metadata || {};
-  const kind = String(asset.kind || "");
-  const text = [asset.key, asset.path, asset.filename, kind, metadata.kind, metadata.source, metadata.object_id].join(" ").toLowerCase();
   if (!asset.url || asset.exists === false) return false;
-  if (asset.placeholder || asset.is_placeholder || metadata.placeholder) return false;
-  if (/(placeholder|empty_map|base_map|default_map)/.test(text)) return false;
-  if (!(kind === "map" || kind === "map_image" || kind.startsWith("gallery_map") || metadata.source === "map_route")) return false;
-  return isValidMapRoute(metadata.map_route || asset.map_route);
+  if (asset.placeholder || asset.is_placeholder) return false;
+  if (String(asset.display_zone || "").toLowerCase() === "hidden") return false;
+  const category = String(asset.gallery_category || "").toLowerCase();
+  const use = String(asset.asset_use || "").toLowerCase();
+  const zone = String(asset.display_zone || "").toLowerCase();
+  return category === "map" || use === "map" || zone === "map";
+}
+
+function mapAssetPriority(asset = {}) {
+  if (!isValidCachedMapAsset(asset)) return -1;
+  const zone = String(asset.display_zone || "").toLowerCase();
+  const category = String(asset.gallery_category || "").toLowerCase();
+  const use = String(asset.asset_use || "").toLowerCase();
+  if (zone === "map") return 30;
+  if (category === "map") return 20;
+  if (use === "map") return 10;
+  return 0;
+}
+
+function bestCurrentMapAsset() {
+  return (state.assets.cachedAssets || [])
+    .filter((asset) => isAssetForCurrentCampaign(asset) && isValidCachedMapAsset(asset))
+    .sort((a, b) => mapAssetPriority(b) - mapAssetPriority(a))[0] || null;
 }
 
 function renderCachedMap(scene, mapPanel = {}) {
@@ -936,9 +1008,7 @@ function renderCachedMap(scene, mapPanel = {}) {
   setText("mapLabel", route.title || modulePayload.title || scene.location || "当前路线");
   if (mode === "no_update" || mode === "none") return;
   if (!updateRequested || mode === "keep_previous") {
-    const cached = findCurrentCampaignAsset((asset) => {
-      return isValidCachedMapAsset(asset);
-    });
+    const cached = bestCurrentMapAsset();
     const url = modulePayload.url && isUrlForCurrentCampaign(modulePayload.url, modulePayload.asset_key)
       ? modulePayload.url
       : cached?.url || "";
@@ -1001,14 +1071,13 @@ function renderCachedMap(scene, mapPanel = {}) {
 }
 
 function galleryMapAssetFromEntry(entry, modulePayload = {}, scene = {}, route = {}, mapCanvas = {}) {
-  const metadata = entry?.metadata || {};
   const url = modulePayload.url || entry?.url || "";
   return {
     kind: "map",
     key: modulePayload.asset_key || entry?.key || "",
-    title: modulePayload.title || metadata.title || scene.location || "当前区域地图",
-    meta: metadata.meta || "当前地图",
-    detail: metadata.detail || scene.immediate_pressure || "当前展示的区域地图。",
+    title: modulePayload.title || entry?.title || scene.location || "当前区域地图",
+    meta: galleryKindLabel(entry?.gallery_category || "map"),
+    detail: entry?.detail || scene.immediate_pressure || "当前展示的区域地图。",
     seed: scopedSeed(scene.location || state.campaign.activeCampaign || "map"),
     scene: { ...scene, map_route: route, map_canvas: mapCanvas },
     cachedUrl: url,
@@ -1151,7 +1220,7 @@ function renderFrontendState(frontendState, campaignState) {
   const modules = fs.modules || {};
   state.campaign.lastCampaignState = campaignState;
   state.assets.visualContracts = fs.visual_contracts?.contracts || {};
-  state.assets.assetContract = fs.asset_contract || {};
+  state.assets.assetContract = normalizeAssetContract(fs.asset_contract || state.assets.assetContract || FALLBACK_ASSET_CONTRACT);
   state.gallery.galleryTaxonomy = fs.gallery_taxonomy || fs.gallery?.taxonomy || {};
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
@@ -1162,7 +1231,7 @@ function renderFrontendState(frontendState, campaignState) {
   });
   renderSidePanel(campaignState, fs);
   renderMemoryPanel(campaignState);
-  renderGalleryFilters(fs.gallery?.filters || [], state.gallery.galleryTaxonomy);
+  renderGalleryFilters();
   if (!modules.gallery || modules.gallery.mode !== "no_update") {
     renderGallery(campaignState, fs.gallery || {}, modules.gallery);
   }
@@ -1189,7 +1258,7 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
           });
         } else if (name === "gallery") {
           state.gallery.galleryTaxonomy = data.payload.taxonomy || frontendState.gallery_taxonomy || frontendState.gallery?.taxonomy || state.gallery.galleryTaxonomy || {};
-          renderGalleryFilters(data.payload.filters || frontendState.gallery?.filters || [], state.gallery.galleryTaxonomy);
+          renderGalleryFilters();
           renderGallery(campaignState, data.payload || {}, { ...moduleState, payload: data.payload });
         } else if (name === "map_panel") {
           updateMapModule(data.payload || {}, campaignState);
@@ -3911,12 +3980,8 @@ function setGalleryFilter(filter) {
   let visibleCount = 0;
   document.querySelectorAll("#galleryGrid article").forEach((card) => {
     const visible = galleryAssetMatchesFilter({
-      kind: card.dataset.kind,
-      runtime_role: card.dataset.runtimeRole,
-      role: card.dataset.runtimeRole,
       gallery_category: card.dataset.galleryCategory,
-      visible_in_gallery: card.dataset.visibleInGallery !== "false",
-      not_in_gallery_filters: card.dataset.notInGalleryFilters === "true",
+      display_zone: card.dataset.displayZone,
     }, state.gallery.galleryFilter);
     card.classList.toggle("hidden", !visible);
     card.hidden = !visible;
@@ -3948,7 +4013,7 @@ function makeAssetDraggable(element, asset) {
   element.classList.add("dragSource");
   element.title = "可拖到行动输入";
   const title = asset.title || asset.key || "资料";
-  const dragText = asset.kind === "npc" ? `@${title}：` : `查看资料「${title}」：`;
+  const dragText = `查看资料《${title}》：`;
   element.dataset.dragText = dragText;
   element.addEventListener("pointerdown", (event) => beginReferenceDrag(event, dragText));
   element.addEventListener("dragstart", (event) => {
@@ -3956,7 +4021,7 @@ function makeAssetDraggable(element, asset) {
     event.dataTransfer.effectAllowed = "copy";
     event.dataTransfer.setData("text/plain", text);
     event.dataTransfer.setData("application/trpg-reference", JSON.stringify({
-      kind: asset.kind || "asset",
+      kind: asset.gallery_category || "asset",
       key: asset.key || "",
       title,
       text,
@@ -4054,24 +4119,17 @@ function dataTransferHasType(dataTransfer, type) {
 function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   const grid = $("galleryGrid");
   if (!grid) return;
-  const modulePayload = moduleState?.payload || galleryState.module_payload || {};
-  const protocolAssets = [
-    ...(Array.isArray(modulePayload.assets) ? modulePayload.assets : []),
-    ...(Array.isArray(galleryState.assets) ? galleryState.assets : []),
-  ].map(protocolGalleryAsset).filter(Boolean);
   const cachedAssets = cachedGalleryAssets().map(protocolGalleryAsset).filter(Boolean);
-  const assets = mergeGalleryAssets(protocolAssets, cachedAssets)
+  const assets = mergeGalleryAssets([], cachedAssets)
     .filter((asset) => !asset.campaign_id || asset.campaign_id === state.campaign.activeCampaign);
   state.gallery.galleryAssets = assets;
   grid.innerHTML = "";
   assets.forEach((asset) => {
     const card = document.createElement("article");
-    card.dataset.kind = asset.kind;
+    card.dataset.kind = asset.gallery_category;
     card.dataset.key = asset.key;
-    card.dataset.runtimeRole = asset.runtime_role || asset.role || "";
-    card.dataset.galleryCategory = asset.gallery_category || asset.kind || "";
-    card.dataset.notInGalleryFilters = asset.not_in_gallery_filters ? "true" : "false";
-    card.dataset.visibleInGallery = asset.visible_in_gallery === false ? "false" : "true";
+    card.dataset.galleryCategory = asset.gallery_category || "";
+    card.dataset.displayZone = asset.display_zone || "";
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `查看资料：${asset.title}`);
@@ -4101,79 +4159,93 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   });
   setGalleryFilter(state.gallery.galleryFilter);
 }
-function renderGalleryFilters(filters, taxonomy = state.gallery.galleryTaxonomy || {}) {
+function renderGalleryFilters() {
   const holder = $("galleryFilters");
   if (!holder) return;
-  const resolvedFilters = Array.isArray(filters) && filters.length ? filters : galleryFiltersFromTaxonomy(taxonomy);
-  if (!resolvedFilters.length) return;
-  state.gallery.galleryFilterIds = resolvedFilters.map((filter) => filter.key).filter(Boolean);
-  const current = resolvedFilters.some((filter) => filter.key === state.gallery.galleryFilter) ? state.gallery.galleryFilter : "all";
+  const resolvedFilters = galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT);
+  state.gallery.galleryFilterIds = resolvedFilters.map((filter) => filter.id).filter(Boolean);
+  const current = resolvedFilters.some((filter) => filter.id === state.gallery.galleryFilter) ? state.gallery.galleryFilter : "all";
   state.gallery.galleryFilter = current;
   holder.innerHTML = "";
   resolvedFilters.forEach((filter) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.dataset.filter = filter.key;
-    button.textContent = filter.label || filter.key;
-    button.title = filter.label || filter.key;
-    button.classList.toggle("active", filter.key === state.gallery.galleryFilter);
-    button.addEventListener("click", () => setGalleryFilter(filter.key));
+    button.dataset.filter = filter.id;
+    button.textContent = filter.label || filter.id;
+    button.title = filter.label || filter.id;
+    button.classList.toggle("active", filter.id === state.gallery.galleryFilter);
+    button.addEventListener("click", () => setGalleryFilter(filter.id));
     holder.appendChild(button);
   });
 }
 
-function galleryFiltersFromTaxonomy(taxonomy = {}) {
-  const rows = [{ key: "all", label: "All" }];
+function galleryFiltersFromAssetContract(contract = {}) {
+  const normalized = normalizeAssetContract(contract);
+  const rows = [{ id: "all", label: "All", source: "ui" }];
   const categories = [
-    ...(Array.isArray(taxonomy.core_categories) ? taxonomy.core_categories : []),
-    ...(Array.isArray(taxonomy.campaign_categories) ? taxonomy.campaign_categories : []),
+    ...(Array.isArray(normalized.core_gallery_categories) ? normalized.core_gallery_categories : []),
+    ...(Array.isArray(normalized.custom_gallery_categories) ? normalized.custom_gallery_categories : []),
   ];
   categories.forEach((row) => {
-    const key = String(row?.id || row?.key || "").trim();
-    if (!key || ["all", "hidden", "player", "companion"].includes(key)) return;
-    if (rows.some((item) => item.key === key)) return;
-    rows.push({ key, label: row.label || key });
+    const id = String(row?.id || "").trim().toLowerCase();
+    if (!id || ["all", "hidden", "player", "companion", "scene"].includes(id)) return;
+    if (rows.some((item) => item.id === id)) return;
+    rows.push({ id, label: row.label || id, source: row.source || "" });
   });
-  if (rows.length === 1) rows.push({ key: "prop", label: "道具" }, { key: "item", label: "物品" }, { key: "character", label: "角色" }, { key: "map", label: "地图" }, { key: "cg", label: "CG" });
   return rows;
 }
 
+function registeredGalleryCategoryIds() {
+  return new Set(galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT)
+    .map((row) => row.id)
+    .filter((id) => id && id !== "all"));
+}
+
 function protocolGalleryAsset(asset) {
-  const kind = String(asset.gallery_category || asset.kind || "").trim();
-  if (!kind || kind === "hidden") return null;
+  const galleryCategory = String(asset.gallery_category || "").trim().toLowerCase();
+  const displayZone = String(asset.display_zone || "").trim().toLowerCase();
+  if (!galleryCategory) {
+    console.warn("asset missing gallery_category; hidden from gallery", asset);
+    return null;
+  }
+  if (!displayZone) {
+    console.warn("asset missing display_zone; hidden from gallery", asset);
+    return null;
+  }
+  if (["hidden", "portrait", "review"].includes(displayZone) || galleryCategory === "hidden") return null;
+  if (displayZone !== "gallery" && !(displayZone === "map" && galleryCategory === "map")) return null;
+  if (!registeredGalleryCategoryIds().has(galleryCategory)) return null;
   const detail = asset.detail || "";
-  const entityKey = asset.subject_key || asset.entity_key || asset.entityKey || "";
-  const logicalKey = asset.key || entityKey || `${kind}:${asset.title || asset.display_name || "asset"}`;
+  const subjectKey = asset.subject_key || "";
+  const logicalKey = asset.key || galleryCategory + ":" + (asset.title || "asset");
   return {
-    kind,
+    kind: galleryCategory,
     key: logicalKey,
-    title: conciseTitle(asset.title || asset.display_name || asset.key || "资料", 22),
-    meta: asset.meta || galleryKindLabel(kind),
-    seed: scopedSeed(asset.seed || asset.title || asset.key || kind),
+    title: conciseTitle(asset.title || asset.key || "资料", 22),
+    meta: galleryKindLabel(galleryCategory),
+    seed: scopedSeed(asset.title || asset.key || galleryCategory),
     detail,
-    cachedUrl: asset.cached_url || asset.url || "",
-    sourceObjectId: asset.source_object_id || "",
-    status: asset.status || "",
-    archived: Boolean(asset.archived),
+    cachedUrl: asset.url || "",
     createdAt: asset.created_at || "",
-    visualPrompt: asset.visual_hint || asset.visual_prompt || asset.visualPrompt || {},
-    imagePrompt: asset.image_prompt || asset.imagePrompt || {},
     campaign_id: asset.campaign_id || state.campaign.activeCampaign,
     asset_seed: asset.asset_seed || state.campaign.assetSeed,
     actor_role: asset.actor_role || "unknown",
-    role: asset.actor_role || "",
-    runtime_role: asset.actor_role || "",
-    gallery_category: kind,
+    gallery_category: galleryCategory,
     asset_use: asset.asset_use || "",
-    display_zone: asset.display_zone || "",
-    not_in_gallery_filters: false,
-    entity_key: entityKey,
-    assetKind: asset.asset_kind || asset.assetKind || "",
-    visible_in_gallery: true,
+    display_zone: displayZone,
+    asset_kind: asset.asset_kind || "",
+    asset_subtype: asset.asset_subtype || "",
+    asset_tags: Array.isArray(asset.asset_tags) ? asset.asset_tags : [],
+    subject_key: subjectKey,
+    certainty: asset.certainty || "",
+    cache_policy: asset.cache_policy || "",
+    source_type: asset.source_type || "",
+    exists: asset.exists !== false,
   };
 }
+
 function openAssetFromGallery(asset) {
-  if (asset?.kind === "cg") {
+  if (asset?.gallery_category === "cg" || asset?.asset_use === "cg") {
     openCgOverlay(asset.cachedUrl, asset.detail || galleryDetail(asset));
     return;
   }
@@ -4183,7 +4255,7 @@ function openAssetFromGallery(asset) {
 function markGalleryArchiveState(assets) {
   let currentSceneMarked = false;
   return assets.map((asset) => {
-    if (asset.kind !== "map" || !asset.cachedUrl) return asset;
+    if (asset.gallery_category !== "map" || !asset.cachedUrl) return asset;
     if (!currentSceneMarked) {
       currentSceneMarked = true;
       return { ...asset, status: "current", archived: false };
@@ -4203,7 +4275,7 @@ function openGalleryOverlay(assetKey = "", transientAsset = null) {
   if (galleryModule.payload_ref) {
     loadModulePayload(galleryModule.payload_ref, "gallery").then((data) => {
       if (!data?.payload || data.campaign_id !== state.campaign.activeCampaign) return;
-      renderGalleryFilters(data.payload.filters || state.campaign.frontendState?.gallery?.filters || []);
+      renderGalleryFilters();
       renderGallery(state.campaign.lastCampaignState || {}, data.payload || {}, { ...galleryModule, payload: data.payload });
       if (assetKey) state.gallery.selectedGalleryKey = assetKey;
       renderGalleryDialog();
@@ -4211,7 +4283,7 @@ function openGalleryOverlay(assetKey = "", transientAsset = null) {
   }
   const requested = state.gallery.galleryAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.gallery.galleryFilter)) {
-    state.gallery.galleryFilter = fixedGalleryKind(requested.kind) || normalizeGalleryKind(requested.kind) || requested.kind;
+    state.gallery.galleryFilter = requested.gallery_category || "all";
     setGalleryFilter(state.gallery.galleryFilter);
   }
   const assets = filteredGalleryAssets();
@@ -4239,13 +4311,17 @@ function filteredGalleryAssets() {
 }
 
 function galleryAssetMatchesFilter(asset, filter) {
-  const identity = normalizeAssetIdentity(asset || {});
-  if (identity.runtime_role === "player" || identity.runtime_role === "companion") return false;
-  if (identity.visible_in_gallery === false || identity.not_in_gallery_filters) return false;
   const value = filter || "all";
-  const category = identity.gallery_category && identity.gallery_category !== "hidden" ? identity.gallery_category : asset.kind;
-  if (value === "all") return true;
-  return category === value || asset.kind === value;
+  const category = String(asset?.gallery_category || "").trim().toLowerCase();
+  const zone = String(asset?.display_zone || "").trim().toLowerCase();
+  if (!category || !zone) {
+    console.warn("asset missing gallery_category/display_zone; hidden from gallery", asset);
+    return false;
+  }
+  if (!registeredGalleryCategoryIds().has(category)) return false;
+  if (["hidden", "portrait", "review"].includes(zone)) return false;
+  if (value === "all") return zone === "gallery";
+  return category === value && (zone === "gallery" || (value === "map" && zone === "map"));
 }
 
 function renderGalleryDialog() {
@@ -4256,7 +4332,7 @@ function renderGalleryDialog() {
   if (!assets.length) {
     const empty = document.createElement("div");
     empty.className = "galleryEmpty";
-    empty.textContent = "当前筛选下暂无资料。";
+    empty.textContent = "当前分类暂无资料";
     list.appendChild(empty);
     renderGalleryInspector(null);
     return;
@@ -4285,7 +4361,7 @@ function renderGalleryInspector(asset) {
   const meta = $("galleryInspectorMeta");
   const useButton = $("useGalleryAssetBtn");
   const inspector = $("galleryInspector");
-  if (inspector) inspector.dataset.kind = asset?.kind || "";
+  if (inspector) inspector.dataset.kind = asset?.gallery_category || "";
   if (!asset) {
     if (image) image.removeAttribute("src");
     setText("galleryInspectorTitle", "暂无资料");
@@ -4309,25 +4385,25 @@ function useSelectedGalleryAsset() {
   if (!asset || !canUseGalleryAsset(asset)) return;
   const input = $("actionInput");
   if (!input) return;
-  const text = asset.kind === "npc" ? `@${asset.title}：` : `查看物品「${asset.title}」：`;
+  const text = `查看资料《${asset.title}》：`;
   input.value = input.value.trim() ? `${input.value.trim()}\n${text}` : text;
   input.focus();
   closeGalleryOverlay();
 }
 
 function canUseGalleryAsset(asset) {
-  return asset && (asset.kind === "npc" || asset.kind === "item");
+  return asset && asset.display_zone === "gallery" && ["item", "prop", "character", "map", "cg"].includes(asset.gallery_category);
 }
 
 function assetStatusLabel(asset) {
   const status = String(asset?.status || "").toLowerCase();
-  const base = asset?.meta || galleryKindLabel(asset?.kind);
+  const base = asset?.meta || galleryKindLabel(asset?.gallery_category);
   if (asset?.archived) return `${base} / 已归档`;
   if (status.includes("dead") || status.includes("死亡") || status.includes("阵亡")) return `${base} / 已死亡`;
   if (status.includes("lost") || status.includes("失联")) return `${base} / 失联`;
   if (status.includes("consumed") || status.includes("消耗")) return `${base} / 已消耗`;
   if (status.includes("current")) return `${base} / 当前`;
-  if (asset?.kind === "map" && asset?.createdAt) return `${base} / 历史`;
+  if (asset?.gallery_category === "map" && asset?.createdAt) return `${base} / 历史`;
   return base;
 }
 
@@ -4551,14 +4627,16 @@ function cachedGalleryAssets() {
   return (state.assets.cachedAssets || []).filter((entry) => {
     if (!isAssetForCurrentCampaign(entry)) return false;
     if (!entry.exists || !entry.url) return false;
-    const category = String(entry.gallery_category || "");
-    const zone = String(entry.display_zone || "");
-    if (!category || category === "hidden" || zone === "hidden") return false;
+    const category = String(entry.gallery_category || "").toLowerCase();
+    const zone = String(entry.display_zone || "").toLowerCase();
+    if (!category || !zone || category === "hidden") return false;
+    if (["hidden", "portrait", "review"].includes(zone)) return false;
+    if (zone !== "gallery" && !(zone === "map" && category === "map")) return false;
     return true;
   }).map((entry) => ({
     kind: entry.gallery_category,
     key: entry.key,
-    title: conciseTitle(entry.title || entry.display_name || entry.key, 22),
+    title: conciseTitle(entry.title || entry.key, 22),
     meta: galleryKindLabel(entry.gallery_category),
     detail: entry.detail || "",
     cachedUrl: entry.url,
@@ -4568,14 +4646,18 @@ function cachedGalleryAssets() {
     actor_role: entry.actor_role || "unknown",
     gallery_category: entry.gallery_category,
     asset_use: entry.asset_use || "",
-    assetKind: entry.asset_kind || "",
+    asset_kind: entry.asset_kind || "",
+    asset_subtype: entry.asset_subtype || "",
+    asset_tags: Array.isArray(entry.asset_tags) ? entry.asset_tags : [],
+    subject_key: entry.subject_key || "",
     display_zone: entry.display_zone || "",
     certainty: entry.certainty || "",
     cache_policy: entry.cache_policy || "",
-    entity_key: entry.subject_key || "",
-    visible_in_gallery: true,
+    source_type: entry.source_type || "",
+    exists: entry.exists !== false,
   }));
 }
+
 function looksLikeGeneratedAssetTitle(title = "", key = "") {
   const text = normalizeActorName(title);
   const seed = normalizeActorName(state.campaign.assetSeed || "");
@@ -4882,10 +4964,10 @@ function mergeGalleryAssets(primary, cached) {
 }
 
 function galleryDedupeKeys(asset = {}) {
-  const kind = normalizeGalleryKind(asset.kind) || asset.kind || "asset";
-  const title = normalizeActorName(asset.title || asset.display_name || asset.name || "");
-  const entity = normalizeActorName(asset.entity_key || asset.entityKey || "");
-  const key = slugify(asset.kind === "map" ? (asset.key || asset.title) : (asset.sourceObjectId || asset.key || asset.title));
+  const kind = asset.gallery_category || "asset";
+  const title = normalizeActorName(asset.title || "");
+  const entity = normalizeActorName(asset.subject_key || "");
+  const key = slugify(asset.key || asset.title);
   return [
     key,
     title ? `${kind}:${title}` : "",
@@ -5028,10 +5110,16 @@ function conciseTitle(text, maxLen) {
 }
 
 function galleryKindLabel(kind) {
-  return { prop: "道具", cg: "CG", companion: "伙伴", character: "角色", npc: "角色", map: "地图", item: "物品", clue: "物品", document: "物品", anomaly: "道具", quest: "道具" }[kind] || "资料";
+  const row = galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT)
+    .find((item) => item.id === kind);
+  return row?.label || { prop: "道具", cg: "CG", character: "角色", map: "地图", item: "物品" }[kind] || "资料";
 }
 
 function drawGalleryAsset(targetImage, asset) {
+  if (asset?.cachedUrl) {
+    setAssetImage(targetImage, asset.cachedUrl);
+    return;
+  }
   const resolved = resolveVisualAsset({ ...asset, role: asset.role || asset.kind, type: asset.kind });
   if (targetImage) {
     targetImage.dataset.assetKey = resolved.asset_key || asset.key || "";
@@ -5044,11 +5132,6 @@ function drawGalleryAsset(targetImage, asset) {
   }
   if (asset.cachedUrl && String(asset.key || "").includes(`:v${ASSET_GENERATOR_VERSION}`) && isCurrentGeneratorAssetUrl(asset.cachedUrl)) {
     if (isUrlForCurrentCampaign(asset.cachedUrl, asset.key)) setAssetImage(targetImage, asset.cachedUrl);
-    return;
-  }
-  if (asset.kind === "map" && !isValidMapRoute(asset.scene?.map_route)) {
-    targetImage.removeAttribute("src");
-    targetImage.classList.add("is-empty");
     return;
   }
   const canvas = createAssetCanvas(128, 128);

@@ -32,6 +32,8 @@ from .prompt_builder import build_audit_user_prompt, read_prompt
 from .deepseek_client import DeepSeekClient
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_writeback
 from .services.asset_rules import asset_contract_payload
+from .services.raw_gallery_store import gallery_response as raw_gallery_response
+from .services.raw_gallery_store import save_gallery_raw
 from .story_progress import build_frontend_story_progress
 from .visual_contracts import (
     CONTRACT_FILE,
@@ -332,6 +334,10 @@ class Handler(BaseHTTPRequestHandler):
                 first_query(query, "kind"),
             ))
             return
+        if parsed.path == "/api/extensions/gallery":
+            query = parse_qs(parsed.query)
+            self._json(raw_gallery_response(first_query(query, "campaign_id")))
+            return
         if parsed.path == "/api/asset-contract":
             query = parse_qs(parsed.query)
             self._json(asset_contract_response(first_query(query, "campaign_id")))
@@ -431,6 +437,14 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/asset":
                 payload = self._read_json()
                 self._json(save_asset(payload))
+                return
+            if parsed.path == "/api/extensions/gallery":
+                payload = self._read_json()
+                if not isinstance(payload, dict):
+                    raise RuntimeError("gallery request payload must be object")
+                campaign_id = str(payload.get("campaign_id") or "").strip()
+                save_gallery_raw(campaign_id, payload.get("gallery"))
+                self._json(raw_gallery_response(campaign_id))
                 return
             if parsed.path == "/api/rebuild-assets":
                 payload = self._read_json()

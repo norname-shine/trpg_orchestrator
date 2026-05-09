@@ -23,7 +23,8 @@ ASSET_USE_SUBDIR = {
     "cg": "cg",
 }
 
-# Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration.
+# Media-only manifest normalization for existing PNG files. Not a gallery
+# business source; gallery cards come from extensions/gallery_raw.json.
 ROLE_PRIORITY = {
     "player": 10,
     "companion": 20,
@@ -33,7 +34,8 @@ ROLE_PRIORITY = {
     "map": 60,
 }
 
-# Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration.
+# Media-only manifest normalization for existing PNG files. Not a gallery
+# business source; gallery cards come from extensions/gallery_raw.json.
 ROLE_ASSET_KIND = {
     "player": "character_portrait",
     "companion": "character_portrait",
@@ -48,7 +50,8 @@ ROLE_ASSET_KIND = {
     "cg": "cg_image",
 }
 
-# Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration.
+# Media-only manifest normalization for existing PNG files. Not a gallery
+# business source; gallery cards come from extensions/gallery_raw.json.
 GALLERY_VISIBLE_KINDS = {
     "character_portrait",
     "item_icon",
@@ -87,7 +90,7 @@ def scoped_asset_key(campaign_id: str, kind: str, object_id: Any, variant: str =
 
 
 def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key: str = "") -> str:
-    """Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration."""
+    """Media-only manifest normalization; not a gallery business source."""
     value = str(kind or "").lower()
     if value in ASSET_USE_TO_KIND:
         return ASSET_USE_TO_KIND[value]
@@ -107,7 +110,7 @@ def normalize_asset_kind(kind: Any, metadata: dict[str, Any] | None = None, key:
 
 
 def infer_asset_role(asset: dict[str, Any]) -> str:
-    """Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration."""
+    """Media-only manifest normalization; not a gallery business source."""
     if not isinstance(asset, dict):
         return ""
     role = str(asset.get("actor_role") or asset.get("role") or "").lower()
@@ -126,7 +129,7 @@ def asset_display_name(asset: dict[str, Any]) -> str:
 
 
 def entity_key_for_asset(asset: dict[str, Any]) -> str:
-    """Deprecated: legacy pre-contract asset fallback. Do not use in new story asset registration."""
+    """Media-only manifest normalization; not a gallery business source."""
     return str(asset.get("subject_key") or asset.get("key") or "").strip()
 
 

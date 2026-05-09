@@ -33,7 +33,7 @@ def build_frontend_modules(
         "story_log": {"mode": "update", "state": "ready", "update_requested": True, "payload": {}, "payload_ref": module_refs.get("story_log", "")},
         "story_progress": {"mode": "update", "state": "ready", "update_requested": True, "payload": story_progress_payload},
         "map_panel": map_panel,
-        "gallery": _gallery_module(output_requests, payloads, module_refs.get("gallery", "")),
+        "gallery": _gallery_module(output_requests, payloads, ""),
         "inventory": _payload_module(output_requests, payloads, "inventory", "inventory_updates", payloads.get("inventory_updates", []), payload_ref=module_refs.get("inventory", "")),
         "dossier": _payload_module(output_requests, payloads, "dossier", "dossier_updates", payloads.get("dossier_updates", []), payload_ref=module_refs.get("dossier", "")),
         "character_card": _payload_module(output_requests, payloads, "character_card", "character_card_update", payloads.get("character_card_update", {}), cached_state="cached"),
@@ -108,24 +108,4 @@ def _payload_module(
 
 
 def _gallery_module(output_requests: dict[str, Any], payloads: dict[str, Any], payload_ref: str = "") -> dict[str, Any]:
-    gallery_request = _request(output_requests, "gallery")
-    visual_request = _request(output_requests, "visual_assets")
-    payload = _gallery_payload(payloads)
-    has_payload = bool(payload.get("visual_assets") or payload.get("gallery_updates"))
-    authorized = gallery_request.get("mode") == "update" or visual_request.get("mode") in {"create", "update"}
-    if not authorized:
-        return {"mode": "no_update", "state": "idle", "update_requested": False, "payload": {}, "payload_ref": payload_ref}
-    return {
-        "mode": "update" if has_payload else "no_update",
-        "state": "ready" if has_payload else "deferred",
-        "update_requested": has_payload,
-        "payload": payload if has_payload else {},
-        "payload_ref": payload_ref,
-        "reason": gallery_request.get("reason") or visual_request.get("reason", ""),
-    }
-
-
-def _gallery_payload(payloads: dict[str, Any]) -> dict[str, Any]:
-    visual_assets = payloads.get("visual_assets") if isinstance(payloads.get("visual_assets"), list) else []
-    updates = payloads.get("gallery_updates") if isinstance(payloads.get("gallery_updates"), list) else []
-    return {"visual_assets": visual_assets, "gallery_updates": updates}
+    return {"mode": "no_update", "state": "removed", "update_requested": False, "payload": {}, "payload_ref": ""}

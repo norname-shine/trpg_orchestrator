@@ -595,6 +595,8 @@ def scoped_asset_key(campaign_id: str, kind: str, object_id: Any, variant: str =
 
 from .services import assets as assets_service
 
+# Media-only manifest role/kind helpers. These must not feed gallery business
+# cards; frontend gallery uses gallery_raw v2 via /api/extensions/gallery.
 ROLE_PRIORITY = assets_service.ROLE_PRIORITY
 ROLE_ASSET_KIND = assets_service.ROLE_ASSET_KIND
 
@@ -1460,6 +1462,8 @@ def asset_lookup(campaign_id: str, key: str) -> dict[str, Any]:
 
 
 def asset_list(campaign_id: str, kind: str = "") -> dict[str, Any]:
+    # Media-only PNG registry. Not a gallery business source; the gallery UI
+    # reads /api/extensions/gallery and gallery_raw.json instead.
     from .services import assets
 
     return assets.asset_list(campaign_id, kind)
@@ -1490,19 +1494,7 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
             "next_cursor": str(offset + safe_limit) if offset + safe_limit < len(blocks) else "",
         }
     if module_name == "gallery":
-        assets = asset_list(resolved).get("assets", [])
-        gallery = frontend_gallery(resolved, state, output, assets)
-        rows = gallery.get("assets", []) if isinstance(gallery.get("assets"), list) else []
-        if kind and kind != "all":
-            rows = [row for row in rows if str(row.get("kind") or "") == kind]
-        page = rows[offset:offset + safe_limit]
-        return {
-            "ok": True,
-            "campaign_id": resolved,
-            "module": "gallery",
-            "payload": {"filters": gallery.get("filters", []), "taxonomy": gallery.get("taxonomy", {}), "assets": page},
-            "next_cursor": str(offset + safe_limit) if offset + safe_limit < len(rows) else "",
-        }
+        return {"ok": False, "campaign_id": resolved, "module": "gallery", "error": "legacy gallery module removed; use /api/extensions/gallery"}
     if module_name == "map-panel":
         assets = asset_list(resolved).get("assets", [])
         recent = state.get("recent", {}) if isinstance(state.get("recent"), dict) else {}
@@ -2418,56 +2410,6 @@ def frontend_dossier(state: dict[str, Any]) -> list[dict[str, Any]]:
     return rows[:80]
 
 
-def frontend_gallery(campaign_id: str, state: dict[str, Any], output: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
-    taxonomy = gallery_taxonomy_for_campaign(campaign_id, state)
-    filters = gallery_filters_from_taxonomy(taxonomy)
-    rows: list[dict[str, Any]] = []
-    parsed = output.get("parsed", {}) if isinstance(output.get("parsed"), dict) else {}
-    for block in parsed.get("blocks", []) if isinstance(parsed.get("blocks"), list) else []:
-        if not isinstance(block, dict) or block.get("type") != "cg_image":
-            continue
-        cached_url = str(block.get("cached_url") or block.get("image_url") or block.get("url") or "")
-        if not cached_url:
-            continue
-        rows.append({
-            "kind": "cg",
-            "key": str(block.get("asset_key") or block.get("id") or cached_url),
-            "title": "CG",
-            "meta": "CG",
-            "detail": str(block.get("image_detail") or block.get("body") or ""),
-            "cached_url": cached_url,
-            "gallery_category": "cg",
-            "asset_use": "cg",
-            "asset_kind": "cg_image",
-            "display_zone": "gallery",
-            "actor_role": "unknown",
-            "status": "current",
-        })
-    for asset in assets:
-        if not isinstance(asset, dict):
-            continue
-        category = str(asset.get("gallery_category") or "").strip()
-        if not category or category == "hidden":
-            continue
-        rows.append({
-            "kind": category,
-            "key": asset.get("key", ""),
-            "title": asset.get("title") or asset.get("display_name") or asset.get("key", ""),
-            "meta": category,
-            "detail": asset.get("detail") or "",
-            "cached_url": asset.get("url") or "",
-            "subject_key": asset.get("subject_key", ""),
-            "actor_role": asset.get("actor_role", "unknown"),
-            "gallery_category": category,
-            "asset_use": asset.get("asset_use", ""),
-            "asset_kind": asset.get("asset_kind", ""),
-            "display_zone": asset.get("display_zone", ""),
-            "certainty": asset.get("certainty", ""),
-            "cache_policy": asset.get("cache_policy", ""),
-            "created_at": asset.get("created_at", ""),
-        })
-    return {"filters": filters, "taxonomy": taxonomy, "assets": dedupe_frontend_assets(rows)[:120]}
-
 def copyright_safe_prompt_text(text: str) -> str:
     result = str(text or "")
     blocked = [
@@ -2961,44 +2903,6 @@ def shorten_item_name(name: str) -> str:
     return text[:6]
 
 
-def gallery_filters_for_campaign(campaign_id: str, state: dict[str, Any]) -> list[dict[str, str]]:
-    rows = [("all", "全部"), ("cg", "CG"), ("companion", "伙伴"), ("master", "御主"), ("npc", "NPC"), ("scene", "场景"), ("item", "物品")]
-    return [{"key": key, "label": label} for key, label in rows]
-
-def gallery_allowed_filter_ids(filters: list[dict[str, str]]) -> set[str]:
-    return {str(row.get("key") or "") for row in filters if str(row.get("key") or "") and str(row.get("key")) != "all"}
-
-
-def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
-    raw = str(kind or "").lower()
-    if "gallery_npc" in raw:
-        return ""
-    if any(token in raw for token in ("generated_cg", "gallery_image", "formal_cg", "cg_image")):
-        return "cg" if "cg" in allowed else ""
-    value = normalize_frontend_gallery_kind(kind)
-    if value in allowed:
-        return value
-    aliases = {
-        "location": "map",
-        "scene": "map",
-        "npc": "character",
-        "master": "character",
-        "servant": "character",
-        "document": "item",
-        "clue": "item",
-        "anomaly": "prop",
-        "quest": "prop",
-        "weapon": "item",
-        "supply": "item",
-        "material": "item",
-        "ritual_tool": "item",
-    }
-    value = aliases.get(value, value)
-    if value in allowed:
-        return value
-    return ""
-
-
 def normalize_frontend_gallery_kind(kind: Any) -> str:
     value = str(kind or "").lower()
     if value in {"cg_image", "gallery_image"}:
@@ -3042,22 +2946,7 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
     return ""
 
 
-def gallery_taxonomy_for_campaign(campaign_id: str, state: dict[str, Any]) -> dict[str, Any]:
-    payload = asset_contract_payload(campaign_id)
-    return {
-        "core_categories": payload.get("core_gallery_categories", []),
-        "campaign_categories": payload.get("custom_gallery_categories", []),
-        "max_custom_gallery_categories": payload.get("max_custom_gallery_categories", 3),
-        "hidden_runtime_roles": ["player", "companion"],
-        "rules": {
-            "gallery_category_controls_frontend_filter_only": True,
-            "asset_use_controls_backend_processing": True,
-            "actor_role_controls_story_identity": True,
-            "scene_assets_use_map_category": True,
-        },
-    }
-
-def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[str, Any]:
+def normalize_campaign_category_row(row: Any, source: str = "campaign_taxonomy") -> dict[str, Any]:
     if isinstance(row, str):
         category_id = safe_segment(row.lower())
         label = row
@@ -3068,7 +2957,7 @@ def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[s
         return {}
     if not category_id or category_id in {"all", "hidden", "player", "companion", "companion_portrait"}:
         return {}
-    legacy_aliases = {
+    category_aliases = {
         "npc": "character",
         "master": "character",
         "servant": "character",
@@ -3079,120 +2968,17 @@ def normalize_gallery_taxonomy_row(row: Any, source: str = "inferred") -> dict[s
         "anomaly": "prop",
         "quest": "prop",
     }
-    category_id = legacy_aliases.get(category_id, category_id)
+    category_id = category_aliases.get(category_id, category_id)
     result = {"id": category_id, "label": label or category_id, "source": source}
     if isinstance(row, dict) and row.get("locked") is not None:
         result["locked"] = bool(row.get("locked"))
     return result
 
 
-def dedupe_taxonomy_rows(rows: list[dict[str, Any]], blocked: set[str]) -> list[dict[str, Any]]:
-    seen = {str(item or "") for item in blocked}
-    output = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        category_id = str(row.get("id") or "")
-        if not category_id or category_id in seen:
-            continue
-        seen.add(category_id)
-        output.append(row)
-    return output
-
-
-def gallery_filters_from_taxonomy(taxonomy: dict[str, Any]) -> list[dict[str, str]]:
-    filters = [{"key": "all", "label": "All"}]
-    core = taxonomy.get("core_categories") if isinstance(taxonomy.get("core_categories"), list) else []
-    campaign = taxonomy.get("campaign_categories") if isinstance(taxonomy.get("campaign_categories"), list) else []
-    for row in core + campaign:
-        if not isinstance(row, dict):
-            continue
-        category_id = str(row.get("id") or "").strip()
-        if category_id and category_id not in {"hidden", "player", "companion"}:
-            filters.append({"key": category_id, "label": str(row.get("label") or category_id)})
-    return filters
-
-
-def gallery_filters_for_campaign(campaign_id: str, state: dict[str, Any]) -> list[dict[str, str]]:
-    return gallery_filters_from_taxonomy(gallery_taxonomy_for_campaign(campaign_id, state))
-
-
-def coerce_gallery_kind_to_allowed(kind: Any, allowed: set[str]) -> str:
-    raw = str(kind or "").lower()
-    if raw in {"hidden", "companion", "companion_portrait"}:
-        return ""
-    if "gallery_npc" in raw:
-        return ""
-    if any(token in raw for token in ("generated_cg", "gallery_image", "formal_cg", "cg_image")):
-        return "cg" if "cg" in allowed else ""
-    if raw in allowed:
-        return raw
-    value = normalize_frontend_gallery_kind(kind)
-    if value in {"hidden", "companion"}:
-        return ""
-    aliases = {
-        "location": "map",
-        "scene": "map",
-        "ecology": "monster",
-        "weapon": "item",
-        "supply": "item",
-        "material": "item",
-        "ritual_tool": "item",
-    }
-    value = aliases.get(value, value)
-    if value in allowed:
-        return value
-    if value == "character" and "npc" in allowed:
-        return "npc"
-    return ""
-
-
 def readable_asset_name(key: str, kind: str) -> str:
     text = re.sub(r"^[^:]+:", "", str(key or kind or "asset"))
     text = re.sub(r":v\d+$", "", text).replace("_", " ").strip()
     return concise_text(text or kind, 18)
-
-
-def dedupe_frontend_assets(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
-    by_key: dict[str, dict[str, Any]] = {}
-    output = []
-    for row in rows:
-        if row.get("entity_key"):
-            key = str(row.get("entity_key"))
-        elif row.get("kind") == "scene":
-            key = str(row.get("key") or f"scene:{normalized_name(row.get('title'))}:{row.get('created_at')}")
-        else:
-            key = f"{row.get('kind')}:{normalized_name(row.get('title'))}" if row.get("title") else str(row.get("key") or row.get("kind"))
-        if key in seen:
-            existing = by_key.get(key)
-            if existing:
-                for field in ("cached_url", "visual_prompt", "source_object_id", "created_at"):
-                    if row.get(field) and not existing.get(field):
-                        existing[field] = row[field]
-                if row.get("detail"):
-                    existing["detail"] = merge_detail_text(existing.get("detail", ""), row.get("detail", ""))
-                if row.get("status") and not existing.get("status"):
-                    existing["status"] = row["status"]
-            continue
-        seen.add(key)
-        by_key[key] = row
-        output.append(row)
-    return output
-
-
-def mark_frontend_scene_archive_state(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    current_seen = False
-    output = []
-    for row in rows:
-        if row.get("kind") == "scene" and row.get("cached_url"):
-            if current_seen:
-                row = {**row, "status": "archived", "archived": True}
-            else:
-                row = {**row, "status": "current", "archived": False}
-                current_seen = True
-        output.append(row)
-    return output
 
 
 def concise_text(value: Any, limit: int = 42) -> str:
@@ -4492,7 +4278,7 @@ def normalize_campaign_gallery_categories(value: Any, *, fail_on_too_many: bool 
     filtered: list[dict[str, Any]] = []
     for row in rows:
         category_id = str(row.get("id") or "")
-        normalized = normalize_gallery_taxonomy_row({"id": category_id, "label": row.get("label", "")}, "campaign_taxonomy")
+        normalized = normalize_campaign_category_row({"id": category_id, "label": row.get("label", "")}, "campaign_taxonomy")
         category_id = str(normalized.get("id") or category_id)
         if not category_id or category_id in CORE_GALLERY_CATEGORY_IDS:
             continue
@@ -5280,10 +5066,6 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
         "story_config": story_config,
         "companion_config": companion_config,
         "campaign_taxonomy": campaign_taxonomy,
-        "gallery_taxonomy": {
-            "core_categories": campaign_taxonomy.get("asset_categories", []),
-            "campaign_categories": campaign_taxonomy.get("campaign_categories", []),
-        },
         "character_attribute_schema": character_attribute_schema,
         "render_rules": render_rules,
         "initial_assets": initial_assets,

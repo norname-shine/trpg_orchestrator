@@ -49,6 +49,8 @@ def frontend_state_response(campaign_id: str = "") -> dict[str, Any]:
     # Legacy migration point: output parsing/pipeline status still lives in web_server.py
     # because it is shared by several HTTP endpoints. Move it into a service next.
     output = ws.output_payload(resolved, require_parse_ready=True)
+    # Media-only PNG registry. This is not a gallery business source; raw
+    # gallery cards are loaded by the frontend from /api/extensions/gallery.
     assets = asset_list(resolved).get("assets", [])
     frontend = build_frontend_state(resolved, current, state, output, assets)
     output_shell = lightweight_output_shell(output)
@@ -148,10 +150,9 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
         },
         "scene": scene,
     }
-    gallery_payload_ref = f"/api/module/gallery?campaign_id={ws.safe_segment(campaign_id)}&limit=60"
+    gallery_payload_ref = f"/api/extensions/gallery?campaign_id={ws.safe_segment(campaign_id)}"
     story_log_payload_ref = f"/api/module/story-log?campaign_id={ws.safe_segment(campaign_id)}&limit=20"
-    gallery_taxonomy = ws.gallery_taxonomy_for_campaign(campaign_id, state)
-    gallery = {"filters": ws.gallery_filters_from_taxonomy(gallery_taxonomy), "taxonomy": gallery_taxonomy, "assets": [], "payload_ref": gallery_payload_ref}
+    gallery = {"raw_payload_ref": gallery_payload_ref, "assets": []}
     story_progress_payload = ws.frontend_story_progress_payload(campaign_id)
     visual_contracts_path = ws.CAMPAIGNS_DIR / ws.safe_segment(campaign_id) / CONTRACT_FILE
     visual_contracts = read_json(visual_contracts_path) if visual_contracts_path.exists() else {}
@@ -167,7 +168,6 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
         "asset_seed": profile["asset_seed"],
         "module_refs": {
             "story_log": story_log_payload_ref,
-            "gallery": gallery_payload_ref,
             "map_panel": f"/api/module/map-panel?campaign_id={ws.safe_segment(campaign_id)}",
             "inventory": f"/api/module/inventory?campaign_id={ws.safe_segment(campaign_id)}",
             "dossier": f"/api/module/dossier?campaign_id={ws.safe_segment(campaign_id)}",
@@ -200,7 +200,6 @@ def build_frontend_state(campaign_id: str, meta: dict[str, Any], state: dict[str
         "quests": ws.frontend_quests(state),
         "inventory": ws.frontend_inventory(state),
         "gallery": gallery,
-        "gallery_taxonomy": gallery_taxonomy,
         "visual_registry": visual_registry,
         "avatar_index": visual_registry.get("avatar_index", {}),
         "story_progress": story_progress_payload,

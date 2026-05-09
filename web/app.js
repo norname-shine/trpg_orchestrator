@@ -33,12 +33,11 @@ const state = {
   },
   galleryFilter: "all",
   galleryFilterIds: ["all"],
-  galleryTaxonomy: {},
   rawAssets: [],
   rawGallery: {},
   renderedMapKey: "",
   canvasRules: "",
-  galleryAssets: [],
+  renderedRawAssets: [],
   cachedAssets: [],
   storyTurnsByCampaign: {},
   storyTurnSignatures: {},
@@ -106,10 +105,9 @@ const LEGACY_STATE_FIELDS = {
   modulePayloadCache: ["assets", "modulePayloadCache"],
   galleryFilter: ["gallery", "galleryFilter"],
   galleryFilterIds: ["gallery", "galleryFilterIds"],
-  galleryTaxonomy: ["gallery", "galleryTaxonomy"],
   rawAssets: ["gallery", "rawAssets"],
   rawGallery: ["gallery", "rawGallery"],
-  galleryAssets: ["gallery", "galleryAssets"],
+  renderedRawAssets: ["gallery", "renderedRawAssets"],
   selectedGalleryKey: ["gallery", "selectedGalleryKey"],
   transientGalleryAsset: ["gallery", "transientGalleryAsset"],
   renderedMapKey: ["map", "renderedMapKey"],
@@ -799,7 +797,7 @@ function resetCampaignScopedUiState(campaignId) {
   state.assets.modulePayloadCache = {};
   state.gallery.rawGallery = {};
   state.gallery.rawAssets = [];
-  state.gallery.galleryAssets = [];
+  state.gallery.renderedRawAssets = [];
   state.gallery.selectedGalleryKey = "";
   state.gallery.transientGalleryAsset = null;
   state.story.currentPressurePack = {};
@@ -1267,7 +1265,6 @@ function renderFrontendState(frontendState, campaignState) {
   state.campaign.lastCampaignState = campaignState;
   state.assets.visualContracts = fs.visual_contracts?.contracts || {};
   state.assets.assetContract = normalizeAssetContract(fs.asset_contract || state.assets.assetContract || FALLBACK_ASSET_CONTRACT);
-  state.gallery.galleryTaxonomy = fs.gallery_taxonomy || fs.gallery?.taxonomy || {};
   renderCharacterCard(protocolCharacterCard(fs.character_card, campaignState));
   renderCompanionCard(protocolCompanionCard(fs.companion_card, campaignState));
   renderRollActions(fs.roll_actions || []);
@@ -4162,7 +4159,7 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   if (!grid) return;
   const assets = rawGalleryAssets()
     .filter((asset) => !asset.campaign_id || asset.campaign_id === state.campaign.activeCampaign);
-  state.gallery.galleryAssets = assets;
+  state.gallery.renderedRawAssets = assets;
   grid.innerHTML = "";
   if (!assets.length) {
     const empty = document.createElement("div");
@@ -4370,13 +4367,13 @@ function openCurrentMapOverlay() {
 
 function openGalleryOverlay(assetKey = "", transientAsset = null) {
   state.gallery.transientGalleryAsset = transientAsset;
-  const requested = state.gallery.galleryAssets.find((asset) => asset.key === assetKey);
+  const requested = state.gallery.renderedRawAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.gallery.galleryFilter)) {
     state.gallery.galleryFilter = requested.gallery_category || "all";
     setGalleryFilter(state.gallery.galleryFilter);
   }
   const assets = filteredGalleryAssets();
-  state.gallery.selectedGalleryKey = assetKey || state.gallery.selectedGalleryKey || assets[0]?.key || state.gallery.galleryAssets[0]?.key || "";
+  state.gallery.selectedGalleryKey = assetKey || state.gallery.selectedGalleryKey || assets[0]?.key || state.gallery.renderedRawAssets[0]?.key || "";
   renderGalleryDialog();
   const overlay = $("galleryOverlay");
   overlay.classList.remove("hidden");
@@ -4392,7 +4389,7 @@ function closeGalleryOverlay() {
 }
 
 function filteredGalleryAssets() {
-  const rows = state.gallery.galleryAssets.filter((asset) => galleryAssetMatchesFilter(asset, state.gallery.galleryFilter));
+  const rows = state.gallery.renderedRawAssets.filter((asset) => galleryAssetMatchesFilter(asset, state.gallery.galleryFilter));
   if (state.gallery.transientGalleryAsset) {
     return [state.gallery.transientGalleryAsset, ...rows.filter((asset) => asset.key !== state.gallery.transientGalleryAsset.key)];
   }
@@ -4470,7 +4467,7 @@ function renderGalleryInspector(asset) {
 }
 
 function useSelectedGalleryAsset() {
-  const asset = state.gallery.galleryAssets.find((item) => item.key === state.gallery.selectedGalleryKey);
+  const asset = state.gallery.renderedRawAssets.find((item) => item.key === state.gallery.selectedGalleryKey);
   if (!asset || !canUseGalleryAsset(asset)) return;
   const input = $("actionInput");
   if (!input) return;

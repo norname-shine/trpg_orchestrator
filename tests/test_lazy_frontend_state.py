@@ -20,27 +20,25 @@ def test_frontend_state_does_not_return_full_assets(monkeypatch):
     assert payload["output"]["parsed"]["blocks"] == []
 
 
-def test_gallery_module_has_payload_ref(monkeypatch):
+def test_frontend_state_points_gallery_to_raw_endpoint(monkeypatch):
     monkeypatch.setattr(web_server, "MemoryStore", lambda: FakeStore())
     monkeypatch.setattr(web_server, "campaign_state", lambda campaign_id: {"title": "Demo", "recent": {}})
     monkeypatch.setattr(web_server, "output_payload", lambda campaign_id, require_parse_ready=False: {"campaign_id": campaign_id, "parsed": {"blocks": []}, "pressure_pack": {}})
     monkeypatch.setattr(web_server, "asset_list", lambda campaign_id, kind="": {"ok": True, "assets": []})
     payload = web_server.frontend_state_response("demo")
-    assert payload["frontend_state"]["modules"]["gallery"]["payload_ref"].startswith("/api/module/gallery")
+    assert payload["frontend_state"]["gallery"]["raw_payload_ref"].startswith("/api/extensions/gallery")
+    assert payload["frontend_state"]["modules"]["gallery"]["state"] == "removed"
+    assert payload["frontend_state"]["modules"]["gallery"]["payload_ref"] == ""
 
 
-def test_gallery_module_api_pages_assets(monkeypatch):
+def test_legacy_gallery_module_api_is_removed(monkeypatch):
     monkeypatch.setattr(web_server, "MemoryStore", lambda: FakeStore())
     monkeypatch.setattr(web_server, "campaign_state", lambda campaign_id: {"title": "Demo", "recent": {}})
     monkeypatch.setattr(web_server, "output_payload", lambda campaign_id, require_parse_ready=False: {"campaign_id": campaign_id, "parsed": {"blocks": []}, "pressure_pack": {}})
     monkeypatch.setattr(web_server, "asset_list", lambda campaign_id, kind="": {"ok": True, "assets": []})
-    monkeypatch.setattr(web_server, "frontend_gallery", lambda campaign_id, state, output, assets: {
-        "filters": [],
-        "assets": [{"kind": "item", "key": f"k{i}", "title": f"Item {i}"} for i in range(3)],
-    })
     payload = web_server.module_payload_response("gallery", "demo", cursor="1", limit="1")
-    assert len(payload["payload"]["assets"]) == 1
-    assert payload["next_cursor"] == "2"
+    assert payload["ok"] is False
+    assert "legacy gallery module removed" in payload["error"]
 
 
 def test_map_module_keeps_cached_map_image_asset():

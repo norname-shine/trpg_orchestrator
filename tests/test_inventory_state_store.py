@@ -55,12 +55,17 @@ def inventory_server(inventory_root: Path):
         thread.join(timeout=5)
 
 
-def test_load_inventory_state_missing_returns_empty(inventory_root: Path):
+def test_load_inventory_state_and_events_missing_return_empty(inventory_root: Path):
     assert inventory_state_store.load_inventory_state("demo") == {
         "schema": inventory_state_store.INVENTORY_STATE_SCHEMA,
         "campaign_id": "demo",
         "updated_turn": 0,
         "items": [],
+    }
+    assert inventory_state_store.load_inventory_events("demo") == {
+        "schema": inventory_state_store.INVENTORY_EVENTS_SCHEMA,
+        "campaign_id": "demo",
+        "events": [],
     }
 
 
@@ -72,6 +77,14 @@ def test_apply_inventory_payload_rejects_missing_item_id(inventory_root: Path):
         inventory_state_store.apply_inventory_payload("demo", payload)
 
 
+def test_apply_inventory_payload_rejects_missing_title(inventory_root: Path):
+    payload = item_payload()
+    payload.pop("title")
+
+    with pytest.raises(RuntimeError, match="title"):
+        inventory_state_store.apply_inventory_payload("demo", payload)
+
+
 def test_new_item_id_creates_item_card(inventory_root: Path):
     inventory_state_store.apply_inventory_payload("demo", item_payload())
 
@@ -79,12 +92,22 @@ def test_new_item_id_creates_item_card(inventory_root: Path):
     assert state["items"] == [item_payload()]
 
 
-def test_existing_item_id_updates_original_item_with_shallow_state_merge(inventory_root: Path):
+def test_classify_inventory_change_returns_explicit_actions(inventory_root: Path):
+    current = inventory_state_store.empty_inventory_state("demo")
+    assert inventory_state_store.classify_inventory_change(current, item_payload("coin_001", "Coin"))["action"] == "create_new"
+
+    current["items"].append(item_payload("coin_001", "Coin"))
+    assert inventory_state_store.classify_inventory_change(current, item_payload("coin_001", "Coin"))["action"] == "update_existing"
+    assert inventory_state_store.classify_inventory_change(current, item_payload("coin_split", "Split Coin", source_item_id="coin_001"))["action"] == "create_derived"
+
+
+def test_existing_item_id_updates_original_item(inventory_root: Path):
     inventory_state_store.apply_inventory_payload("demo", item_payload(state={"status": "sealed", "charges": 1}))
 
     inventory_state_store.apply_inventory_payload("demo", {
         "item_id": "letter_001",
-        "state": {"status": "opened", "charges": None},
+        "title": "Damp Letter",
+        "state": {"status": "opened"},
         "payload": {"detail": "Opened by the player"},
         "condition": "wet",
     })
@@ -93,9 +116,36 @@ def test_existing_item_id_updates_original_item_with_shallow_state_merge(invento
     assert len(state["items"]) == 1
     item = state["items"][0]
     assert item["title"] == "Damp Letter"
-    assert item["state"] == {"status": "opened"}
+    assert item["state"] == {"status": "opened", "charges": 1}
     assert item["payload"] == {"detail": "Opened by the player"}
     assert item["condition"] == "wet"
+
+
+def test_state_field_uses_shallow_merge(inventory_root: Path):
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", state={"count": 1, "status": "fresh"}))
+
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", state={"status": "spent", "note": None}))
+
+    item = inventory_state_store.load_inventory_state("demo")["items"][0]
+    assert item["state"] == {"count": 1, "status": "spent", "note": None}
+
+
+def test_payload_field_uses_shallow_merge(inventory_root: Path):
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", payload={"detail": "old", "rarity": "low"}))
+
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", payload={"detail": "new", "flag": None}))
+
+    item = inventory_state_store.load_inventory_state("demo")["items"][0]
+    assert item["payload"] == {"detail": "new", "rarity": "low", "flag": None}
+
+
+def test_remove_fields_deletes_explicit_top_level_field(inventory_root: Path):
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", condition="wet"))
+
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", remove_fields=["condition"]))
+
+    item = inventory_state_store.load_inventory_state("demo")["items"][0]
+    assert "condition" not in item
 
 
 def test_source_item_id_hit_creates_derived_item(inventory_root: Path):
@@ -147,10 +197,10 @@ def test_category_or_type_guessing_does_not_merge_items(inventory_root: Path):
 
 def test_update_writes_inventory_events(inventory_root: Path):
     inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin"))
-    inventory_state_store.apply_inventory_payload("demo", {"item_id": "coin_001", "state": {"status": "spent"}})
+    inventory_state_store.apply_inventory_payload("demo", item_payload("coin_001", "Coin", state={"status": "spent"}))
 
     events = inventory_state_store.load_inventory_events("demo")
-    assert [event["action"] for event in events["events"]] == ["create", "update"]
+    assert [event["action"] for event in events["events"]] == ["create_new", "update_existing"]
     assert events["events"][1]["item_id"] == "coin_001"
     assert "created_at" in events["events"][1]
 
@@ -165,7 +215,7 @@ def test_extensions_inventory_get_returns_state_and_events(inventory_server: Thr
     assert payload["events"] == inventory_state_store.empty_inventory_events("demo")
 
 
-def test_extensions_inventory_post_apply_creates_and_updates_item(inventory_server: ThreadingHTTPServer):
+def test_extensions_inventory_post_apply_creates_item(inventory_server: ThreadingHTTPServer):
     status, payload = request_json(inventory_server, "POST", "/api/extensions/inventory/apply", {
         "campaign_id": "demo",
         "item": item_payload("coin_001", "Coin", state={"count": 1}),
@@ -174,11 +224,18 @@ def test_extensions_inventory_post_apply_creates_and_updates_item(inventory_serv
     assert status == 200
     assert payload["state"]["items"][0]["item_id"] == "coin_001"
 
+
+def test_extensions_inventory_post_apply_updates_item(inventory_server: ThreadingHTTPServer):
+    request_json(inventory_server, "POST", "/api/extensions/inventory/apply", {
+        "campaign_id": "demo",
+        "item": item_payload("coin_001", "Coin", state={"count": 1}),
+    })
+
     status, payload = request_json(inventory_server, "POST", "/api/extensions/inventory/apply", {
         "campaign_id": "demo",
-        "item": {"item_id": "coin_001", "state": {"count": 2}},
+        "item": item_payload("coin_001", "Coin", state={"count": 2}),
     })
 
     assert status == 200
-    assert payload["state"]["items"][0]["state"] == {"count": 2}
-    assert [event["action"] for event in payload["events"]["events"]] == ["create", "update"]
+    assert payload["state"]["items"][0]["state"]["count"] == 2
+    assert [event["action"] for event in payload["events"]["events"]] == ["create_new", "update_existing"]

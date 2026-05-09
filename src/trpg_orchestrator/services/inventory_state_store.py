@@ -74,6 +74,15 @@ def save_inventory_state(campaign_id: str, state: Any) -> dict[str, Any]:
     return state
 
 
+def save_inventory_events(campaign_id: str, events: Any) -> dict[str, Any]:
+    resolved = safe_segment(campaign_id)
+    validate_inventory_events(resolved, events)
+    path = inventory_events_path(resolved)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, events)
+    return events
+
+
 def apply_inventory_payload(campaign_id: str, payload: Any) -> dict[str, Any]:
     resolved = safe_segment(campaign_id)
     current = load_inventory_state(resolved)
@@ -82,7 +91,7 @@ def apply_inventory_payload(campaign_id: str, payload: Any) -> dict[str, Any]:
     items = next_state["items"]
     action = change["action"]
     item_id = required_item_payload_id(payload)
-    if action == "update":
+    if action == "update_existing":
         index = change["index"]
         items[index] = merge_inventory_item(items[index], payload)
     else:
@@ -100,19 +109,18 @@ def classify_inventory_change(current_state: dict[str, Any], item_payload: Any) 
     if not isinstance(item_payload, dict):
         raise RuntimeError("inventory item payload must be object")
     item_id = required_item_payload_id(item_payload)
+    required_item_payload_title(item_payload)
     campaign_id = str(current_state.get("campaign_id") or "")
     validate_inventory_state(campaign_id, current_state)
     by_id = inventory_item_index(current_state)
     if item_id in by_id:
-        return {"action": "update", "item_id": item_id, "index": by_id[item_id]}
+        return {"action": "update_existing", "item_id": item_id, "index": by_id[item_id]}
     source_item_id = str(item_payload.get("source_item_id") or "").strip()
     if source_item_id:
         if source_item_id not in by_id:
             raise RuntimeError(f"source_item_id not found: {source_item_id}")
-        require_new_item_fields(item_payload)
-        return {"action": "derive", "item_id": item_id, "source_item_id": source_item_id}
-    require_new_item_fields(item_payload)
-    return {"action": "create", "item_id": item_id}
+        return {"action": "create_derived", "item_id": item_id, "source_item_id": source_item_id}
+    return {"action": "create_new", "item_id": item_id}
 
 
 def append_inventory_event(campaign_id: str, event: Any) -> dict[str, Any]:
@@ -124,11 +132,7 @@ def append_inventory_event(campaign_id: str, event: Any) -> dict[str, Any]:
         **copy.deepcopy(event),
         "created_at": int(time.time()),
     })
-    validate_inventory_events(resolved, events)
-    path = inventory_events_path(resolved)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(path, events)
-    return events
+    return save_inventory_events(resolved, events)
 
 
 def inventory_response(campaign_id: str) -> dict[str, Any]:
@@ -156,17 +160,11 @@ def merge_inventory_item(existing: dict[str, Any], item_payload: dict[str, Any])
             if value != merged.get("item_id"):
                 raise RuntimeError("inventory item_id cannot be changed")
             continue
-        if value is None:
-            if key in {"state", "payload"}:
-                merged[key] = {}
-            else:
-                merged.pop(key, None)
-            continue
         if key in {"state", "payload"}:
             if not isinstance(value, dict):
                 raise RuntimeError(f"inventory item {key} must be object")
             base = merged.get(key) if isinstance(merged.get(key), dict) else {}
-            merged[key] = shallow_merge_with_null_removal(base, value)
+            merged[key] = shallow_merge(base, value)
         else:
             merged[key] = copy.deepcopy(value)
     merged.setdefault("state", {})
@@ -184,13 +182,10 @@ def new_inventory_item(item_payload: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
-def shallow_merge_with_null_removal(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+def shallow_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(base)
     for key, value in patch.items():
-        if value is None:
-            merged.pop(key, None)
-        else:
-            merged[key] = copy.deepcopy(value)
+        merged[key] = copy.deepcopy(value)
     return merged
 
 
@@ -254,7 +249,8 @@ def required_item_payload_id(item_payload: dict[str, Any]) -> str:
     return value.strip()
 
 
-def require_new_item_fields(item_payload: dict[str, Any]) -> None:
+def required_item_payload_title(item_payload: dict[str, Any]) -> str:
     title = item_payload.get("title")
     if not isinstance(title, str) or not title.strip():
-        raise RuntimeError("inventory item title is required for new item")
+        raise RuntimeError("inventory item title is required")
+    return title.strip()

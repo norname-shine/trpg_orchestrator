@@ -34,6 +34,8 @@ const state = {
   galleryFilter: "all",
   galleryFilterIds: ["all"],
   galleryTaxonomy: {},
+  rawAssets: [],
+  rawGallery: {},
   renderedMapKey: "",
   canvasRules: "",
   galleryAssets: [],
@@ -105,6 +107,8 @@ const LEGACY_STATE_FIELDS = {
   galleryFilter: ["gallery", "galleryFilter"],
   galleryFilterIds: ["gallery", "galleryFilterIds"],
   galleryTaxonomy: ["gallery", "galleryTaxonomy"],
+  rawAssets: ["gallery", "rawAssets"],
+  rawGallery: ["gallery", "rawGallery"],
   galleryAssets: ["gallery", "galleryAssets"],
   selectedGalleryKey: ["gallery", "selectedGalleryKey"],
   transientGalleryAsset: ["gallery", "transientGalleryAsset"],
@@ -649,6 +653,7 @@ async function refresh() {
       state.assets.cachedAssets = data.assets.filter(isAssetForCurrentCampaign);
     }
     if (previousCampaign !== nextCampaign) await loadCachedAssets();
+    await loadRawGallery(nextCampaign);
     renderStatus(data);
     updateRunProgressFromPipeline(data.pipeline || {}, data.job || {}, data.output || {});
     renderFrontendState(state.campaign.frontendState, data.campaign_state || {});
@@ -755,6 +760,28 @@ async function loadCachedAssets() {
   }
 }
 
+async function loadRawGallery(campaignId = state.campaign.activeCampaign) {
+  if (!campaignId) {
+    state.gallery.rawGallery = {};
+    state.gallery.rawAssets = [];
+    renderGalleryFilters();
+    return [];
+  }
+  try {
+    const data = await api(`/api/extensions/gallery?campaign_id=${encodeURIComponent(campaignId)}`);
+    if (campaignId && campaignId !== state.campaign.activeCampaign) return state.gallery.rawAssets || [];
+    const raw = data.raw && typeof data.raw === "object" ? data.raw : {};
+    state.gallery.rawGallery = raw;
+    state.gallery.rawAssets = Array.isArray(raw.assets) ? raw.assets : [];
+  } catch (err) {
+    console.warn("raw gallery unavailable", err);
+    state.gallery.rawGallery = {};
+    state.gallery.rawAssets = [];
+  }
+  renderGalleryFilters();
+  return state.gallery.rawAssets;
+}
+
 function invalidateModulePayloadCache(moduleName) {
   const needle = `:${moduleName}:`;
   Object.keys(state.assets.modulePayloadCache || {}).forEach((key) => {
@@ -770,6 +797,8 @@ function resetCampaignScopedUiState(campaignId) {
   state.assets.assetContract = normalizeAssetContract(FALLBACK_ASSET_CONTRACT);
   state.assets.visualContracts = {};
   state.assets.modulePayloadCache = {};
+  state.gallery.rawGallery = {};
+  state.gallery.rawAssets = [];
   state.gallery.galleryAssets = [];
   state.gallery.selectedGalleryKey = "";
   state.gallery.transientGalleryAsset = null;
@@ -979,6 +1008,23 @@ function isValidCachedMapAsset(asset = {}) {
   return category === "map" || use === "map" || zone === "map";
 }
 
+function isRawMapAsset(asset = {}) {
+  const type = String(asset?.type || "").trim().toLowerCase();
+  const zone = String(asset?.display_zone || "").trim().toLowerCase();
+  return zone === "map" || type === "map";
+}
+
+function rawGalleryAssetMediaUrl(asset = {}) {
+  const media = asset.media && typeof asset.media === "object" ? asset.media : {};
+  const payload = asset.payload && typeof asset.payload === "object" ? asset.payload : {};
+  const payloadMedia = payload.media && typeof payload.media === "object" ? payload.media : {};
+  return asset.url || asset.image || asset.image_url || media.url || media.image || payload.url || payload.image || payload.image_url || payloadMedia.url || payloadMedia.image || "";
+}
+
+function bestRawMapAsset() {
+  return (state.gallery.rawAssets || []).find((asset) => isRawMapAsset(asset)) || null;
+}
+
 function mapAssetPriority(asset = {}) {
   if (!isValidCachedMapAsset(asset)) return -1;
   const zone = String(asset.display_zone || "").toLowerCase();
@@ -991,9 +1037,9 @@ function mapAssetPriority(asset = {}) {
 }
 
 function bestCurrentMapAsset() {
-  return (state.assets.cachedAssets || [])
-    .filter((asset) => isAssetForCurrentCampaign(asset) && isValidCachedMapAsset(asset))
-    .sort((a, b) => mapAssetPriority(b) - mapAssetPriority(a))[0] || null;
+  const rawMap = bestRawMapAsset();
+  if (rawMap) return protocolRawGalleryAsset(rawMap);
+  return null;
 }
 
 function renderCachedMap(scene, mapPanel = {}) {
@@ -1011,7 +1057,7 @@ function renderCachedMap(scene, mapPanel = {}) {
     const cached = bestCurrentMapAsset();
     const url = modulePayload.url && isUrlForCurrentCampaign(modulePayload.url, modulePayload.asset_key)
       ? modulePayload.url
-      : cached?.url || "";
+      : cached?.cachedUrl || "";
     if (!url) {
       state.map.currentMapAsset = null;
       showMapEmptyState();
@@ -1071,12 +1117,12 @@ function renderCachedMap(scene, mapPanel = {}) {
 }
 
 function galleryMapAssetFromEntry(entry, modulePayload = {}, scene = {}, route = {}, mapCanvas = {}) {
-  const url = modulePayload.url || entry?.url || "";
+  const url = modulePayload.url || entry?.cachedUrl || entry?.url || "";
   return {
     kind: "map",
     key: modulePayload.asset_key || entry?.key || "",
     title: modulePayload.title || entry?.title || scene.location || "当前区域地图",
-    meta: galleryKindLabel(entry?.gallery_category || "map"),
+    meta: galleryKindLabel(entry?.gallery_category || entry?.type || "map"),
     detail: entry?.detail || scene.immediate_pressure || "当前展示的区域地图。",
     seed: scopedSeed(scene.location || state.campaign.activeCampaign || "map"),
     scene: { ...scene, map_route: route, map_canvas: mapCanvas },
@@ -1242,9 +1288,10 @@ function renderFrontendState(frontendState, campaignState) {
 function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignState = {}) {
   Object.entries(modules || {}).forEach(([name, moduleState]) => {
     if (!moduleState?.payload_ref) return;
-    const shouldLoad = moduleState.update_requested === true
+    const shouldLoad = name !== "gallery" && (
+      moduleState.update_requested === true
       || (name === "story_log" && ["story", "summary", "logs"].includes(state.ui.activePanel))
-      || (name === "gallery" && (!(state.gallery.galleryAssets || []).length || !document.getElementById("galleryOverlay")?.classList.contains("hidden")));
+    );
     if (!shouldLoad) return;
     loadModulePayload(moduleState.payload_ref, name)
       .then((data) => {
@@ -1256,10 +1303,6 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
             parsed: data.payload,
             pressure_pack: state.story.currentPressurePack || {},
           });
-        } else if (name === "gallery") {
-          state.gallery.galleryTaxonomy = data.payload.taxonomy || frontendState.gallery_taxonomy || frontendState.gallery?.taxonomy || state.gallery.galleryTaxonomy || {};
-          renderGalleryFilters();
-          renderGallery(campaignState, data.payload || {}, { ...moduleState, payload: data.payload });
         } else if (name === "map_panel") {
           updateMapModule(data.payload || {}, campaignState);
         } else if (name === "inventory") {
@@ -1309,14 +1352,12 @@ function keepPreviousModule(name, moduleState = {}) {
     showMapImage(ref, moduleState.payload?.asset_key || "");
     return;
   }
-  const cached = findCurrentCampaignAsset((asset) => {
-    const kind = String(asset.kind || "");
-    return asset.exists && asset.url && (kind === "map" || kind === "map_image" || kind.startsWith("gallery_map"));
-  });
-  if (cached?.url) {
-    state.map.currentMapAsset = galleryMapAssetFromEntry(cached);
-    showMapImage(cached.url, cached.key);
+  const rawMap = bestCurrentMapAsset();
+  if (rawMap?.cachedUrl) {
+    state.map.currentMapAsset = rawMap;
+    showMapImage(rawMap.cachedUrl, rawMap.key);
   } else {
+    state.map.currentMapAsset = rawMap || null;
     showMapEmptyState();
   }
 }
@@ -4119,11 +4160,16 @@ function dataTransferHasType(dataTransfer, type) {
 function renderGallery(campaignState, galleryState = {}, moduleState = null) {
   const grid = $("galleryGrid");
   if (!grid) return;
-  const cachedAssets = cachedGalleryAssets().map(protocolGalleryAsset).filter(Boolean);
-  const assets = mergeGalleryAssets([], cachedAssets)
+  const assets = rawGalleryAssets()
     .filter((asset) => !asset.campaign_id || asset.campaign_id === state.campaign.activeCampaign);
   state.gallery.galleryAssets = assets;
   grid.innerHTML = "";
+  if (!assets.length) {
+    const empty = document.createElement("div");
+    empty.className = "galleryEmpty";
+    empty.textContent = "暂无资产";
+    grid.appendChild(empty);
+  }
   assets.forEach((asset) => {
     const card = document.createElement("article");
     card.dataset.kind = asset.gallery_category;
@@ -4162,7 +4208,7 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
 function renderGalleryFilters() {
   const holder = $("galleryFilters");
   if (!holder) return;
-  const resolvedFilters = galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT);
+  const resolvedFilters = rawGalleryFilters();
   state.gallery.galleryFilterIds = resolvedFilters.map((filter) => filter.id).filter(Boolean);
   const current = resolvedFilters.some((filter) => filter.id === state.gallery.galleryFilter) ? state.gallery.galleryFilter : "all";
   state.gallery.galleryFilter = current;
@@ -4195,13 +4241,66 @@ function galleryFiltersFromAssetContract(contract = {}) {
   return rows;
 }
 
+function rawGalleryFilters() {
+  const rows = [{ id: "all", label: "All", source: "raw_gallery" }];
+  const seen = new Set(["all"]);
+  (state.gallery.rawAssets || []).forEach((asset) => {
+    const normalized = protocolRawGalleryAsset(asset);
+    if (!normalized) return;
+    [normalized.gallery_category, normalized.kind].forEach((value) => {
+      const id = String(value || "").trim().toLowerCase();
+      if (!id || id === "hidden" || seen.has(id)) return;
+      seen.add(id);
+      rows.push({ id, label: galleryKindLabel(id), source: "raw_gallery" });
+    });
+  });
+  return rows;
+}
+
 function registeredGalleryCategoryIds() {
-  return new Set(galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT)
+  return new Set(rawGalleryFilters()
     .map((row) => row.id)
     .filter((id) => id && id !== "all"));
 }
 
 function protocolGalleryAsset(asset) {
+  return protocolRawGalleryAsset(asset);
+}
+
+function rawGalleryAssets() {
+  return (state.gallery.rawAssets || []).map(protocolRawGalleryAsset).filter(Boolean);
+}
+
+function protocolRawGalleryAsset(asset) {
+  if (!asset || typeof asset !== "object") return null;
+  const id = String(asset.id || "").trim();
+  const type = String(asset.type || "").trim().toLowerCase();
+  const title = String(asset.title || "").trim();
+  if (!id || !type || !title) return null;
+  const galleryCategory = String(asset.category || asset.type || "").trim().toLowerCase();
+  const displayZone = String(asset.display_zone || "").trim().toLowerCase();
+  const detail = asset.detail || "";
+  return {
+    ...asset,
+    kind: type,
+    key: id,
+    id,
+    type,
+    title: conciseTitle(title, 22),
+    meta: galleryKindLabel(galleryCategory),
+    seed: scopedSeed(title || id || type),
+    detail,
+    cachedUrl: rawGalleryAssetMediaUrl(asset),
+    createdAt: asset.created_at || asset.createdAt || "",
+    campaign_id: asset.campaign_id || state.campaign.activeCampaign,
+    gallery_category: galleryCategory,
+    display_zone: displayZone,
+    raw_asset: asset,
+    exists: asset.exists !== false,
+  };
+}
+
+function legacyProtocolGalleryAsset(asset) {
   const galleryCategory = String(asset.gallery_category || "").trim().toLowerCase();
   const displayZone = String(asset.display_zone || "").trim().toLowerCase();
   if (!galleryCategory) {
@@ -4271,16 +4370,6 @@ function openCurrentMapOverlay() {
 
 function openGalleryOverlay(assetKey = "", transientAsset = null) {
   state.gallery.transientGalleryAsset = transientAsset;
-  const galleryModule = state.campaign.frontendState?.modules?.gallery || {};
-  if (galleryModule.payload_ref) {
-    loadModulePayload(galleryModule.payload_ref, "gallery").then((data) => {
-      if (!data?.payload || data.campaign_id !== state.campaign.activeCampaign) return;
-      renderGalleryFilters();
-      renderGallery(state.campaign.lastCampaignState || {}, data.payload || {}, { ...galleryModule, payload: data.payload });
-      if (assetKey) state.gallery.selectedGalleryKey = assetKey;
-      renderGalleryDialog();
-    }).catch((err) => console.warn("gallery module unavailable", err));
-  }
   const requested = state.gallery.galleryAssets.find((asset) => asset.key === assetKey);
   if (requested && !galleryAssetMatchesFilter(requested, state.gallery.galleryFilter)) {
     state.gallery.galleryFilter = requested.gallery_category || "all";
@@ -4314,14 +4403,14 @@ function galleryAssetMatchesFilter(asset, filter) {
   const value = filter || "all";
   const category = String(asset?.gallery_category || "").trim().toLowerCase();
   const zone = String(asset?.display_zone || "").trim().toLowerCase();
-  if (!category || !zone) {
-    console.warn("asset missing gallery_category/display_zone; hidden from gallery", asset);
+  if (!category) {
+    console.warn("raw gallery asset missing category/type; hidden from gallery", asset);
     return false;
   }
   if (!registeredGalleryCategoryIds().has(category)) return false;
   if (["hidden", "portrait", "review"].includes(zone)) return false;
-  if (value === "all") return zone === "gallery";
-  return category === value && (zone === "gallery" || (value === "map" && zone === "map"));
+  if (value === "all") return true;
+  return category === value;
 }
 
 function renderGalleryDialog() {
@@ -4533,9 +4622,7 @@ function galleryDetail(asset) {
   const status = assetStatusLabel(asset);
   const suffix = status ? `（${status}）` : "";
   if (asset.detail) return conciseTitle(`${asset.detail}${suffix}`, 96);
-  if (asset.kind === "npc") return "当前场景中的可互动角色，头像以稳定名称本地生成。";
-  if (asset.kind === "map") return "当前区域路线图，已缓存为本地 PNG。";
-  return "本地记忆中的物品、装备或现场线索。";
+  return "";
 }
 
 function buildVisualAssets(campaignState) {
@@ -5120,6 +5207,16 @@ function drawGalleryAsset(targetImage, asset) {
     setAssetImage(targetImage, asset.cachedUrl);
     return;
   }
+  if (targetImage) {
+    targetImage.dataset.assetKey = asset.key || asset.id || "";
+    targetImage.dataset.campaignId = state.campaign.activeCampaign || "";
+    targetImage.dataset.fallbackSeed = asset.key || asset.title || "";
+  }
+  const rawCanvas = createAssetCanvas(128, 128);
+  if (asset.kind === "map") drawPixelMap(asset.seed, { cache: false, canvas: rawCanvas, scene: asset.scene || {}, compact: true });
+  else drawPixelItemIcon(asset.seed || asset.title, { cache: false, canvas: rawCanvas, targetImage: null, asset });
+  if (targetImage) setAssetImage(targetImage, rawCanvas.toDataURL("image/png"));
+  return;
   const resolved = resolveVisualAsset({ ...asset, role: asset.role || asset.kind, type: asset.kind });
   if (targetImage) {
     targetImage.dataset.assetKey = resolved.asset_key || asset.key || "";

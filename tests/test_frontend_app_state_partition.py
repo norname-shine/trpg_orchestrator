@@ -71,6 +71,8 @@ def test_legacy_state_proxy_remains_available():
         "activeCampaign",
         "frontendState",
         "assetCache",
+        "rawAssets",
+        "rawGallery",
         "galleryAssets",
         "currentMapAsset",
         "writebackReview",
@@ -96,6 +98,8 @@ def test_low_risk_state_access_uses_partitions():
         "streamingPreview",
         "assetCache",
         "cachedAssets",
+        "rawAssets",
+        "rawGallery",
         "modulePayloadCache",
         "galleryAssets",
         "galleryFilter",
@@ -162,6 +166,8 @@ def test_reset_campaign_scoped_state_clears_cross_campaign_caches():
         "state.assets.cachedAssets = []",
         "state.assets.visualContracts = {}",
         "state.assets.modulePayloadCache = {}",
+        "state.gallery.rawGallery = {}",
+        "state.gallery.rawAssets = []",
         "state.gallery.galleryAssets = []",
         "state.gallery.selectedGalleryKey = \"\"",
         "state.gallery.transientGalleryAsset = null",
@@ -184,31 +190,53 @@ def test_main_frontend_entry_functions_exist():
         assert f"function {name}(" in source or f"async function {name}(" in source
 
 
-def test_gallery_filters_load_from_asset_contract_without_scene_fallback():
+def test_gallery_filters_load_from_raw_gallery_without_scene_fallback():
     source = app_source()
     fallback_block = source.split("const FALLBACK_ASSET_CONTRACT = {", 1)[1].split("};", 1)[0]
 
     assert "/api/asset-contract" in function_body(source, "loadAssetContract")
+    assert "/api/extensions/gallery" in function_body(source, "loadRawGallery")
+    assert "raw.assets" in function_body(source, "loadRawGallery")
+    assert "rawGalleryFilters" in function_body(source, "renderGalleryFilters")
+    assert "galleryFiltersFromAssetContract" not in function_body(source, "renderGalleryFilters")
     for category in ('id: "prop"', 'id: "item"', 'id: "character"', 'id: "map"', 'id: "cg"'):
         assert category in fallback_block
     assert 'id: "scene"' not in fallback_block
     assert "galleryFiltersFromTaxonomy" not in source
 
 
-def test_gallery_filtering_uses_new_frontend_asset_fields_only():
+def test_gallery_rendering_uses_raw_gallery_assets_only():
+    source = app_source()
+    render_body = function_body(source, "renderGallery")
+    load_body = function_body(source, "loadRawGallery")
+    open_body = function_body(source, "openGalleryOverlay")
+    hydrate_body = function_body(source, "hydrateLazyFrontendModules")
+
+    assert "rawGalleryAssets()" in render_body
+    assert "cachedGalleryAssets" not in render_body
+    assert "mergeGalleryAssets" not in render_body
+    assert "/api/extensions/gallery" in load_body
+    assert "/api/module/gallery" not in open_body
+    assert 'name !== "gallery"' in hydrate_body
+
+
+def test_raw_gallery_asset_fields_are_preserved_for_rendering():
     source = app_source()
     bodies = "\n".join(
         function_body(source, name)
         for name in (
             "renderGallery",
             "renderGalleryFilters",
-            "protocolGalleryAsset",
-            "cachedGalleryAssets",
+            "protocolRawGalleryAsset",
+            "rawGalleryAssets",
             "galleryAssetMatchesFilter",
             "galleryMapAssetFromEntry",
         )
     )
 
+    assert "asset.category || asset.type" in bodies
+    assert "raw_asset: asset" in bodies
+    assert "rawGalleryAssetMediaUrl" in bodies
     assert "gallery_category" in bodies
     assert "display_zone" in bodies
     for forbidden in (
@@ -221,7 +249,6 @@ def test_gallery_filtering_uses_new_frontend_asset_fields_only():
         "normalizeGalleryKind",
         "fixedGalleryKind",
         "normalizeAssetIdentity",
-        "asset.kind",
         "asset.role",
         "title.includes",
         "key.includes",
@@ -232,12 +259,12 @@ def test_gallery_filtering_uses_new_frontend_asset_fields_only():
 def test_gallery_visibility_and_map_candidate_logic_follow_new_contract():
     source = app_source()
     match_body = function_body(source, "galleryAssetMatchesFilter")
-    map_body = function_body(source, "isValidCachedMapAsset") + function_body(source, "mapAssetPriority")
+    map_body = function_body(source, "isRawMapAsset") + function_body(source, "bestCurrentMapAsset")
 
-    assert 'value === "all") return zone === "gallery"' in match_body
-    assert 'value === "map" && zone === "map"' in match_body
-    assert 'category === "map"' in map_body
-    assert 'use === "map"' in map_body
+    assert 'value === "all") return true' in match_body
+    assert "return category === value" in match_body
+    assert 'type === "map"' in map_body
     assert 'zone === "map"' in map_body
+    assert "protocolRawGalleryAsset(rawMap)" in map_body
     assert "scene" not in map_body
     assert "metadata" not in map_body

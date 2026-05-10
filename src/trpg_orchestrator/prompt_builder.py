@@ -5,12 +5,13 @@ import json
 import os
 import re
 import socket
+from copy import deepcopy
 from typing import Any
 
 from .capability_resolver import build_capability_plan
 from .config import CAMPAIGNS_DIR, PROMPTS_DIR
 from .encoding_utils import read_runtime_text
-from .memory_selector import build_director_memory_digest, select_memory_for_actor, select_memory_for_audit, select_memory_for_director
+from .memory_selector import build_actor_memory_digest, build_director_memory_digest, select_memory_for_actor, select_memory_for_audit, select_memory_for_director
 from .output_contract import summarize_payload_keys
 from .prompt_module_registry import get_prompt_module_warnings, load_prompt_modules, select_prompt_modules
 
@@ -167,6 +168,17 @@ ACTOR_VISIBLE_CAPABILITY_PREFIXES = (
     "recent_context",
     "story_progress",
 )
+
+ACTOR_MEMORY_DIGEST_DEFAULTS = {
+    "actor_campaign_brief": {},
+    "visible_runtime": {},
+    "visible_player_state": {},
+    "visible_npc_state": {},
+    "visible_items": [],
+    "style_brief": {},
+    "visible_forbidden": {},
+    "actor_visible_story_progress": {},
+}
 
 ACTOR_WRITEBACK_TARGET_LABELS = {
     "story_progress": "story progress evidence for review",
@@ -446,7 +458,8 @@ def build_chatgpt_input(
     capability_plan: dict[str, Any] | None = None,
 ) -> str:
     capability_plan = capability_plan or build_capability_plan(campaign_id, player_action, memory)
-    visible_memory = sanitize_actor_prompt_value(select_memory_for_actor(memory, capability_plan, pressure_pack))
+    visible_memory_raw = build_actor_memory_digest(memory, capability_plan, pressure_pack)
+    visible_memory = preserve_actor_memory_digest_shape(sanitize_actor_prompt_value(visible_memory_raw))
     visible_story_progress = visible_memory.get("actor_visible_story_progress", build_actor_visible_story_progress(memory, pressure_pack))
     actor_capability_view = build_actor_capability_view(capability_plan)
     actor_scene_control = build_actor_scene_control(pressure_pack)
@@ -480,6 +493,15 @@ def build_chatgpt_input(
             "Output strict JSON only: turn_title, blocks, summary, and state_writeback. No text outside JSON. If you include choice_prompt.choices, every choice must be an object with id, label, and risk strings, never a plain string.",
         ]
     )
+
+
+def preserve_actor_memory_digest_shape(visible_memory: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(visible_memory, dict):
+        visible_memory = {}
+    for key, fallback in ACTOR_MEMORY_DIGEST_DEFAULTS.items():
+        if key not in visible_memory:
+            visible_memory[key] = deepcopy(fallback) if isinstance(fallback, (dict, list)) else fallback
+    return visible_memory
 
 
 def build_chatgpt_image_input(

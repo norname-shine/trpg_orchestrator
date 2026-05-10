@@ -260,10 +260,68 @@ def test_select_memory_for_actor_keeps_existing_shape():
     assert "actor_campaign_brief" not in selected
 
 
-def test_build_chatgpt_input_does_not_use_actor_digest_yet():
-    prompt = build_chatgpt_input("demo", "继续", _memory(), _pressure_pack(), _plan(["base_actor"]))
+def test_build_chatgpt_input_uses_actor_digest_visible_memory():
+    prompt = build_chatgpt_input("demo", "继续", _memory(), _pressure_pack(), _plan())
     visible_memory = _json_after_heading(prompt, "## Visible Memory For This Turn")
 
-    assert "campaign_profile.json" in visible_memory
-    assert "actor_campaign_brief" not in visible_memory
-    assert "visible_runtime" not in visible_memory
+    assert set(visible_memory) == {
+        "actor_campaign_brief",
+        "visible_runtime",
+        "visible_player_state",
+        "visible_npc_state",
+        "visible_items",
+        "style_brief",
+        "visible_forbidden",
+        "actor_visible_story_progress",
+    }
+    assert visible_memory["actor_campaign_brief"]["genre"] == "mystery"
+    assert visible_memory["visible_runtime"]["short_term_state"] == {"fog_density": "high"}
+    assert visible_memory["visible_player_state"]["current_condition"]
+    assert visible_memory["visible_items"][0]["item_id"] == "rune_pendant"
+    assert visible_memory["style_brief"]["language"] == "zh-CN"
+    assert visible_memory["actor_visible_story_progress"]["current_node_id"] == "node_fog"
+    assert visible_memory["visible_npc_state"]["active_npcs"][0]["npc_id"] == "luo"
+
+
+def test_build_chatgpt_input_actor_digest_excludes_raw_heavy_and_forecast_fields():
+    prompt = build_chatgpt_input("demo", "继续", _memory(), _pressure_pack(), _plan())
+    visible_memory_text = json.dumps(_json_after_heading(prompt, "## Visible Memory For This Turn"), ensure_ascii=False)
+
+    for forbidden in (
+        "campaign_profile.json",
+        "style_profile.json",
+        "recent_context.json",
+        "player_state.json",
+        "forbidden_changes.json",
+        "npc_memory.json",
+        "equipment_history.json",
+        "director_setup",
+        "initial_assets",
+        "initial_map_canvas",
+        "render_rules",
+        "visual_contract_candidates",
+        "cg_prompt",
+        "campaign_taxonomy",
+        "character_attribute_schema",
+        "story_blueprint_patch",
+        "custom_libraries",
+        "prompt_routing",
+        "canvas_draw_instructions",
+        "item_canvas_rules",
+        "orchestration_forecast",
+        "actor_dispatch",
+        "hotload_next_turn",
+        "upcoming_assets",
+        "hidden_reason",
+        "future_node",
+        "future_asset",
+    ):
+        assert forbidden not in visible_memory_text
+
+
+def test_build_chatgpt_input_keeps_story_position_and_scene_brief_sections():
+    prompt = build_chatgpt_input("demo", "继续", _memory(), _pressure_pack(), _plan())
+
+    assert "## Current Story Position" in prompt
+    assert "## Scene Brief For This Turn" in prompt
+    assert "Output strict JSON only: turn_title, blocks, summary, and state_writeback." in prompt

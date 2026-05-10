@@ -410,12 +410,15 @@ def test_build_director_prompt_digest_excludes_raw_memory_and_heavy_fields():
         assert heavy_key not in selected_memory_text
 
 
-def test_build_chatgpt_input_keeps_actor_visible_memory_shape():
+def test_build_chatgpt_input_uses_actor_digest_without_director_digest_shape():
     memory = _director_digest_memory()
     prompt = build_chatgpt_input("demo", "continue", memory, _pressure_pack(), _plan(["base_actor"]))
     visible_memory = _json_after_heading(prompt, "## Visible Memory For This Turn")
 
-    assert "campaign_profile.json" in visible_memory
+    assert "actor_campaign_brief" in visible_memory
+    assert "visible_runtime" in visible_memory
+    assert "visible_player_state" in visible_memory
+    assert "campaign_profile.json" not in visible_memory
     assert "campaign_brief" not in visible_memory
     assert "node_brief" not in visible_memory
 

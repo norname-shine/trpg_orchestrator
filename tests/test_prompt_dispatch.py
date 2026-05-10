@@ -77,6 +77,68 @@ def test_build_actor_prompt_uses_min_style_and_turn_title_contract():
     assert "## Prompt Module: actor_style_min" in prompt
     assert "Actor Deep Style Rules" not in prompt
     assert "Output strict JSON only: turn_title, blocks, summary, and state_writeback. No text outside JSON." in prompt
+    assert "`state_writeback` must always be a JSON object with these required keys" in prompt
+    assert "`new_open_threads`: array. Use `[]` if no new open thread was visibly introduced." in prompt
+    assert "`closed_threads`: array. Use `[]` if no thread was visibly closed." in prompt
+    assert '"new_open_threads": []' in prompt
+    assert '"closed_threads": []' in prompt
+    assert "every choice must be an object with id, label, and risk strings, never a plain string" in prompt
+    assert '"choices": [' in prompt
+    assert '"risk":' in prompt
+
+
+def test_actor_writeback_rules_require_thread_arrays():
+    text = read_runtime_text(PROMPTS_DIR / "Actor" / "actor_writeback_rules.md")
+
+    assert "`state_writeback` must always include `short_term_state`, `long_term_memory`, `new_open_threads`, and `closed_threads`." in text
+    assert "output `new_open_threads: []`" in text
+    assert "output `closed_threads: []`" in text
+
+
+def test_actor_prompt_contains_global_gallery_and_inventory_writeback_protocol():
+    memory = default_memory("demo")
+    plan = build_capability_plan("demo", "观察当前地点痕迹", memory)
+    prompt = build_chatgpt_input("demo", "观察当前地点痕迹", memory, _pressure_pack(), plan)
+
+    assert "state_writeback.gallery_assets" in prompt
+    assert "state_writeback.inventory_items" in prompt
+    assert "Each `gallery_assets` entry must include non-empty string `id`, `type`, and `title`." in prompt
+    assert "Each `inventory_items` entry must include non-empty string `item_id` and `title`." in prompt
+    assert "payloads.gallery_updates" not in prompt
+    assert "payloads.inventory_updates" not in prompt
+    assert "dossier evidence for review" not in prompt
+    assert "dossier as the gallery fact source" not in prompt
+    assert "allow_gallery_update" not in repr(plan)
+    assert "allow_inventory_update" not in repr(plan)
+
+
+def test_global_writeback_protocol_is_visible_for_multiple_action_types():
+    memory = default_memory("demo")
+    actions = [
+        "观察当前地点痕迹",
+        "检查随身物品状态",
+        "在地图上标记新发现入口",
+        "阅读一张旧纸条",
+    ]
+
+    for action in actions:
+        plan = build_capability_plan("demo", action, memory)
+        prompt = build_chatgpt_input("demo", action, memory, _pressure_pack(), plan)
+        assert "state_writeback.gallery_assets" in prompt
+        assert "state_writeback.inventory_items" in prompt
+        assert "allow_gallery_update" not in repr(plan)
+        assert "allow_inventory_update" not in repr(plan)
+
+
+def test_v4_audit_prompt_preserves_required_writeback_schema():
+    text = read_runtime_text(PROMPTS_DIR / "Director" / "v4_audit_prompt.md")
+
+    assert "`approved_writeback` must follow the same backend schema as actor `state_writeback`." in text
+    assert "`new_open_threads`: array. This is an authorized core writeback field" in text
+    assert "`closed_threads`: array. This is an authorized core writeback field" in text
+    assert "do not delete required schema keys" in text
+    assert '"new_open_threads": []' in text
+    assert '"closed_threads": []' in text
 
 
 def test_build_actor_prompt_uses_min_npc_voice_without_long_voice_for_npc_present():

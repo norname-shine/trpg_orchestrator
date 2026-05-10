@@ -65,6 +65,7 @@ const state = {
     active: false,
     percent: 0,
     target: 0,
+    startedAt: 0,
     timer: null,
     hideTimer: null,
     streamTimer: null,
@@ -76,8 +77,12 @@ const state = {
     stage: "",
     needsHumanVerification: false,
     completing: false,
+    pendingStoryOutput: null,
   },
 };
+
+const MIN_RUN_PROGRESS_MS = 1200;
+const RUN_PROGRESS_COMPLETE_HOLD_MS = 550;
 
 document.documentElement.setAttribute("translate", "no");
 document.documentElement.classList.add("notranslate");
@@ -1315,6 +1320,7 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
           renderOutput({
             campaign_id: data.campaign_id,
             source: data.payload.source || "module:story-log",
+            turn_id: data.payload.turn_id || "",
             parsed: data.payload,
             pressure_pack: state.story.currentPressurePack || {},
           });
@@ -1329,18 +1335,24 @@ function hydrateLazyFrontendModules(modules = {}, frontendState = {}, campaignSt
 }
 
 async function refreshStoryLogNow() {
+  const output = await loadLatestStoryLogOutput();
+  if (output) renderOutput(output, { force: true });
+}
+
+async function loadLatestStoryLogOutput() {
   if (!state.campaign.activeCampaign) return;
   invalidateModulePayloadCache("story_log");
   const moduleState = state.campaign.frontendState?.modules?.story_log || {};
   const ref = moduleState.payload_ref || `/api/module/story-log?campaign_id=${encodeURIComponent(state.campaign.activeCampaign)}&limit=40`;
   const data = await loadModulePayloadWithOptions(ref, "story_log", { force: true });
-  if (!data?.payload || (data.campaign_id && data.campaign_id !== state.campaign.activeCampaign)) return;
-  renderOutput({
+  if (!data?.payload || (data.campaign_id && data.campaign_id !== state.campaign.activeCampaign)) return null;
+  return {
     campaign_id: data.campaign_id || state.campaign.activeCampaign,
     source: data.payload.source || "module:story-log",
+    turn_id: data.payload.turn_id || "",
     parsed: data.payload,
     pressure_pack: state.story.currentPressurePack || {},
-  });
+  };
 }
 
 function renderModule(name, moduleState = {}, frontendState = {}, campaignState = {}) {
@@ -1821,7 +1833,7 @@ function protocolCharacterCard(card = {}, campaignState = {}) {
         max: hasNumeric ? max : undefined,
       };
     }),
-    conditions: Array.isArray(card.tags) ? card.tags : [],
+    conditions: Array.isArray(card.tags) ? card.tags.filter((item) => typeof item === "string" && item.trim()) : [],
     attributes: statVisibility === "narrative" ? [] : (Array.isArray(card.attributes) ? card.attributes : []),
     companion: protocolCompanionCard(state.campaign.frontendState?.companion_card, campaignState),
   };
@@ -2043,7 +2055,7 @@ function normalizeVital(item, index, mode) {
 
 function normalizeConditions(conditions, campaignState, scene) {
   const rows = Array.isArray(conditions) ? conditions : [];
-  const labels = rows.map((item) => typeof item === "string" ? item : item.label || item.name).filter(Boolean);
+  const labels = rows.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
   if (labels.length) return labels.slice(0, 6);
   const mechanics = campaignState.mechanics || {};
   return [
@@ -2278,9 +2290,9 @@ function renderConditionBadges(labels) {
   const holder = $("characterBadges");
   if (!holder) return;
   holder.innerHTML = "";
-  labels.slice(0, 6).forEach((label) => {
+  (Array.isArray(labels) ? labels : []).filter((label) => typeof label === "string" && label.trim()).slice(0, 6).forEach((label) => {
     const span = document.createElement("span");
-    span.textContent = label;
+    span.textContent = label.trim();
     holder.appendChild(span);
   });
 }
@@ -2535,70 +2547,6 @@ function questRows(campaignState) {
     .map((row) => ({ ...row, tag: row.tag || "任务" }));
 }
 
-function itemRows(campaignState) {
-  const equipment = campaignState.equipment || {};
-  const sourceRows = [];
-  if (equipment.items && typeof equipment.items === "object" && !Array.isArray(equipment.items)) {
-    Object.entries(equipment.items).forEach(([id, item]) => {
-      if (item && typeof item === "object") sourceRows.push({ id, ...item });
-    });
-  }
-  ["inventory_updates", "structured_inventory_updates"].forEach((key) => {
-    if (Array.isArray(equipment[key])) sourceRows.push(...equipment[key]);
-  });
-  return dedupeInventoryRows(sourceRows.flatMap(canonicalInventoryRows)).slice(-8);
-}
-
-function dedupeInventoryRows(rows = []) {
-  const byKey = new Map();
-  (Array.isArray(rows) ? rows : []).forEach((row) => {
-    if (!row || !row.title) return;
-    const key = slugify(row.id || `${row.item_type || row.category || "item"}:${row.title}`);
-    byKey.set(key, row);
-  });
-  return Array.from(byKey.values());
-}
-
-function factSourceTexts(rows) {
-  const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
-  return list.map((row) => {
-    if (typeof row === "string") return row;
-    if (!row || typeof row !== "object") return "";
-    if (row.value && typeof row.value === "object") return row.value;
-    return row.value || row.summary || row.title || row.name || row.text || row.description || row.detail || "";
-  }).filter((text) => (typeof text === "object" && text) || String(text || "").trim());
-}
-
-function canonicalInventoryRows(input) {
-  if (input && typeof input === "object") {
-    const name = input.name || input.title || input.display_name || "";
-    const description = input.short_description || input.description || input.detail || input.summary || input.source_evidence || "";
-    const cleanObjectText = `${name} ${description}`.trim();
-    if (!name || isNegativeInventoryText(cleanObjectText)) return [];
-    if (!inventoryOwnerAllowed(input.owner, input.owner_ref, input.source_evidence || description)) return [];
-    const prompt = normalizeDirectorItemVisualPrompt(input);
-    const category = input.category || prompt.category || "item";
-    const itemType = input.item_type || prompt.archetype || prompt.type || "generic";
-    return [{
-      id: slugify(input.id || `${itemType}:${name}`),
-      title: conciseTitle(name, 20),
-      detail: conciseTitle(description || input.source_evidence || name, 96),
-      tag: input.tag || inventoryCategoryLabel(category),
-      category,
-      item_type: itemType,
-      status: input.status || itemStatusFromText(cleanObjectText),
-      source_evidence: input.source_evidence || description || name,
-      certainty: input.certainty || "confirmed",
-      owner: input.owner || "",
-      owner_ref: input.owner_ref || "",
-      simple_prompt: input.simple_prompt || "",
-      canvas_style: input.canvas_style || {},
-      visual_hint: { ...prompt, archetype: prompt.archetype || itemType, category },
-    }];
-  }
-  return [];
-}
-
 function inventoryOwnerAllowed(owner = "", ownerRef = "", evidence = "") {
   const value = String(owner || "").trim().toLowerCase();
   if (value === "player" || value === "companion") return true;
@@ -2725,7 +2673,21 @@ function dedupeRows(rows) {
   });
 }
 
-async function renderOutput(output) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function shouldGateStoryOutput(output = {}, options = {}) {
+  if (options.force) return false;
+  if (!state.job.runProgress.active && !state.job.runProgress.completing) return false;
+  if (!output || typeof output !== "object") return false;
+  const parsed = output.parsed && typeof output.parsed === "object" ? output.parsed : {};
+  const hasBlocks = Array.isArray(parsed.blocks) && parsed.blocks.length > 0;
+  const hasText = Boolean(String(parsed.body || parsed.summary || output.public_text || "").trim());
+  return hasBlocks || hasText || Boolean(output.blocks_deferred);
+}
+
+async function renderOutput(output, options = {}) {
   if (output.campaign_id && state.campaign.activeCampaign && output.campaign_id !== state.campaign.activeCampaign) {
     clearStoryTurnHistory(state.campaign.activeCampaign);
     renderStoryBlocks([], "当前跑团暂无正文记录。");
@@ -2735,6 +2697,12 @@ async function renderOutput(output) {
       active_campaign: state.campaign.activeCampaign,
       output_campaign: output.campaign_id,
     }, null, 2));
+    return;
+  }
+  if (shouldGateStoryOutput(output, options)) {
+    if (!output.blocks_deferred || Array.isArray(output.parsed?.blocks) && output.parsed.blocks.length) {
+      state.job.runProgress.pendingStoryOutput = output;
+    }
     return;
   }
   let blocks = Array.isArray(output.parsed?.blocks) ? output.parsed.blocks : [];
@@ -2772,8 +2740,10 @@ async function renderOutput(output) {
   // Preprocess blocks: split NPC dialogue out of gm_narration blocks
   blocks = splitNpcDialogueBlocks(blocks);
 
-  const storyBlocks = appendStoryTurnHistory(blocks, body || "暂无正文。", output);
-  renderStoryBlocks(storyBlocks, body || "暂无正文。");
+  if (!(output.blocks_deferred && !blocks.length)) {
+    const storyBlocks = appendStoryTurnHistory(blocks, body || "暂无正文。", output);
+    renderStoryBlocks(storyBlocks, body || "暂无正文。");
+  }
   renderSummary(summary || "暂无回合摘要。");
   const director = {
     pressure_pack: output.pressure_pack || {},
@@ -2866,6 +2836,7 @@ function storyTurnSignature(blocks, output = {}) {
   }));
   return stableJson({
     campaign_id: output.campaign_id || state.campaign.activeCampaign || "",
+    turn_id: output.turn_id || output.parsed?.turn_id || "",
     blocks: simplified,
   });
 }
@@ -3365,6 +3336,10 @@ function renderMessageBlock(block) {
   const role = blockRole(block);
   const card = document.createElement("article");
   card.className = `msg ${role}`;
+  const severity = String(block.severity || "").toLowerCase();
+  if (role === "system" && ["warning", "error"].includes(severity)) {
+    card.classList.add("systemWarning");
+  }
   card.dataset.blockType = block.type || "gm_narration";
 
   const avatar = document.createElement("div");
@@ -3375,7 +3350,7 @@ function renderMessageBlock(block) {
     avatar.appendChild(image);
     drawBlockAvatar(image, block, role);
   } else {
-    avatar.textContent = role === "system" ? "检" : "叙";
+    avatar.textContent = card.classList.contains("systemWarning") ? "!" : (role === "system" ? "检" : "叙");
   }
 
   const body = document.createElement("div");
@@ -3603,8 +3578,13 @@ function defaultSpeaker(type) {
 }
 
 function checkMeta(block) {
+  const severity = String(block?.severity || "").toLowerCase();
+  if (["warning", "error"].includes(severity)) return null;
   const check = block.check || block.meta?.check;
   if (!check || typeof check !== "object") return null;
+  const hasCheckData = ["skill", "name", "type", "roll", "modifier", "total", "value", "dc", "target", "difficulty", "result", "outcome", "success"]
+    .some((key) => check[key] !== undefined && check[key] !== null && String(check[key]).trim() !== "");
+  if (!hasCheckData) return null;
   const row = document.createElement("div");
   row.className = "checkMeta";
   const result = String(check.result || check.outcome || "").toLowerCase();
@@ -4376,7 +4356,7 @@ function legacyProtocolGalleryAsset(asset) {
     display_zone: displayZone,
     asset_kind: asset.asset_kind || "",
     asset_subtype: asset.asset_subtype || "",
-    asset_tags: Array.isArray(asset.asset_tags) ? asset.asset_tags : [],
+    asset_tags: Array.isArray(asset.asset_tags) ? asset.asset_tags.filter((item) => typeof item === "string" && item.trim()) : [],
     subject_key: subjectKey,
     certainty: asset.certainty || "",
     cache_policy: asset.cache_policy || "",
@@ -4687,7 +4667,7 @@ function buildVisualAssets(campaignState) {
       asset_seed: state.campaign.assetSeed,
     });
   });
-  itemRows(campaignState).slice(-6).forEach((item, index) => {
+  protocolInventoryRows().slice(-6).forEach((item, index) => {
     const itemEntity = makeEntityKey("item", item.title || item.key || `item-${index}`);
     rows.push({
       kind: "item",
@@ -4777,7 +4757,7 @@ function cachedGalleryAssets() {
     asset_use: entry.asset_use || "",
     asset_kind: entry.asset_kind || "",
     asset_subtype: entry.asset_subtype || "",
-    asset_tags: Array.isArray(entry.asset_tags) ? entry.asset_tags : [],
+    asset_tags: Array.isArray(entry.asset_tags) ? entry.asset_tags.filter((item) => typeof item === "string" && item.trim()) : [],
     subject_key: entry.subject_key || "",
     display_zone: entry.display_zone || "",
     certainty: entry.certainty || "",
@@ -5361,6 +5341,7 @@ function beginRunProgress() {
   state.job.runProgress.completing = false;
   state.job.runProgress.percent = 0;
   state.job.runProgress.target = 12;
+  state.job.runProgress.startedAt = Date.now();
   state.job.runProgress.jobId = "";
   state.job.runProgress.streamText = "";
   state.job.runProgress.streamError = "";
@@ -5368,6 +5349,7 @@ function beginRunProgress() {
   state.job.runProgress.publicNote = "";
   state.job.runProgress.stage = "";
   state.job.runProgress.needsHumanVerification = false;
+  state.job.runProgress.pendingStoryOutput = null;
   const panel = $("runProgress");
   if (panel) panel.classList.add("hidden");
   renderInlineRunProgress();
@@ -5443,7 +5425,8 @@ function updateRunProgressFromPipeline(pipeline, job, output) {
     pending_parse: "等待解析层",
   };
   if (pipeline.percent) {
-    setRunProgress(pipeline.percent, labels[stage] || pipeline.label || "处理中");
+    const target = pipeline.percent >= 100 && !state.job.runProgress.completing ? 96 : pipeline.percent;
+    setRunProgress(target, labels[stage] || pipeline.label || "处理中");
   } else if (stage === "pending_parse") {
     setRunProgress(30, labels.pending_parse);
   } else if (job.running) {
@@ -5452,6 +5435,10 @@ function updateRunProgressFromPipeline(pipeline, job, output) {
   const succeeded = job.returncode === 0 || job.returncode === undefined || job.returncode === null;
   const failed = job.returncode !== undefined && job.returncode !== null && job.returncode !== 0;
   if (!job.running && failed) {
+    failRunProgress();
+    return;
+  }
+  if (!job.running && succeeded && pipeline.stage === "idle" && output.stage === "empty") {
     failRunProgress();
     return;
   }
@@ -5466,15 +5453,33 @@ function updateRunProgressFromPipeline(pipeline, job, output) {
 async function completeRunProgress() {
   if (!state.job.runProgress.active || state.job.runProgress.completing) return;
   state.job.runProgress.completing = true;
+  const elapsed = Date.now() - (state.job.runProgress.startedAt || Date.now());
+  const preCompleteWaitMs = Math.max(0, MIN_RUN_PROGRESS_MS - elapsed);
+  if (preCompleteWaitMs) {
+    setRunProgress(Math.max(state.job.runProgress.target, 96), "同步到页面");
+    await sleep(preCompleteWaitMs);
+  }
   setRunProgress(100, "已同步到页面");
+  state.job.runProgress.percent = 100;
+  paintRunProgress(100);
+  renderInlineRunProgress();
   stopRunStreamPolling();
-  stopRunProgressTween();
   clearTimeout(state.job.runProgress.hideTimer);
+  let finalStoryOutput = null;
+  await sleep(RUN_PROGRESS_COMPLETE_HOLD_MS);
+  stopRunProgressTween();
+  try {
+    finalStoryOutput = await loadLatestStoryLogOutput();
+  } catch (err) {
+    console.warn("story hot refresh failed", err);
+  }
   state.job.runProgress.active = false;
+  state.job.runProgress.completing = false;
   const progress = $("runProgress");
   if (progress) progress.classList.add("hidden");
   renderInlineRunProgress();
-  await refreshStoryLogNow();
+  renderOutput(finalStoryOutput || state.job.runProgress.pendingStoryOutput || {}, { force: true });
+  state.job.runProgress.pendingStoryOutput = null;
   scrollStoryToBottom(true);
 }
 
@@ -7830,7 +7835,7 @@ function assetContractPayload({ key, kind, safeId, metadata = {}, dataUrl }) {
     display_zone: metadata.display_zone || (assetUse === "map" ? "map" : "gallery"),
     cache_policy: metadata.cache_policy || "stable",
     asset_subtype: metadata.asset_subtype || metadata.kind || "",
-    asset_tags: Array.isArray(metadata.asset_tags) ? metadata.asset_tags : [],
+    asset_tags: Array.isArray(metadata.asset_tags) ? metadata.asset_tags.filter((item) => typeof item === "string" && item.trim()) : [],
     subject_key: metadata.subject_key || metadata.entity_key || "",
     display_name: metadata.display_name || metadata.title || "",
     source_type: metadata.source_type || (assetUse === "map" ? "server_canvas" : "image_api"),

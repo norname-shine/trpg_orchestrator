@@ -193,6 +193,40 @@ def test_main_frontend_entry_functions_exist():
         assert f"function {name}(" in source or f"async function {name}(" in source
 
 
+def test_story_turn_signature_uses_backend_turn_id_and_deferred_shell_does_not_clear_story():
+    source = app_source()
+    signature_body = function_body(source, "storyTurnSignature")
+    render_body = function_body(source, "renderOutput")
+    hydrate_body = function_body(source, "hydrateLazyFrontendModules")
+
+    assert "turn_id: output.turn_id || output.parsed?.turn_id || \"\"" in signature_body
+    assert "if (!(output.blocks_deferred && !blocks.length))" in render_body
+    assert "turn_id: data.payload.turn_id || \"\"" in hydrate_body
+
+
+def test_story_output_is_gated_until_run_progress_completes():
+    source = app_source()
+    render_body = function_body(source, "renderOutput")
+    complete_body = function_body(source, "completeRunProgress")
+    begin_body = function_body(source, "beginRunProgress")
+    refresh_story_body = function_body(source, "refreshStoryLogNow")
+
+    assert "pendingStoryOutput: null" in source
+    assert "state.job.runProgress.pendingStoryOutput = null" in begin_body
+    assert "shouldGateStoryOutput(output, options)" in render_body
+    assert "state.job.runProgress.pendingStoryOutput = output" in render_body
+    assert "state.job.runProgress.percent = 100" in complete_body
+    assert "paintRunProgress(100)" in complete_body
+    assert "const target = pipeline.percent >= 100 && !state.job.runProgress.completing ? 96 : pipeline.percent" in function_body(source, "updateRunProgressFromPipeline")
+    assert "preCompleteWaitMs" in complete_body
+    assert "MIN_RUN_PROGRESS_MS" in complete_body
+    assert "RUN_PROGRESS_COMPLETE_HOLD_MS" in complete_body
+    assert "finalStoryOutput = await loadLatestStoryLogOutput()" in complete_body
+    assert "renderOutput(finalStoryOutput || state.job.runProgress.pendingStoryOutput || {}, { force: true })" in complete_body
+    assert "const output = await loadLatestStoryLogOutput()" in refresh_story_body
+    assert "function loadLatestStoryLogOutput()" in source
+
+
 def test_gallery_filters_load_from_raw_gallery_without_scene_fallback():
     source = app_source()
     fallback_block = source.split("const FALLBACK_ASSET_CONTRACT = {", 1)[1].split("};", 1)[0]

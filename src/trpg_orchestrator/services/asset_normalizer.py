@@ -99,6 +99,9 @@ def normalize_regular_asset(payload: dict[str, Any], campaign_id: str) -> dict[s
     source_type = str(payload.get("source_type") or "image_api").strip() or "image_api"
     if source_type not in allowed_sources:
         invalid.append("source_type")
+    asset_tags = payload.get("asset_tags", [])
+    if not isinstance(asset_tags, list) or any(not isinstance(item, str) for item in asset_tags):
+        invalid.append("asset_tags")
     if invalid:
         return asset_contract_error(asset_id, invalid_fields=invalid)
 
@@ -114,7 +117,7 @@ def normalize_regular_asset(payload: dict[str, Any], campaign_id: str) -> dict[s
             "display_zone": display_zone,
             "actor_role": actor_role,
             "asset_subtype": str(payload.get("asset_subtype") or "").strip(),
-            "asset_tags": [str(item).strip() for item in payload.get("asset_tags", []) if str(item).strip()] if isinstance(payload.get("asset_tags"), list) else [],
+            "asset_tags": [item.strip() for item in asset_tags if item.strip()],
             "subject_key": str(payload.get("subject_key") or "").strip(),
             "display_name": str(payload.get("display_name") or payload.get("title") or "").strip(),
             "certainty": certainty,

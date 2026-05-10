@@ -14,6 +14,7 @@
 - `cache_policy`
 - `asset_subtype`
 - `asset_tags`
+- `asset_tags` 只能是字符串数组，例如 `"asset_tags": ["线索", "地图关联"]`。不得输出带 `id`、`label`、`icon` 或说明文字的对象标签。
 - `character_targets`
 - `map_canvas`
 - `map_route`

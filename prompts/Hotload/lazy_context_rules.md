@@ -4,7 +4,8 @@ This project uses capability-based prompt and memory loading.
 
 - The model must only use context that is provided in this turn.
 - Missing modules are not permission to invent hidden facts.
-- Heavy payloads such as maps, visual assets, gallery updates, inventory patches, dossier patches, character cards, dice requests, and canvas jobs must only appear when authorized by output_requests.
+- Heavy payloads such as maps, media-only visual assets, dossier patches, character cards, dice requests, and canvas jobs must only appear when authorized by output_requests.
+- Gallery and inventory business changes must not use output_requests or payloads; write them only as `state_writeback.gallery_assets` and `state_writeback.inventory_items`.
 - If a capability is not loaded, do not fabricate its detailed payload.
 - ChatGPT may request capability escalation only for a future turn through capability_escalation_request.
 - No model may trigger recursive loading inside the same turn.

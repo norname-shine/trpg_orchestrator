@@ -1,4 +1,5 @@
 from trpg_orchestrator import cli
+from trpg_orchestrator.output_parser import ParsedOutput
 
 
 def test_run_turn_pipeline_calls_stages_in_order(monkeypatch):
@@ -153,3 +154,32 @@ def test_cmd_run_turn_passes_arguments_to_pipeline(monkeypatch):
         "auto_rewrite": True,
         "rewrite_attempts": 4,
     }
+
+
+def test_preserve_submitted_player_action_replaces_actor_polish():
+    parsed = ParsedOutput(
+        body="正文",
+        choices="",
+        summary="摘要",
+        writeback={"short_term_state": {}, "long_term_memory": {}, "new_open_threads": [], "closed_threads": []},
+        blocks=[
+            {
+                "type": "player_action",
+                "actor_kind": "player",
+                "speaker": "艾琳",
+                "actor_id": "player_ailin",
+                "avatar_key": "player_main",
+                "body": "艾琳压低呼吸，沿着林间空地边缘慢慢观察。",
+            },
+            {"type": "gm_narration", "actor_kind": "gm", "speaker": "GM", "body": "草叶上的露水还没有散。"},
+        ],
+    )
+
+    result = cli.preserve_submitted_player_action(
+        parsed,
+        "我观察林间空地四周，重点查看小径、迷雾入口和地面上有没有近期活动留下的痕迹。",
+    )
+
+    assert result.blocks[0]["body"] == "我观察林间空地四周，重点查看小径、迷雾入口和地面上有没有近期活动留下的痕迹。"
+    assert result.blocks[1]["body"] == "草叶上的露水还没有散。"
+    assert parsed.blocks[0]["body"] == "艾琳压低呼吸，沿着林间空地边缘慢慢观察。"

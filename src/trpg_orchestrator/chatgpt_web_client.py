@@ -337,6 +337,7 @@ def run_via_browser_worker(
     }
     write_text_utf8(task_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     deadline = time.time() + float(os.getenv("TRPG_CHATGPT_WORKER_TIMEOUT", "900"))
+    stale_worker_seconds = float(os.getenv("TRPG_CHATGPT_WORKER_STALE_SECONDS", "120"))
     last_status = ""
     while time.time() < deadline:
         status = read_worker_status(status_path)
@@ -351,8 +352,17 @@ def run_via_browser_worker(
                 raise RuntimeError(str(status.get("error") or "ChatGPT browser worker failed."))
             updated_at = float(status.get("updated_at") or 0) / 1000
             stale_seconds = time.time() - updated_at if updated_at else 0
-            if stale_seconds > 45 and not worker_alive(root):
+            if stale_seconds > stale_worker_seconds:
+                write_text_utf8(status_path, json.dumps({
+                    "task_id": task_id,
+                    "state": "running",
+                    "stage": "browser_restarting",
+                    "label": "ChatGPT browser worker stopped updating; restarting",
+                    "percent": 10,
+                    "updated_at": int(time.time() * 1000),
+                }, ensure_ascii=False, indent=2) + "\n")
                 reset_worker_task(task_path, task_id)
+                terminate_browser_worker(root)
                 ensure_browser_worker(root)
             last_status = json.dumps(status, ensure_ascii=False)
         elif not worker_alive(root):
@@ -371,6 +381,27 @@ def reset_worker_task(task_path: Path, task_id: str) -> None:
     data["state"] = "pending"
     data["requeued_at"] = time.time()
     write_text_utf8(task_path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def terminate_browser_worker(root: Path) -> None:
+    status = read_worker_status(root / "worker_status.json")
+    pid = int(status.get("pid") or 0)
+    if not pid:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            capture_output=True,
+            timeout=10,
+        )
+        return
+    try:
+        os.kill(pid, 15)
+    except Exception:
+        pass
 
 
 def ensure_browser_worker(root: Path) -> None:

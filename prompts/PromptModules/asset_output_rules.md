@@ -26,6 +26,8 @@ Do not output `asset_kind`, `source_type`, `path`, `url`, manifest keys, runtime
 
 `actor_role` controls story identity only. It must not be used to choose the frontend filter category.
 
+`asset_tags` must be a string array only, such as `"asset_tags": ["clue", "map-linked"]`. Do not output tag objects with `id`, `label`, `icon`, or descriptions.
+
 CG is not an ordinary asset-normalizer payload. CG requests go through the image-generation request / image_job path, and the successful image result is later registered as `gallery_category=cg`, `asset_use=cg`, and `asset_kind=cg_image`.
 
 If any required ordinary-asset field is absent, the backend returns `asset_contract_error`. Do not compensate by changing the category, downgrading to review, inventing an actor role, or omitting the asset silently.

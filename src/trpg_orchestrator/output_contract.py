@@ -7,8 +7,6 @@ from typing import Any
 REQUEST_TO_CAPABILITY = {
     "map": "map",
     "visual_assets": "visual_assets",
-    "gallery": "gallery",
-    "inventory": "inventory",
     "character_card": "character_card",
     "dossier": "dossier",
     "dice_or_check": "dice_or_check",
@@ -20,10 +18,6 @@ OPTIONAL_WRITEBACK_TO_REQUEST = {
     "map_route": "map",
     "map_canvas": "map",
     "visual_assets": "visual_assets",
-    "gallery": "gallery",
-    "gallery_updates": "gallery",
-    "inventory": "inventory",
-    "inventory_updates": "inventory",
     "character_card": "character_card",
     "character_card_update": "character_card",
     "dossier": "dossier",
@@ -37,8 +31,6 @@ PAYLOAD_KEY_TO_REQUEST = {
     "map_route": "map",
     "map_canvas": "map",
     "visual_assets": "visual_assets",
-    "gallery_updates": "gallery",
-    "inventory_updates": "inventory",
     "character_card_update": "character_card",
     "dossier_updates": "dossier",
     "dice_check_request": "dice_or_check",
@@ -142,7 +134,7 @@ def _has_payload(value: Any) -> bool:
 def _valid_payload(key: str, value: Any) -> bool:
     if not _has_payload(value):
         return False
-    if key in {"visual_assets", "gallery_updates", "inventory_updates", "dossier_updates"}:
+    if key in {"visual_assets", "dossier_updates"}:
         return isinstance(value, list) and any(_valid_payload_item(item) for item in value)
     if key == "canvas_jobs":
         return isinstance(value, list) and all(_valid_canvas_job(item) for item in value) and bool(value)

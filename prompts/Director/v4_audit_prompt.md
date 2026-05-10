@@ -2,6 +2,15 @@ Audit whether the submitted state writeback may be written into local long-term 
 
 Output strict JSON only. Do not output any text outside JSON.
 
+`approved_writeback` must follow the same backend schema as actor `state_writeback`. It must always include:
+
+- `short_term_state`: object. Use `{}` if empty.
+- `long_term_memory`: object. Use `{}` if empty.
+- `new_open_threads`: array. This is an authorized core writeback field; keep safe visible thread openings here, or use `[]`.
+- `closed_threads`: array. This is an authorized core writeback field; keep safe visible thread closures here, or use `[]`.
+
+When revising, do not delete required schema keys. If an entry is unsafe, remove or downgrade that entry while preserving the required container field.
+
 You may reject writeback that:
 
 - Violates `campaign_profile`.
@@ -47,7 +56,12 @@ Output format:
 {
   "decision": "accept | revise | reject",
   "reason": "",
-  "approved_writeback": {},
+  "approved_writeback": {
+    "short_term_state": {},
+    "long_term_memory": {},
+    "new_open_threads": [],
+    "closed_threads": []
+  },
   "memory_files_to_update": [],
   "warnings": []
 }

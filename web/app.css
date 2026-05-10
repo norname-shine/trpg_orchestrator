@@ -1287,6 +1287,10 @@ textarea.dropTarget {
   border-color: rgba(85, 145, 98, .18);
   background: rgba(255,255,255,.76);
 }
+.msg.system.systemWarning {
+  border-color: rgba(190, 45, 45, .42);
+  background: rgba(255, 242, 242, .92);
+}
 .msg.cg {
   border-color: rgba(92, 123, 158, .22);
   background: rgba(250,252,255,.82);
@@ -1321,6 +1325,8 @@ textarea.dropTarget {
 .msg.companion .msgAvatar { background: #c8923c; }
 .msg.system .badge,
 .msg.system .msgAvatar { background: var(--green); }
+.msg.system.systemWarning .badge,
+.msg.system.systemWarning .msgAvatar { background: #b73333; }
 .msg.cg .msgAvatar {
   background: #26384a;
   font-size: 12px;
@@ -1337,6 +1343,7 @@ textarea.dropTarget {
 .msg.player strong { color: #3574ab; }
 .msg.npc strong { color: #7c5628; }
 .msg.system strong { color: #4c7d55; }
+.msg.system.systemWarning strong { color: #a12d2d; }
 .msg.cg strong { color: #243f5a; }
 .msgText {
   white-space: pre-wrap;

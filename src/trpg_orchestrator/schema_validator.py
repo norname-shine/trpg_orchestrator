@@ -22,6 +22,7 @@ PRESSURE_PACK_KEYS = {
     "progress_control",
     "output_requests",
 }
+SCENE_ACTION_WARNING_PACK_KEYS = {"campaign_id", "scene_action_warning"}
 
 TURN_TYPES = {
     "normal_progress",
@@ -38,13 +39,13 @@ OUTPUT_REQUEST_MODULES = {
     "story_progress": {"none", "update"},
     "map": {"none", "keep_previous", "update_route", "update_canvas"},
     "visual_assets": {"none", "create", "update"},
-    "gallery": {"none", "update"},
-    "inventory": {"none", "update"},
     "character_card": {"none", "update"},
     "dossier": {"none", "update"},
     "dice_or_check": {"none", "request_check"},
     "canvas_jobs": {"none", "create"},
 }
+REMOVED_OUTPUT_REQUEST_MODULES = {"gallery", "inventory"}
+REMOVED_PAYLOAD_KEYS = {"gallery_updates", "inventory_updates"}
 
 PROGRESS_NODE_STATUSES = {"active", "resolved", "skipped", "failed", "merged"}
 PROGRESS_BEAT_STATUSES = {"touched", "resolved", "failed", "blocked"}
@@ -81,6 +82,15 @@ FORBIDDEN_PROGRESS_FIELDS = {
     "percentage",
     "calculated_progress",
 }
+TAG_LIST_FIELDS = {
+    "conditions",
+    "badges",
+    "tags",
+    "asset_tags",
+    "status_tags",
+    "condition_tags",
+    "story_tags",
+}
 
 CHOICE_LEVELS = {"none", "minor", "major", "life_risk", "route_split", "moral_cost"}
 CHOICE_STYLES = {"natural_stop", "listed_options", "no_choice"}
@@ -97,6 +107,10 @@ def validate_pressure_pack(data: dict[str, Any], expected_campaign_id: str | Non
     if not isinstance(data, dict):
         raise SchemaValidationError("pressure pack must be a JSON object")
     data = normalize_pressure_pack_compat(data)
+    validate_tag_list_fields(data)
+    if data.get("scene_action_warning") not in (None, {}):
+        validate_scene_action_warning_pack(data, expected_campaign_id)
+        return
     missing = sorted(PRESSURE_PACK_KEYS - set(data))
     if missing:
         raise SchemaValidationError(f"pressure pack missing keys: {', '.join(missing)}")
@@ -142,13 +156,52 @@ def validate_pressure_pack(data: dict[str, Any], expected_campaign_id: str | Non
         raise SchemaValidationError("story_topology must be an object")
     if "visual_contract_candidates" in data and not isinstance(data.get("visual_contract_candidates"), list):
         raise SchemaValidationError("visual_contract_candidates must be a list")
+    validate_scene_action_warning(data.get("scene_action_warning"))
     validate_actor_dispatch(data.get("actor_dispatch"))
     validate_orchestration_forecast(data.get("orchestration_forecast"))
+
+
+def validate_scene_action_warning_pack(data: dict[str, Any], expected_campaign_id: str | None = None) -> None:
+    missing = sorted(SCENE_ACTION_WARNING_PACK_KEYS - set(data))
+    if missing:
+        raise SchemaValidationError(f"scene action warning pack missing keys: {', '.join(missing)}")
+    if expected_campaign_id and data.get("campaign_id") != expected_campaign_id:
+        raise SchemaValidationError("pressure pack campaign_id does not match active campaign")
+    validate_scene_action_warning(data.get("scene_action_warning"))
+    if "output_requests" in data:
+        validate_output_requests(data["output_requests"])
+    if "payloads" in data and not isinstance(data.get("payloads"), dict):
+        raise SchemaValidationError("payloads must be an object")
+    if "actor_dispatch" in data:
+        validate_actor_dispatch(data.get("actor_dispatch"))
+    validate_orchestration_forecast(data.get("orchestration_forecast"))
+
+
+def validate_scene_action_warning(value: Any) -> None:
+    if value in (None, {}):
+        return
+    if not isinstance(value, dict):
+        raise SchemaValidationError("scene_action_warning must be an object")
+    code = value.get("code")
+    severity = value.get("severity")
+    route = value.get("route")
+    message = value.get("message")
+    if code != "scene_action_unavailable":
+        raise SchemaValidationError(f"invalid scene_action_warning.code: {code}")
+    if severity not in {"warning", "error"}:
+        raise SchemaValidationError(f"invalid scene_action_warning.severity: {severity}")
+    if route != "hallucination_warning":
+        raise SchemaValidationError(f"invalid scene_action_warning.route: {route}")
+    if not isinstance(message, str) or not message.strip():
+        raise SchemaValidationError("scene_action_warning.message must be a non-empty string")
+    if "preserve_player_action" in value and value.get("preserve_player_action") is not True:
+        raise SchemaValidationError("scene_action_warning.preserve_player_action must be true when present")
 
 
 def validate_writeback(data: dict[str, Any]) -> None:
     if not isinstance(data, dict):
         raise SchemaValidationError("state writeback must be a JSON object")
+    validate_tag_list_fields(data)
     _reject_forbidden_progress_fields(data, "state_writeback")
     for key in ("short_term_state", "long_term_memory", "new_open_threads", "closed_threads"):
         if key not in data:
@@ -163,11 +216,21 @@ def validate_writeback(data: dict[str, Any]) -> None:
         raise SchemaValidationError("closed_threads must be a list")
     if "progress_writeback" in data:
         validate_progress_writeback(data["progress_writeback"])
+    if "gallery_assets" in data:
+        validate_gallery_assets(data["gallery_assets"])
+    if "inventory_items" in data:
+        validate_inventory_items(data["inventory_items"])
 
 
 def validate_output_requests(data: dict[str, Any]) -> None:
     if not isinstance(data, dict):
         raise SchemaValidationError("output_requests must be an object")
+    for key in data:
+        if key in REMOVED_OUTPUT_REQUEST_MODULES:
+            target = "state_writeback.gallery_assets" if key == "gallery" else "state_writeback.inventory_items"
+            raise SchemaValidationError(f"output_requests.{key} removed; use {target}")
+        if key not in OUTPUT_REQUEST_MODULES:
+            raise SchemaValidationError(f"unknown output_requests module: {key}")
     for module, allowed_modes in OUTPUT_REQUEST_MODULES.items():
         item = data.get(module)
         if not isinstance(item, dict):
@@ -216,6 +279,10 @@ def validate_payloads_against_output_requests(payloads: dict[str, Any], output_r
         return
     if not isinstance(payloads, dict):
         raise SchemaValidationError("payloads must be an object")
+    for key in REMOVED_PAYLOAD_KEYS:
+        if key in payloads:
+            target = "state_writeback.gallery_assets" if key == "gallery_updates" else "state_writeback.inventory_items"
+            raise SchemaValidationError(f"payloads.{key} removed; use {target}")
     map_mode = output_requests["map"]["mode"]
     map_route = payloads.get("map_route")
     map_canvas = payloads.get("map_canvas")
@@ -227,52 +294,18 @@ def validate_payloads_against_output_requests(payloads: dict[str, Any], output_r
         raise SchemaValidationError("payloads.map_canvas or payloads.map_route must be non-empty for update_canvas")
 
     _validate_payload_mode(output_requests, payloads, "visual_assets", "visual_assets", list)
-    _validate_payload_mode(output_requests, payloads, "gallery", "gallery_updates", list)
-    _validate_payload_mode(output_requests, payloads, "inventory", "inventory_updates", list)
     _validate_payload_mode(output_requests, payloads, "character_card", "character_card_update", dict)
     _validate_payload_mode(output_requests, payloads, "dossier", "dossier_updates", list)
     _validate_payload_mode(output_requests, payloads, "dice_or_check", "dice_check_request", dict)
     _validate_payload_mode(output_requests, payloads, "canvas_jobs", "canvas_jobs", list)
     if _has_payload(payloads.get("canvas_jobs")):
         validate_canvas_jobs(payloads["canvas_jobs"])
-    if _has_payload(payloads.get("inventory_updates")):
-        validate_inventory_updates(payloads["inventory_updates"])
-
-
-def _inventory_owner_allowed(owner: str, owner_ref: str, evidence: str) -> bool:
-    value = str(owner or "").strip().lower()
-    if value in {"player", "companion"}:
-        return True
-    if value != "party":
-        return False
-    relation = f"{owner_ref} {evidence}".lower()
-    return any(token in relation for token in ("player", "protagonist", "companion", "主角", "玩家", "伙伴", "同伴", "随身", "携带", "持有", "共用"))
-
-
-def validate_inventory_updates(items: Any) -> None:
-    if not isinstance(items, list):
-        raise SchemaValidationError("inventory_updates must be a list")
-    for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
-            raise SchemaValidationError(f"inventory_updates[{index}] must be an object")
-        prefix = f"inventory_updates[{index}]"
-        for key in ("id", "name", "item_type", "status", "owner", "short_description", "simple_prompt", "certainty", "source_evidence"):
-            _require_nonempty_string(item, key, prefix)
-        if item.get("status") not in {"confirmed", "limited", "damaged", "uncertain"}:
-            raise SchemaValidationError(f"{prefix}.status invalid: {item.get('status')}")
-        if item.get("certainty") not in {"confirmed", "clue", "uncertain"}:
-            raise SchemaValidationError(f"{prefix}.certainty invalid: {item.get('certainty')}")
-        if not _inventory_owner_allowed(str(item.get("owner") or ""), str(item.get("owner_ref") or ""), str(item.get("source_evidence") or "")):
-            raise SchemaValidationError(f"{prefix}.owner must be player/companion, or party clearly tied to player/companion")
-        if "canvas_style" not in item or not isinstance(item.get("canvas_style"), dict):
-            raise SchemaValidationError(f"{prefix}.canvas_style must be an object")
-        if len(str(item.get("simple_prompt") or "")) > 260:
-            raise SchemaValidationError(f"{prefix}.simple_prompt too long")
 
 
 def validate_payload_patch(data: dict[str, Any]) -> None:
     if not isinstance(data, dict):
         raise SchemaValidationError("payload patch must be an object")
+    validate_tag_list_fields(data)
     for key in data:
         if key in PAYLOAD_PATCH_FORBIDDEN_KEYS:
             raise SchemaValidationError(f"payload patch forbidden key: {key}")
@@ -396,6 +429,10 @@ def normalize_pressure_pack_compat(data: dict[str, Any]) -> dict[str, Any]:
     else:
         output_requests = normalized["output_requests"]
         if isinstance(output_requests, dict):
+            for key in tuple(REMOVED_OUTPUT_REQUEST_MODULES):
+                item = output_requests.get(key)
+                if isinstance(item, dict) and str(item.get("mode") or "none") == "none":
+                    output_requests.pop(key, None)
             defaults = default_output_requests("compatibility default")
             for key, value in defaults.items():
                 output_requests.setdefault(key, value)
@@ -403,11 +440,17 @@ def normalize_pressure_pack_compat(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(normalized.get("orchestration_forecast"), dict):
         normalized["orchestration_forecast"].setdefault("expires_after_turns", 1)
     payloads = normalized["payloads"] if isinstance(normalized.get("payloads"), dict) else {}
+    if isinstance(payloads, dict):
+        for key in tuple(REMOVED_PAYLOAD_KEYS):
+            if payloads.get(key) in (None, "", [], {}):
+                payloads.pop(key, None)
     output_requests = normalized.get("output_requests", {})
     if isinstance(payloads, dict) and isinstance(output_requests, dict):
-        if output_requests.get("map", {}).get("mode") in {"update_route", "update_canvas"} and _has_payload(normalized.get("map_route")):
+        map_request = output_requests.get("map", {})
+        visual_request = output_requests.get("visual_assets", {})
+        if isinstance(map_request, dict) and map_request.get("mode") in {"update_route", "update_canvas"} and _has_payload(normalized.get("map_route")):
             payloads.setdefault("map_route", normalized.get("map_route"))
-        if output_requests.get("visual_assets", {}).get("mode") in {"create", "update"} and _has_payload(normalized.get("visual_assets")):
+        if isinstance(visual_request, dict) and visual_request.get("mode") in {"create", "update"} and _has_payload(normalized.get("visual_assets")):
             payloads.setdefault("visual_assets", normalized.get("visual_assets"))
     normalized["payloads"] = payloads
     return normalized
@@ -418,13 +461,47 @@ def default_output_requests(reason: str) -> dict[str, dict[str, str]]:
         "story_progress": {"mode": "update", "trigger": "system_required", "reason": reason},
         "map": {"mode": "keep_previous", "trigger": "none", "reason": reason},
         "visual_assets": {"mode": "none", "trigger": "none", "reason": reason},
-        "gallery": {"mode": "none", "trigger": "none", "reason": reason},
-        "inventory": {"mode": "none", "trigger": "none", "reason": reason},
         "character_card": {"mode": "none", "trigger": "none", "reason": reason},
         "dossier": {"mode": "none", "trigger": "none", "reason": reason},
         "dice_or_check": {"mode": "none", "trigger": "none", "reason": reason},
         "canvas_jobs": {"mode": "none", "trigger": "none", "reason": reason},
     }
+
+
+def validate_gallery_assets(assets: Any) -> None:
+    if not isinstance(assets, list):
+        raise SchemaValidationError("state_writeback.gallery_assets must be a list")
+    seen: set[str] = set()
+    for index, asset in enumerate(assets, start=1):
+        if not isinstance(asset, dict):
+            raise SchemaValidationError(f"state_writeback.gallery_assets[{index}] must be an object")
+        prefix = f"state_writeback.gallery_assets[{index}]"
+        for key in ("id", "type", "title"):
+            _require_nonempty_string(asset, key, prefix)
+        if "asset_tags" in asset:
+            _require_string_list(asset.get("asset_tags"), f"{prefix}.asset_tags")
+        asset_id = str(asset.get("id") or "").strip()
+        if asset_id in seen:
+            raise SchemaValidationError(f"duplicate state_writeback.gallery_assets id: {asset_id}")
+        seen.add(asset_id)
+
+
+def validate_inventory_items(items: Any) -> None:
+    if not isinstance(items, list):
+        raise SchemaValidationError("state_writeback.inventory_items must be a list")
+    seen: set[str] = set()
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise SchemaValidationError(f"state_writeback.inventory_items[{index}] must be an object")
+        prefix = f"state_writeback.inventory_items[{index}]"
+        _require_nonempty_string(item, "item_id", prefix)
+        _require_nonempty_string(item, "title", prefix)
+        if "source_item_id" in item:
+            _require_nonempty_string(item, "source_item_id", prefix)
+        item_id = str(item.get("item_id") or "").strip()
+        if item_id in seen:
+            raise SchemaValidationError(f"duplicate state_writeback.inventory_items item_id: {item_id}")
+        seen.add(item_id)
 
 
 def validate_chatgpt_blocks(blocks: list[dict[str, Any]]) -> None:
@@ -463,6 +540,8 @@ def validate_chatgpt_blocks(blocks: list[dict[str, Any]]) -> None:
         if block_type == "choice_prompt":
             choice_prompt_count += 1
             validate_choice_prompt(block, index)
+        if "tags" in block:
+            _require_string_list(block.get("tags"), f"block {index}.tags")
 
     if narrative_count == 0:
         raise SchemaValidationError("ChatGPT output must include at least one narrative block")
@@ -515,6 +594,27 @@ def _require_object(data: dict[str, Any], key: str) -> None:
 def _require_nonempty_string(data: dict[str, Any], key: str, prefix: str) -> None:
     if not isinstance(data.get(key), str) or not data.get(key, "").strip():
         raise SchemaValidationError(f"{prefix} missing non-empty {key}")
+
+
+def validate_tag_list_fields(value: Any, path: str = "root") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            item_path = f"{path}.{key}"
+            if key in TAG_LIST_FIELDS:
+                _require_string_list(item, item_path)
+            else:
+                validate_tag_list_fields(item, item_path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value, start=1):
+            validate_tag_list_fields(item, f"{path}[{index}]")
+
+
+def _require_string_list(value: Any, path: str) -> None:
+    if not isinstance(value, list):
+        raise SchemaValidationError(f"{path} must be a list[str]")
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, str):
+            raise SchemaValidationError(f"{path}[{index}] must be a string")
 
 
 def _reject_forbidden_progress_fields(data: Any, path: str) -> None:

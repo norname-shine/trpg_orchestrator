@@ -1,5 +1,9 @@
+import time
+
 import pytest
 
+from trpg_orchestrator import config as app_config
+from trpg_orchestrator import memory_store
 from trpg_orchestrator import web_server
 from trpg_orchestrator.encoding_utils import looks_mojibake
 from trpg_orchestrator.memory_store import default_memory
@@ -43,6 +47,45 @@ def smart_campaign_config(setup):
     }
 
 
+def smart_create_payload(name: str = "Smart Gallery Test") -> dict:
+    return {
+        "name": name,
+        "template": "custom",
+        "user_prompt": "A grounded opening premise for the test campaign.",
+        "protagonist_name": "Hero",
+        "protagonist_role": "Scout",
+        "protagonist_background": "A field scout with a clear local history.",
+        "protagonist_motivation": "Protect the camp.",
+        "protagonist_personality": "Careful and direct.",
+        "companion_enabled": False,
+        "character_card_enabled": True,
+        "attribute_enabled": True,
+        "rules_strictness": "light",
+        "story_length": "short",
+    }
+
+
+def patch_campaign_runtime(monkeypatch, tmp_path):
+    registry_path = tmp_path / "campaign_registry.json"
+    monkeypatch.setattr(app_config, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(app_config, "REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(memory_store, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(memory_store, "REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(web_server, "schedule_opening_turn_once", lambda campaign_id: {"scheduled": False, "reason": "test"})
+
+
+def assert_gallery_extensions_written(root, campaign_id: str, setup: dict):
+    stored_raw = web_server.read_json(root / "extensions" / "gallery_raw.json")
+    stored_index = web_server.read_json(root / "extensions" / "gallery_index.json")
+    assert stored_raw["schema"] == "trpg.gallery_raw.v2"
+    assert stored_raw["campaign_id"] == campaign_id
+    assert stored_raw["assets"] == setup["gallery_raw"]["assets"]
+    assert stored_index["campaign_id"] == campaign_id
+    assert stored_index["by_id"] == {"opening_map": 0, "kit": 1}
+
+
 def setup_payload(custom_categories=None):
     return {
         "public_think": [{"stage": "init", "text": "ready"}],
@@ -52,7 +95,7 @@ def setup_payload(custom_categories=None):
                 {"id": "prop", "label": "Prop"},
                 {"id": "item", "label": "Item"},
                 {"id": "character", "label": "Character"},
-                {"id": "scene", "label": "Scene"},
+                {"id": "map", "label": "Map"},
                 {"id": "cg", "label": "CG"},
             ],
             "campaign_categories": custom_categories or [],
@@ -190,6 +233,18 @@ def test_character_attribute_schema_does_not_require_legacy_keys():
     assert [row["key"] for row in result["character_attribute_schema"]["six"]] == ["force", "grace", "grit", "lore", "sense", "nerve"]
 
 
+def test_character_card_badges_must_be_string_array():
+    payload = setup_payload()
+    payload["character_card_patch"]["badges"] = [{"id": "hero", "label": "Hero"}]
+
+    with pytest.raises(RuntimeError, match=r"character_card_patch.badges\[1\] must be string"):
+        validate_v4_campaign_setup(payload)
+
+
+def test_frontend_tags_keep_strings_and_drop_objects():
+    assert web_server.normalize_frontend_tags(["失忆", {"label": "不应显示"}], ["备用"]) == ["失忆"]
+
+
 def test_fixed_asset_categories_do_not_count_against_campaign_categories():
     payload = setup_payload([{"id": "rumor", "label": "Rumor"}, {"id": "relic", "label": "Relic"}])
     payload["campaign_taxonomy"]["asset_categories"] = [
@@ -207,11 +262,38 @@ def test_fixed_asset_categories_do_not_count_against_campaign_categories():
 
 
 @pytest.mark.parametrize("field", ["initial_items", "item_canvas_rules"])
-def test_campaign_initial_assets_require_map_item_and_cg_contracts(field):
+def test_campaign_initial_assets_require_initial_items_and_item_canvas_rules_fields(field):
     payload = setup_payload()
-    payload["initial_assets"][field] = {} if isinstance(payload["initial_assets"][field], dict) else []
+    payload["initial_assets"].pop(field)
 
     with pytest.raises(RuntimeError, match="initial_assets missing"):
+        validate_v4_campaign_setup(payload)
+
+
+def test_campaign_initial_assets_allow_empty_initial_items_and_item_canvas_rules():
+    payload = setup_payload()
+    payload["initial_assets"]["initial_items"] = []
+    payload["initial_assets"]["item_canvas_rules"] = {}
+
+    result = validate_v4_campaign_setup(payload)
+
+    assert result["initial_assets"]["initial_items"] == []
+    assert result["initial_assets"]["item_canvas_rules"] == {}
+
+
+def test_campaign_initial_assets_reject_wrong_initial_items_type():
+    payload = setup_payload()
+    payload["initial_assets"]["initial_items"] = {}
+
+    with pytest.raises(RuntimeError, match="initial_assets.initial_items must be list"):
+        validate_v4_campaign_setup(payload)
+
+
+def test_campaign_initial_assets_reject_wrong_item_canvas_rules_type():
+    payload = setup_payload()
+    payload["initial_assets"]["item_canvas_rules"] = []
+
+    with pytest.raises(RuntimeError, match="initial_assets.item_canvas_rules must be object"):
         validate_v4_campaign_setup(payload)
 
 
@@ -256,13 +338,36 @@ def test_validate_v4_campaign_setup_requires_gallery_raw():
         validate_v4_campaign_setup(payload)
 
 
-def test_validate_v4_campaign_setup_does_not_generate_gallery_from_initial_assets():
+def test_validate_v4_campaign_setup_requires_non_empty_gallery_raw_assets():
     payload = setup_payload()
     payload["gallery_raw"]["assets"] = []
 
-    result = validate_v4_campaign_setup(payload)
+    with pytest.raises(RuntimeError, match="gallery_raw.assets must contain at least one asset"):
+        validate_v4_campaign_setup(payload)
 
-    assert result["gallery_raw"]["assets"] == []
+
+def test_campaign_setup_gallery_raw_example_does_not_show_empty_assets():
+    hint = web_server.campaign_setup_schema_hint()
+
+    assert hint["gallery_raw"]["assets"]
+    assert '"assets": []' not in web_server.json.dumps(hint, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("forbidden", ["gallery_updates", "inventory_updates"])
+def test_validate_v4_campaign_setup_rejects_legacy_gallery_payload_keys(forbidden: str):
+    payload = setup_payload()
+    payload["gallery_raw"]["assets"][0][forbidden] = []
+
+    with pytest.raises(RuntimeError, match=forbidden):
+        validate_v4_campaign_setup(payload)
+
+
+def test_validate_v4_campaign_setup_rejects_npc_portrait_map_placeholder_id():
+    payload = setup_payload()
+    payload["gallery_raw"]["assets"][0]["id"] = "npc_portrait_opening_map"
+
+    with pytest.raises(RuntimeError, match="npc_portrait_"):
+        validate_v4_campaign_setup(payload)
 
 
 def test_gallery_raw_asset_extra_fields_are_preserved():
@@ -354,6 +459,58 @@ def test_visual_contract_entity_type_npc_is_rejected():
             "campaign_test",
             "test",
         )
+
+
+@pytest.mark.parametrize("entity_type", ["player_character", "npc", "scene"])
+def test_v4_setup_rejects_forbidden_visual_contract_entity_types(entity_type):
+    payload = setup_payload()
+    payload["visual_contract_candidates"] = [{
+        "entity_key": f"{entity_type}:sample",
+        "entity_type": entity_type,
+        "display_name": "Sample",
+        "render_intent": {"primary": "character_portrait"},
+    }]
+
+    with pytest.raises(RuntimeError, match=f"unknown visual contract entity_type: {entity_type}"):
+        validate_v4_campaign_setup(payload)
+
+
+@pytest.mark.parametrize("entity_type", ["player", "companion", "character", "map", "cg", "item", "prop"])
+def test_v4_setup_accepts_allowed_visual_contract_entity_types(entity_type):
+    payload = setup_payload()
+    render_primary = "character_portrait" if entity_type in {"player", "companion", "character"} else f"{entity_type}_image"
+    payload["visual_contract_candidates"] = [{
+        "entity_key": f"{entity_type}:sample",
+        "entity_type": entity_type,
+        "display_name": "Sample",
+        "render_intent": {"primary": render_primary},
+    }]
+    if entity_type == "character":
+        payload["visual_contract_candidates"][0]["actor_role"] = "npc"
+
+    result = validate_v4_campaign_setup(payload)
+
+    assert result["visual_contract_candidates"][0]["entity_type"] == entity_type
+
+
+def test_visual_contract_character_actor_role_npc_is_preserved():
+    contracts = merge_visual_contracts(
+        {},
+        [{
+            "entity_key": "character:guide",
+            "entity_type": "character",
+            "actor_role": "npc",
+            "display_name": "Guide",
+            "render_intent": {"primary": "character_portrait"},
+        }],
+        "campaign_test",
+        "test",
+    )
+
+    guide = contracts["contracts"]["character:guide"]
+    assert guide["entity_type"] == "character"
+    assert guide["actor_role"] == "npc"
+    assert guide["render_intent"]["primary"] == "character_portrait"
 
 
 def test_visual_contract_npc_portrait_render_intent_is_rejected():
@@ -621,17 +778,49 @@ def test_apply_smart_config_persists_gallery_raw_without_mutation(tmp_path, monk
     assert stored_index["by_type"] == {"map": ["opening_map"], "item": ["kit"]}
 
 
+def test_create_campaign_smart_payload_persists_gallery_raw(tmp_path, monkeypatch):
+    patch_campaign_runtime(monkeypatch, tmp_path)
+    setup = validate_v4_campaign_setup(setup_payload())
+    monkeypatch.setattr(web_server, "call_v4_campaign_setup", lambda config: setup)
+
+    result = web_server.create_campaign_smart_payload(smart_create_payload("Smart Gallery Sync"))
+
+    assert result["ok"] is True
+    campaign_id = result["campaign_id"]
+    assert_gallery_extensions_written(tmp_path / campaign_id, campaign_id, setup)
+
+
+def test_create_campaign_smart_start_job_persists_gallery_raw(tmp_path, monkeypatch):
+    patch_campaign_runtime(monkeypatch, tmp_path)
+    setup = validate_v4_campaign_setup(setup_payload())
+    monkeypatch.setattr(web_server, "call_v4_campaign_setup", lambda config: setup)
+
+    start = web_server.start_create_campaign_smart_job(smart_create_payload("Smart Gallery Async"))
+    deadline = time.time() + 5
+    progress = {}
+    while time.time() < deadline:
+        progress = web_server.new_campaign_progress_payload(start["job_id"])
+        if progress.get("done"):
+            break
+        time.sleep(0.05)
+
+    assert progress.get("done") is True
+    assert progress.get("error") in ("", None)
+    campaign_id = progress["campaign_id"]
+    assert_gallery_extensions_written(tmp_path / campaign_id, campaign_id, setup)
+
+
 def test_visual_contract_candidates_are_accepted_and_generic():
     payload = setup_payload()
     payload["visual_contract_candidates"] = [{
-        "entity_key": "scene:opening_board",
-        "entity_type": "scene",
+        "entity_key": "cg:opening_board",
+        "entity_type": "cg",
         "display_name": "Opening Board",
         "memory_refs": ["campaign_direction.json"],
         "visual_identity": {"details": {"weather": "dusk"}},
-        "render_intent": {"primary": "scene_image"},
+        "render_intent": {"primary": "cg_image"},
     }]
 
     result = validate_v4_campaign_setup(payload)
 
-    assert result["visual_contract_candidates"][0]["entity_key"] == "scene:opening_board"
+    assert result["visual_contract_candidates"][0]["entity_key"] == "cg:opening_board"

@@ -70,7 +70,7 @@ This chain must be shared by COC, DnD, Fate, Monster Hunter style campaigns, and
       "text": ""
     },
     "vitals": [],
-    "conditions": [],
+    "conditions": ["Memory loss"],
     "attributes": [],
     "equipment": [],
     "companion": {
@@ -81,7 +81,7 @@ This chain must be shared by COC, DnD, Fate, Monster Hunter style campaigns, and
       "personality": "",
       "visual_seed": "",
       "vitals": [],
-      "conditions": [],
+      "conditions": ["Injured"],
       "equipment": []
     }
   }
@@ -173,6 +173,7 @@ Narrative example:
 ## Compatibility Rules
 
 - If a field is unknown, use an empty string, `null`, or an empty list. Do not fabricate.
+- All tag/chip/badge fields are string arrays only. Use `"conditions": ["Memory loss"]` and `"badges": ["Protagonist", "medical background"]`; never use object tags with id, label, icon, or description metadata.
 - Keep labels short enough for compact UI.
 - Return no more than 6 attributes and no more than 6 conditions for the default status panel.
 - Equipment should include only confirmed items or current clues.

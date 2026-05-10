@@ -37,13 +37,13 @@ def detect_capability_events(player_action: str, memory: dict) -> list[dict[str,
     if _has_any(text, ("丢弃", "丢掉", "遗失", "失去", "交出", "消耗", "用掉", "扔掉", "drop", "lose", "discard", "consume")):
         add("item_lost", "inventory", "player action implies item lost or consumed")
 
-    if _has_any(text, ("检查", "查看", "观察", "研究", "鉴定", "识别", "inspect", "examine", "identify")) and _has_any(text, ("物品", "道具", "装备", "钥匙", "徽章", "戒指", "卷轴", "书", "瓶", "item", "badge", "key")):
+    if _has_any(text, ("检查", "查看", "观察", "研究", "鉴定", "识别", "inspect", "examine", "identify")) and _has_any(text, ("物品", "道具", "装备", "钥匙", "徽章", "戒指", "卷轴", "书", "瓶", "吊坠", "item", "badge", "key")):
         add("item_inspected", "inventory", "player action inspects an item")
 
-    if _has_any(text, ("注意到", "发现", "看见", "看到", "察觉", "听见", "闻到", "线索", "痕迹", "符号", "血迹", "脚印", "clue", "symbol", "trace", "footprint")):
-        add("clue_observed", "dossier", "player action implies a clue was observed")
+    if _has_any(text, ("注意到", "发现", "看见", "看到", "察觉", "听见", "闻到", "线索", "痕迹", "符号", "血迹", "脚印", "文字", "纸条", "记录", "clue", "symbol", "trace", "footprint")):
+        add("clue_observed", "gallery_assets", "player action implies a visible fact may need gallery_assets")
 
-    if _has_any(text, ("进入", "前往", "走进", "走向", "沿着", "穿过", "离开", "返回", "抵达", "到达", "小路", "仓库", "房间", "门口", "街道", "森林", "港口", "go to", "enter", "arrive", "leave")):
+    if _has_any(text, ("进入", "前往", "走进", "走向", "沿着", "穿过", "离开", "抵达", "到达", "小路", "仓库", "房间", "门口", "街道", "森林", "港口", "入口", "go to", "enter", "arrive", "leave")):
         add("location_changed", "map", "player action implies location or route changed")
 
     if _has_any(text, ("npc", "人物", "守卫", "商人", "同伴", "敌人", "怪物", "出现", "在场", "对话", "交谈", "talk to", "speak with")):

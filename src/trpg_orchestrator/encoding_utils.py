@@ -35,6 +35,18 @@ def looks_mojibake(text: str) -> bool:
     return cjk >= 20 and suspicious / max(cjk, 1) > 0.08
 
 
+def looks_replacement_question_marks(text: str) -> bool:
+    sample = str(text or "").strip()
+    if len(sample) < 6:
+        return False
+    visible = sum(1 for char in sample if not char.isspace())
+    if not visible:
+        return False
+    question_marks = sample.count("?") + sample.count("\uff1f")
+    cjk = sum(1 for char in sample if "\u4e00" <= char <= "\u9fff")
+    return cjk == 0 and question_marks >= 4 and question_marks / visible >= 0.4
+
+
 def read_text_auto(path: Path) -> str:
     candidates: list[str] = []
     for encoding in ("utf-8-sig", "utf-8"):
@@ -64,6 +76,13 @@ def read_text_auto(path: Path) -> str:
 def assert_not_mojibake(text: str, source: str | Path = "text") -> str:
     if looks_mojibake(text):
         raise UnicodeError(f"mojibake detected in {source}; stop parsing and fix file encoding before continuing")
+    return text
+
+
+def assert_valid_user_text(text: str, source: str | Path = "user input") -> str:
+    assert_not_mojibake(text, source)
+    if looks_replacement_question_marks(text):
+        raise UnicodeError(f"corrupt user input detected in {source}; check UTF-8 request encoding before continuing")
     return text
 
 

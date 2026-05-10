@@ -8,13 +8,14 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from .ai_flavor_checker import check_ai_flavor
 from .capability_resolver import build_capability_plan
 from .chatgpt_web_client import ChatGPTWebClient, browser_evidence_path, sha256_file
 from .config import CAMPAIGNS_DIR, OUTBOX_DIR, PROJECT_ROOT, REGISTRY_PATH
 from .deepseek_client import DeepSeekClient
-from .encoding_utils import read_runtime_text, write_text_utf8
+from .encoding_utils import assert_valid_user_text, read_runtime_text, write_text_utf8
 from .encoding_validator import validate_repository_encoding
 from .json_utils import extract_json_object, read_json, write_json
 from .memory_store import MemoryStore
@@ -27,6 +28,7 @@ from .prompt_sync import prompt_sync_report
 from .rewrite_manager import build_chatgpt_rewrite_input, build_v4_rewrite_user_prompt
 from .runtime_hygiene import pre_upload_clean
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_chatgpt_blocks, validate_payload_patch, validate_pressure_pack, validate_writeback
+from .scene_action_guard import scene_action_warning_from_pressure_pack
 from .story_progress import build_backend_progress_control, validate_story_blueprint
 from .quality_gate import quality_gate, is_quality_pass
 from .writeback import apply_approved_writeback, migrate_legacy_facts, writeback_hash, has_applied_writeback
@@ -229,6 +231,22 @@ def campaign_outbox_dir(campaign_id: str) -> Path:
     return path
 
 
+def preserve_submitted_player_action(parsed: Any, player_action: str) -> Any:
+    action = str(player_action or "").strip()
+    if not action:
+        return parsed
+    blocks = [dict(block) if isinstance(block, dict) else block for block in (getattr(parsed, "blocks", []) or [])]
+    if blocks and isinstance(blocks[0], dict) and blocks[0].get("type") == "player_action":
+        blocks[0]["body"] = action
+    return parsed.__class__(
+        body=getattr(parsed, "body", ""),
+        choices=getattr(parsed, "choices", ""),
+        summary=getattr(parsed, "summary", ""),
+        writeback=getattr(parsed, "writeback", {}),
+        blocks=blocks,
+    )
+
+
 def mirror_to_global_outbox(outbox_dir: Path, filenames: list[str] | None = None) -> None:
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     names = filenames or sorted(OUTBOX_FILE_NAMES)
@@ -276,6 +294,7 @@ def emit_public_job_status(stage: str, label: str, percent: int | None = None, p
 
 
 def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: bool = False) -> int:
+    action = assert_valid_user_text(action, "player action").strip()
     store = MemoryStore()
     resolved = store.resolve_campaign_id(campaign_id)
     memory = store.load_campaign_memory(resolved)
@@ -301,6 +320,10 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
         core_pressure_pack.get("public_think") if isinstance(core_pressure_pack.get("public_think"), list) else None,
     )
     core_pressure_pack = normalize_pressure_pack_compat(core_pressure_pack)
+    if scene_action_warning_from_pressure_pack(core_pressure_pack):
+        validate_pressure_pack(core_pressure_pack, resolved, require_payloads=False)
+        if write_scene_action_warning_turn(resolved, action, memory, outbox_dir, core_pressure_pack, capability_plan):
+            return 0
     anchor_progress_control(core_pressure_pack, memory)
     validate_pressure_pack(core_pressure_pack, resolved, require_payloads=False)
     write_json(outbox_dir / "pressure_pack_core.json", core_pressure_pack)
@@ -334,6 +357,8 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
     write_json(outbox_dir / "selected_actor_memory.json", debug_memory["actor_visible"])
     write_json(outbox_dir / "selected_prompt_modules.json", selected_prompt_modules_debug(capability_plan, pressure_pack))
     write_json(outbox_dir / "capability_plan.json", capability_plan)
+    if write_scene_action_warning_turn(resolved, action, memory, outbox_dir, pressure_pack, capability_plan):
+        return 0
     write_text_utf8(
         outbox_dir / "chatgpt_input.md",
         build_chatgpt_input(resolved, action, memory, pressure_pack, capability_plan),
@@ -370,6 +395,7 @@ def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: boo
     )
     write_text_utf8(outbox_dir / "chatgpt_raw_output.md", raw_output)
     parsed = parse_chatgpt_output(raw_output)
+    parsed = preserve_submitted_player_action(parsed, action)
     validate_chatgpt_blocks(parsed.blocks)
     writeback = normalize_light_writeback(parsed.writeback)
     validate_writeback(writeback)
@@ -434,12 +460,32 @@ def web_client(campaign_id: str | None = None) -> ChatGPTWebClient:
 def cmd_send(campaign_id: str | None) -> int:
     resolved = MemoryStore().resolve_campaign_id(campaign_id)
     outbox_dir = campaign_outbox_dir(resolved)
+    ensure_chatgpt_input_current(outbox_dir)
     emit_public_job_status("actor_waiting", "等待 ChatGPT 常驻浏览器返回", 48)
     web_client(resolved).send_and_capture(outbox_dir / "chatgpt_input.md", outbox_dir / "chatgpt_raw_output.md")
     emit_public_job_status("parsing", "正文已返回，正在解析结构化输出", 72)
     mirror_to_global_outbox(outbox_dir, ["chatgpt_input.md", "chatgpt_raw_output.md"])
     print(f"sent {outbox_dir / 'chatgpt_input.md'} and captured {outbox_dir / 'chatgpt_raw_output.md'}")
     return 0
+
+
+def ensure_chatgpt_input_current(outbox_dir: Path) -> None:
+    input_path = outbox_dir / "chatgpt_input.md"
+    pressure_path = outbox_dir / "pressure_pack.json"
+    action_path = outbox_dir / "last_player_action.txt"
+    if not input_path.exists():
+        raise RuntimeError("chatgpt_input.md missing; run prepare before send")
+    input_mtime = input_path.stat().st_mtime
+    freshness_sources = [path for path in (pressure_path, action_path) if path.exists()]
+    stale_sources = [path.name for path in freshness_sources if input_mtime + 0.001 < path.stat().st_mtime]
+    if stale_sources:
+        raise RuntimeError(f"chatgpt_input.md stale relative to: {', '.join(stale_sources)}; rerun prepare")
+    action = read_runtime_text(action_path).strip() if action_path.exists() else ""
+    text = read_runtime_text(input_path)
+    if action and action not in text:
+        raise RuntimeError("chatgpt_input.md does not contain current player action; rerun prepare")
+    if text.strip() == "Scene action warning; actor layer skipped.":
+        raise RuntimeError("scene action warning turn must not be sent to actor layer")
 
 
 def cmd_capture(campaign_id: str | None) -> int:
@@ -763,6 +809,8 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     emit_public_job_status("parsing", "正在解析正文与状态回写", 76)
     gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
     parsed = gate["parsed"]
+    parsed = preserve_submitted_player_action(parsed, action_text(outbox_dir))
+    validate_chatgpt_blocks(parsed.blocks)
     flavor_report = gate["flavor_report"]
     write_text_utf8(outbox_dir / "chatgpt_clean_output.md", public_output(parsed))
     write_json(outbox_dir / "chatgpt_blocks.json", {
@@ -1030,6 +1078,8 @@ def run_turn_pipeline(
     result = prepare_turn(action, campaign_id, offline_pressure_pack)
     if result != 0:
         return result
+    if prepared_scene_action_warning(campaign_id):
+        return 0
     result = send_actor_turn(campaign_id)
     if result != 0:
         return result
@@ -1040,6 +1090,113 @@ def run_turn_pipeline(
     if result != 0:
         return result
     return run_image_if_needed(campaign_id)
+
+
+def prepared_scene_action_warning(campaign_id: str | None) -> bool:
+    store = MemoryStore()
+    resolved = store.resolve_campaign_id(campaign_id)
+    outbox_dir = campaign_outbox_dir(resolved)
+    pressure_path = outbox_dir / "pressure_pack.json"
+    if not pressure_path.exists():
+        return False
+    return bool(scene_action_warning_from_pressure_pack(read_json(pressure_path)))
+
+
+def write_scene_action_warning_turn(
+    resolved: str,
+    action: str,
+    memory: dict,
+    outbox_dir: Path,
+    pressure_pack: dict,
+    capability_plan: dict,
+) -> bool:
+    warning = scene_action_warning_from_pressure_pack(pressure_pack)
+    if not warning:
+        return False
+    store = MemoryStore()
+    writeback = {"short_term_state": {}, "long_term_memory": {}, "new_open_threads": [], "closed_threads": []}
+    blocks = [
+        {
+            "type": "player_action",
+            "actor_kind": "player",
+            "speaker": "玩家",
+            "actor_id": "player",
+            "avatar_key": "player",
+            "body": action,
+        },
+        {
+            "type": "system_check",
+            "actor_kind": "system",
+            "speaker": "系统提示",
+            "actor_id": "system",
+            "avatar_key": "system",
+            "body": warning["message"],
+            "severity": warning["severity"],
+            "warning_code": warning["code"],
+            "route": warning["route"],
+        },
+    ]
+    validate_chatgpt_blocks(blocks)
+    validate_writeback(writeback)
+    raw_output = json.dumps({
+        "turn_title": "行动无法执行",
+        "blocks": blocks,
+        "summary": warning["message"],
+        "state_writeback": writeback,
+    }, ensure_ascii=False)
+
+    write_json(outbox_dir / "pressure_pack.json", pressure_pack)
+    write_json(outbox_dir / "pressure_pack_core.json", pressure_pack)
+    write_json(outbox_dir / "pressure_pack_normalized.json", pressure_pack)
+    write_json(outbox_dir / "missing_capabilities.json", {"missing_capabilities": [], "warnings": [warning["message"]]})
+    write_json(outbox_dir / "payload_patch.json", skipped_payload_patch("scene action unavailable"))
+    write_text_utf8(outbox_dir / "payload_fulfillment_input.md", "")
+    write_text_utf8(outbox_dir / "chatgpt_input.md", "Scene action warning; actor layer skipped.\n")
+    write_text_utf8(outbox_dir / "chatgpt_raw_output.md", raw_output)
+    write_text_utf8(outbox_dir / "chatgpt_clean_output.md", f"【系统提示】\n{warning['message']}\n")
+    write_json(outbox_dir / "chatgpt_blocks.json", {
+        "blocks": blocks,
+        "body": warning["message"],
+        "choices": "",
+        "summary": warning["message"],
+    })
+    write_json(outbox_dir / "state_writeback.json", writeback)
+    audit_result = {
+        "decision": "accept",
+        "reason": "scene action unavailable warning; no memory write",
+        "approved_writeback": writeback,
+        "memory_files_to_update": [],
+        "warnings": [warning["message"]],
+    }
+    write_json(outbox_dir / "v4_audit_result.json", audit_result)
+    write_json(outbox_dir / "ai_flavor_report.json", {"severity": "pass", "issues": []})
+    store.write_log(
+        resolved,
+        _log_payload(action, pressure_pack, raw_output, {"severity": "pass", "issues": []}, audit_result, {}, outbox_dir, capability_plan=capability_plan),
+    )
+    mirror_to_global_outbox(outbox_dir, [
+        "last_player_action.txt",
+        "capability_plan.json",
+        "pressure_pack_core.json",
+        "missing_capabilities.json",
+        "payload_fulfillment_input.md",
+        "payload_patch.json",
+        "pressure_pack.json",
+        "pressure_pack_normalized.json",
+        "selected_director_memory.json",
+        "selected_actor_memory.json",
+        "selected_prompt_modules.json",
+        "chatgpt_input.md",
+        "chatgpt_raw_output.md",
+        "chatgpt_clean_output.md",
+        "chatgpt_blocks.json",
+        "state_writeback.json",
+        "v4_audit_result.json",
+        "ai_flavor_report.json",
+    ])
+    emit_public_job_status("warning", warning["message"], 100)
+    print(warning["message"])
+    return True
 
 
 def cmd_run_turn(action: str, campaign_id: str | None, offline_pressure_pack: bool, skip_v4_audit: bool, auto_rewrite: bool, rewrite_attempts: int) -> int:

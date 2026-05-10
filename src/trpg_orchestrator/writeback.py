@@ -8,6 +8,8 @@ import re
 from typing import Any
 
 from .output_contract import is_optional_writeback_authorized
+from .services.inventory_state_store import apply_inventory_payload
+from .services.raw_gallery_store import apply_gallery_assets
 from .story_progress import apply_progress_writeback
 
 
@@ -130,6 +132,18 @@ def apply_approved_writeback(
         updates["story_progress.json"] = updated_progress
         protocol_warnings.extend(updated_progress.get("protocol_warnings", []))
 
+    gallery_assets = approved_writeback.get("gallery_assets")
+    if gallery_assets not in (None, "", [], {}):
+        campaign_id = _writeback_campaign_id(memory, approved_writeback)
+        apply_gallery_assets(campaign_id, gallery_assets)
+    inventory_items = approved_writeback.get("inventory_items")
+    if inventory_items not in (None, "", [], {}):
+        campaign_id = _writeback_campaign_id(memory, approved_writeback)
+        items = as_list(inventory_items)
+        _reject_duplicate_inventory_items(items)
+        for item in items:
+            apply_inventory_payload(campaign_id, item)
+
     optional_writebacks = approved_writeback.get("optional_writebacks")
     if isinstance(optional_writebacks, dict) and optional_writebacks:
         allowed = _authorized_optional_writebacks(optional_writebacks, pressure_pack or {})
@@ -158,6 +172,31 @@ def _writeback_prose_chars(writeback: dict[str, Any]) -> int:
     if isinstance(short, dict):
         parts.extend(str(value) for value in short.values() if isinstance(value, str))
     return len("".join(str(part) for part in parts if part))
+
+
+def _writeback_campaign_id(memory: dict[str, Any], writeback: dict[str, Any]) -> str:
+    profile = memory.get("campaign_profile.json", {}) if isinstance(memory, dict) else {}
+    campaign_id = (
+        writeback.get("campaign_id")
+        or (profile.get("campaign_id") if isinstance(profile, dict) else "")
+        or (profile.get("id") if isinstance(profile, dict) else "")
+    )
+    if not str(campaign_id or "").strip():
+        raise RuntimeError("campaign_id required for gallery_assets or inventory_items writeback")
+    return str(campaign_id)
+
+
+def _reject_duplicate_inventory_items(items: list[Any]) -> None:
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"inventory_items[{index}] must be object")
+        item_id = str(item.get("item_id") or "").strip()
+        if not item_id:
+            raise RuntimeError(f"inventory_items[{index}] missing item_id")
+        if item_id in seen:
+            raise RuntimeError(f"duplicate inventory_items item_id: {item_id}")
+        seen.add(item_id)
 
 
 def sanitize_orchestration_forecast(value: Any) -> dict[str, Any]:
@@ -220,8 +259,6 @@ def apply_optional_writebacks(
     if not isinstance(optional, dict):
         return
     allowed = allowed_keys if allowed_keys is not None else _authorized_optional_writebacks(optional, pressure_pack)
-    if "inventory_updates" in allowed:
-        apply_inventory_writeback(memory, optional.get("inventory_updates"), updates)
     if "dossier_updates" in allowed:
         apply_dossier_writeback(memory, optional.get("dossier_updates"), updates)
     if "character_card_update" in allowed:
@@ -230,18 +267,6 @@ def apply_optional_writebacks(
         apply_map_writeback(memory, optional, updates)
     if "canvas_jobs" in allowed:
         apply_canvas_jobs_writeback(memory, optional.get("canvas_jobs"), updates)
-
-
-def apply_inventory_writeback(memory: dict[str, Any], payload: Any, updates: dict[str, Any]) -> None:
-    if payload in (None, "", [], {}):
-        return
-    target = deepcopy(updates.get("equipment_history.json") or memory.get("equipment_history.json", {}))
-    target.setdefault("inventory_updates", [])
-    for item in as_list(payload):
-        normalized = normalize_inventory_update_item(item)
-        if normalized:
-            append_plain_unique(target["inventory_updates"], normalized)
-    updates["equipment_history.json"] = target
 
 
 def _brief(value: Any, limit: int = 220) -> str:

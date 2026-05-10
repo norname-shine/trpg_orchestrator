@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -29,6 +30,32 @@ FORECAST_LEAK_MARKERS = (
     "future_node",
     "future_asset",
 )
+
+SECTION_KEYS = (
+    "selected_prompt_modules",
+    "selected_memory",
+    "visible_memory",
+    "scene_brief",
+    "current_story_position",
+    "campaign_setup_controls",
+    "capability_plan",
+    "other",
+)
+
+SECTION_HEADING_MAP = {
+    "## Campaign Setup Controls": "campaign_setup_controls",
+    "## Current Story Anchor": "current_story_position",
+    "## Capability Plan": "capability_plan",
+    "## Selected Director Prompt Modules": "selected_prompt_modules",
+    "## Selected Director Memory": "selected_memory",
+    "## Selected Actor Prompt Modules": "selected_prompt_modules",
+    "## Available Story Tools": "capability_plan",
+    "## Visible Memory For This Turn": "visible_memory",
+    "## Current Story Position": "current_story_position",
+    "## Scene Brief For This Turn": "scene_brief",
+}
+
+HEADING_PATTERN = re.compile(r"(?m)^## .*$")
 
 
 def output_requests(story_progress: str = "none") -> dict[str, dict[str, str]]:
@@ -92,8 +119,45 @@ def module_char_counts(module_ids: list[str]) -> dict[str, int]:
     return counts
 
 
+def section_char_counts(prompt: str) -> dict[str, int]:
+    sections = {key: 0 for key in SECTION_KEYS}
+    matches = [match for match in HEADING_PATTERN.finditer(prompt) if match.group(0).strip() in SECTION_HEADING_MAP]
+    recognized_chars = 0
+
+    for index, match in enumerate(matches):
+        heading = match.group(0).strip()
+        section_key = SECTION_HEADING_MAP[heading]
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(prompt)
+        chars = end - match.start()
+        sections[section_key] += chars
+        recognized_chars += chars
+
+    sections["other"] = max(0, len(prompt) - recognized_chars)
+    return sections
+
+
+def ratio_for(chars: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round(chars / total, 3)
+
+
+def infer_layer_from_prompt(prompt: str) -> str:
+    if "## Selected Director Prompt Modules" in prompt or "## Selected Director Memory" in prompt:
+        return "director"
+    if "## Selected Actor Prompt Modules" in prompt or "## Visible Memory For This Turn" in prompt:
+        return "actor"
+    return "unknown"
+
+
 def report_row(scenario: str, layer: str, loaded_capabilities: list[str], selected_modules: list[str], prompt: str) -> dict[str, Any]:
     counts = module_char_counts(selected_modules)
+    prompt_chars = len(prompt)
+    section_chars = section_char_counts(prompt)
+    memory_chars = section_chars["selected_memory"] if layer == "director" else section_chars["visible_memory"]
+    prompt_module_chars = section_chars["selected_prompt_modules"]
+    memory_ratio = ratio_for(memory_chars, prompt_chars)
+    prompt_module_ratio = ratio_for(prompt_module_chars, prompt_chars)
     large_modules = [
         {
             "module_id": module_id,
@@ -108,15 +172,24 @@ def report_row(scenario: str, layer: str, loaded_capabilities: list[str], select
         "layer": layer,
         "loaded_capabilities": loaded_capabilities,
         "selected_modules": selected_modules,
-        "prompt_chars": len(prompt),
-        "estimated_tokens": round(len(prompt) / 2),
+        "prompt_chars": prompt_chars,
+        "estimated_tokens": round(prompt_chars / 2),
         "module_count": len(selected_modules),
+        "section_chars": section_chars,
+        "memory_chars": memory_chars,
+        "memory_ratio": memory_ratio,
+        "prompt_module_chars": prompt_module_chars,
+        "prompt_module_ratio": prompt_module_ratio,
         "contains_deep_style": "Actor Deep Style Rules" in prompt,
         "contains_long_npc_rules": "NPC Performance Rules" in prompt,
         "contains_forecast_leak": layer == "actor" and any(marker in prompt for marker in FORECAST_LEAK_MARKERS),
     }
     if large_modules:
         row["large_modules"] = large_modules
+    if memory_ratio >= 0.5:
+        row["memory_recommendation"] = "candidate_for_memory_digest"
+    if prompt_module_ratio >= 0.5:
+        row["prompt_module_recommendation"] = "candidate_for_prompt_module_compression"
     return row
 
 
@@ -158,12 +231,25 @@ def build_report() -> dict[str, Any]:
     }
 
 
+def build_input_report(input_path: Path) -> dict[str, Any]:
+    prompt = read_runtime_text(input_path)
+    layer = infer_layer_from_prompt(prompt)
+    row = report_row(input_path.name, layer, [], [], prompt)
+    row["input_path"] = str(input_path)
+    return {
+        "schema": "trpg_orchestrator.prompt_size_report.v1",
+        "rough_token_estimate": "estimated_tokens is prompt_chars / 2; no external tokenizer is used",
+        "scenarios": [row],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report prompt composition size for common TRPG Orchestrator scenarios.")
+    parser.add_argument("--input", help="Optional prompt input file to analyze instead of building default scenarios")
     parser.add_argument("--output", help="Optional JSON output path, for example outbox/prompt_size_report.json")
     args = parser.parse_args()
 
-    report = build_report()
+    report = build_input_report(Path(args.input)) if args.input else build_report()
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         path = Path(args.output)

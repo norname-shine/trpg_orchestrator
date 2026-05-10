@@ -164,6 +164,9 @@ def _normalize_blocks(rows: Any) -> list[dict[str, Any]]:
             "portrait_feedback_assets",
             "mobile_asset_key",
             "mobile_cached_url",
+            "severity",
+            "warning_code",
+            "route",
         ):
             if extra_key in row:
                 normalized_row[extra_key] = row.get(extra_key)

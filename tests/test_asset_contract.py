@@ -52,6 +52,24 @@ def test_cg_routes_to_image_job(tmp_path: Path, monkeypatch) -> None:
     assert result["route_to"] == "image_job"
 
 
+def test_asset_tags_reject_object_entries(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path)
+    result = normalize_regular_asset({
+        "kind": "item",
+        "id": "letter",
+        "title": "Letter",
+        "gallery_category": "item",
+        "asset_use": "item",
+        "certainty": "confirmed",
+        "display_zone": "gallery",
+        "cache_policy": "stable",
+        "asset_tags": [{"id": "clue", "label": "Clue"}],
+    }, "campaign_test")
+
+    assert result["ok"] is False
+    assert "asset_tags" in result["invalid_fields"]
+
+
 def test_register_regular_asset_writes_new_manifest_only(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path)
     monkeypatch.setattr("trpg_orchestrator.services.assets.CAMPAIGNS_DIR", tmp_path)

@@ -86,7 +86,6 @@ def test_actor_scene_control_converts_raw_control_to_scene_brief():
     assert "allowed_state_updates" in scene
     assert scene["allowed_state_updates"] == [
         "dice/check handling when allowed",
-        "inventory evidence for review",
         "story progress evidence for review",
     ]
     text = str(scene)
@@ -99,7 +98,6 @@ def test_actor_scene_control_converts_raw_control_to_scene_brief():
         "map_canvas",
         "map_route",
         "story_topology",
-        "visual_assets",
         "human_readable_note",
         "required_writeback_targets",
     ):
@@ -136,7 +134,6 @@ def test_actor_prompt_uses_actor_facing_sections_and_filters_control_terms():
         "map_canvas",
         "map_route",
         "story_topology",
-        "visual_assets",
         "human_readable_note",
         "required_writeback_targets",
         "lazy_context_rules",

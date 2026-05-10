@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .capability_resolver import build_capability_plan
 from .config import CAMPAIGNS_DIR, MEMORY_FILE_NAMES, OUTBOX_DIR, PROJECT_ROOT, PROMPTS_DIR
-from .encoding_utils import read_runtime_text, read_text_auto
+from .encoding_utils import assert_valid_user_text, read_runtime_text, read_text_auto
 from .frontend_module_state import build_frontend_modules
 from .json_utils import extract_json_object, read_json, write_json
 from .memory_compactor import build_compaction_report
@@ -37,6 +37,7 @@ from .services.raw_gallery_store import gallery_response as raw_gallery_response
 from .services.raw_gallery_store import save_gallery_raw
 from .services.inventory_state_store import apply_inventory_payload
 from .services.inventory_state_store import inventory_response
+from .services.inventory_projection import frontend_inventory
 from .story_progress import build_frontend_story_progress
 from .visual_contracts import (
     CONTRACT_FILE,
@@ -381,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/run-turn":
                 payload = self._read_json()
-                action = str(payload.get("action", "")).strip()
+                action = assert_valid_user_text(str(payload.get("action", "")).strip(), "player action")
                 if not action:
                     raise RuntimeError("Player action is empty.")
                 campaign_id = str(payload.get("campaign_id", "")).strip()
@@ -391,7 +392,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/prepare":
                 payload = self._read_json()
-                action = str(payload.get("action", "")).strip()
+                action = assert_valid_user_text(str(payload.get("action", "")).strip(), "player action")
                 if not action:
                     raise RuntimeError("Player action is empty.")
                 campaign_id = str(payload.get("campaign_id", "")).strip()
@@ -1499,6 +1500,7 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
             "payload": {
                 "campaign_id": resolved,
                 "source": output.get("source", ""),
+                "turn_id": output.get("turn_id", ""),
                 "blocks": rows,
                 "summary": parsed.get("summary", ""),
                 "body": parsed.get("body", "") if offset == 0 else "",
@@ -1516,7 +1518,7 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
         map_panel = initial_payload.get("map_panel") if isinstance(initial_payload.get("map_panel"), dict) else {}
         return {"ok": True, "campaign_id": resolved, "module": "map_panel", "payload": map_panel or frontend_map_panel(resolved, scene, output, assets)}
     if module_name == "inventory":
-        return {"ok": True, "campaign_id": resolved, "module": "inventory", "payload": frontend_inventory(state)}
+        return {"ok": False, "campaign_id": resolved, "module": "inventory", "error": "legacy inventory module removed; use /api/extensions/inventory"}
     if module_name == "dossier":
         return {"ok": True, "campaign_id": resolved, "module": "dossier", "payload": frontend_dossier(state)}
     return {"ok": False, "error": f"unknown module: {module_name}"}
@@ -1884,7 +1886,7 @@ def apply_stat_visibility_to_card(card: dict[str, Any], stat_visibility: str) ->
 
 
 def narrative_status_rows(tags: list[Any]) -> list[dict[str, Any]]:
-    labels = [str(item).strip() for item in tags if str(item).strip()]
+    labels = [item.strip() for item in tags if isinstance(item, str) and item.strip()]
     while len(labels) < 4:
         labels.append(["稳定", "受压", "疲惫", "轻伤"][len(labels)])
     return [{"key": f"narrative_{index}", "label": "状态", "text": label, "tone": ["green", "blue", "amber", "red"][index % 4]} for index, label in enumerate(labels[:4])]
@@ -2276,137 +2278,6 @@ def frontend_quests(state: dict[str, Any]) -> list[dict[str, Any]]:
     return rows[:12]
 
 
-def inventory_owner_allowed(owner: Any, owner_ref: Any = "", evidence: Any = "") -> bool:
-    owner_value = str(owner or "").strip().lower()
-    if owner_value in {"player", "companion"}:
-        return True
-    if owner_value != "party":
-        return False
-    relation_text = f"{owner_ref} {evidence}".lower()
-    return any(token in relation_text for token in ("player", "protagonist", "companion", "主角", "玩家", "伙伴", "同伴", "随身", "携带", "持有", "共用"))
-
-
-def short_director_item_prompt(value: Any, limit: int = 180) -> str:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "..."
-
-
-def stable_director_inventory_id(item: dict[str, Any]) -> str:
-    base = f"{item.get('owner') or 'player'}:{item.get('item_type') or 'item'}:{item.get('name') or item.get('title') or 'item'}"
-    return safe_segment(base.lower())
-
-
-def normalize_director_inventory_item(item: Any) -> dict[str, Any]:
-    if not isinstance(item, dict):
-        return {}
-    value = item.get("value") if isinstance(item.get("value"), dict) else item
-    if not isinstance(value, dict):
-        return {}
-    name = stringify_brief(value.get("name") or value.get("title") or value.get("display_name"), 80)
-    item_type = safe_segment(str(value.get("item_type") or value.get("type") or "generic").lower()) or "generic"
-    owner = str(value.get("owner") or "").strip().lower()
-    owner_ref = stringify_brief(value.get("owner_ref") or value.get("holder") or "", 80)
-    evidence = stringify_brief(value.get("source_evidence") or value.get("evidence") or value.get("short_description") or value.get("description") or "", 220)
-    if not name or not inventory_owner_allowed(owner, owner_ref, evidence):
-        return {}
-    status = str(value.get("status") or "confirmed").strip().lower()
-    if status not in {"confirmed", "limited", "damaged", "uncertain"}:
-        status = "confirmed"
-    certainty = str(value.get("certainty") or "confirmed").strip().lower()
-    if certainty not in {"confirmed", "clue", "uncertain"}:
-        certainty = "confirmed"
-    category = safe_segment(str(value.get("category") or "item").lower()) or "item"
-    canvas_style = value.get("canvas_style") if isinstance(value.get("canvas_style"), dict) else {}
-    visual_hint = value.get("visual_hint") if isinstance(value.get("visual_hint"), dict) else {}
-    simple_prompt = short_director_item_prompt(value.get("simple_prompt") or value.get("prompt") or visual_hint.get("source_text") or evidence)
-    return {
-        "id": safe_segment(str(value.get("id") or stable_director_inventory_id({"owner": owner, "item_type": item_type, "name": name}))),
-        "name": name,
-        "category": category,
-        "item_type": item_type,
-        "status": status,
-        "owner": owner,
-        "owner_ref": owner_ref,
-        "short_description": stringify_brief(value.get("short_description") or value.get("description") or evidence, 180),
-        "canvas_style": canvas_style,
-        "visual_hint": visual_hint,
-        "simple_prompt": simple_prompt,
-        "certainty": certainty,
-        "source_evidence": evidence,
-    }
-
-
-def frontend_inventory(state: dict[str, Any]) -> list[dict[str, Any]]:
-    equipment = state.get("equipment", {}) if isinstance(state.get("equipment"), dict) else {}
-    source: list[dict[str, Any]] = []
-    items = equipment.get("items") if isinstance(equipment.get("items"), dict) else {}
-    for item_id, item in items.items():
-        if not isinstance(item, dict):
-            continue
-        normalized = normalize_director_inventory_item({**item, "id": item.get("id") or item_id})
-        if normalized:
-            source.append(normalized)
-    for key in ("inventory_updates", "structured_inventory_updates"):
-        for item in equipment.get(key, []) if isinstance(equipment.get(key), list) else []:
-            normalized = normalize_director_inventory_item(item)
-            if normalized:
-                source.append(normalized)
-    item_rules = equipment.get("item_canvas_rules") if isinstance(equipment.get("item_canvas_rules"), dict) else {}
-    for item in equipment.get("initial_items", []) if isinstance(equipment.get("initial_items"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        item_id = safe_segment(str(item.get("id") or item.get("key") or item.get("name") or item.get("title") or item.get("label") or "initial_item"))
-        rule = item_rules.get(item_id) if isinstance(item_rules.get(item_id), dict) else {}
-        normalized = normalize_director_inventory_item({
-            "id": item_id,
-            "name": item.get("name") or item.get("title") or item.get("label") or item_id,
-            "category": item.get("category") or item.get("kind") or item.get("type") or "item",
-            "item_type": item.get("item_type") or item.get("type") or item.get("category") or "initial",
-            "status": item.get("status") or "confirmed",
-            "owner": item.get("owner") or "party",
-            "owner_ref": item.get("owner_ref") or "player_party_initial_inventory",
-            "short_description": item.get("short_description") or item.get("description") or item.get("detail") or "",
-            "canvas_style": {**rule, **(item.get("canvas_style") if isinstance(item.get("canvas_style"), dict) else {})},
-            "certainty": item.get("certainty") or "confirmed",
-            "source_evidence": item.get("source_evidence") or "campaign_initialization finalized item carried by player or companion party",
-        })
-        if normalized:
-            source.append(normalized)
-    merged: dict[str, dict[str, Any]] = {}
-    for item in source:
-        entity_id = str(item.get("id") or stable_director_inventory_id(item))
-        detail = str(item.get("short_description") or item.get("description") or item.get("source_evidence") or item.get("name") or "")
-        if entity_id in merged:
-            merged[entity_id]["detail"] = merge_detail_text(merged[entity_id]["detail"], detail)
-            continue
-        category = str(item.get("category") or "item")
-        item_type = str(item.get("item_type") or "generic")
-        merged[entity_id] = {
-            "id": entity_id,
-            "raw_name": str(item.get("name") or entity_id),
-            "short_name": stringify_brief(item.get("name") or entity_id, 40),
-            "category": category,
-            "role": "player_companion_item",
-            "detail": detail,
-            "visual_prompt": {
-                "type": item_type,
-                "category": category,
-                "simple_prompt": item.get("simple_prompt") or "",
-                "canvas_style": item.get("canvas_style") if isinstance(item.get("canvas_style"), dict) else {},
-                "visual_hint": item.get("visual_hint") if isinstance(item.get("visual_hint"), dict) else {},
-                "source_text": stringify_brief(item.get("source_evidence") or detail, 160),
-            },
-            "asset_key": f"item:{safe_segment(entity_id)}",
-            "item_type": item_type,
-            "owner": item.get("owner", ""),
-            "owner_ref": item.get("owner_ref", ""),
-            "status": item.get("status", ""),
-            "certainty": item.get("certainty", ""),
-        }
-    return list(merged.values())[:16]
-
 def frontend_dossier(state: dict[str, Any]) -> list[dict[str, Any]]:
     clues = state.get("clues", {}) if isinstance(state.get("clues"), dict) else {}
     npcs = state.get("npcs", {}) if isinstance(state.get("npcs"), dict) else {}
@@ -2711,9 +2582,8 @@ def normalize_frontend_tags(value: Any, fallback: list[str]) -> list[str]:
     rows = value if isinstance(value, list) and value else fallback
     labels = []
     for item in rows:
-        label = item if isinstance(item, str) else item.get("label") or item.get("name") if isinstance(item, dict) else ""
-        if label:
-            labels.append(str(label))
+        if isinstance(item, str) and item.strip():
+            labels.append(item.strip())
     return labels[:8]
 
 
@@ -4036,12 +3906,50 @@ def campaign_setup_schema_hint() -> dict[str, Any]:
             "schema": "trpg.gallery_raw.v2",
             "campaign_id": "",
             "updated_turn": 0,
-            "assets": [],
+            "assets": [
+                {
+                    "id": "player_main",
+                    "type": "character",
+                    "title": "主角",
+                    "category": "character",
+                    "display_zone": "gallery",
+                    "detail": "玩家角色初始资料卡。",
+                    "payload": {},
+                },
+                {
+                    "id": "opening_map",
+                    "type": "map",
+                    "title": "初始区域地图",
+                    "category": "map",
+                    "display_zone": "map",
+                    "detail": "当前开场区域地图。",
+                    "payload": {"source": "initial_map_canvas"},
+                },
+                {
+                    "id": "opening_cg",
+                    "type": "cg",
+                    "title": "开场画面",
+                    "category": "cg",
+                    "display_zone": "gallery",
+                    "detail": "创团开场视觉资产卡。",
+                    "payload": {"source": "initial_cg"},
+                },
+                {
+                    "id": "initial_item_001",
+                    "type": "item",
+                    "title": "初始随身物品",
+                    "category": "item",
+                    "display_zone": "gallery",
+                    "detail": "导演层定义的初始物品卡。",
+                    "payload": {},
+                },
+            ],
         },
         "visual_contract_candidates": [
             {
-                "entity_key": "",
-                "entity_type": "",
+                "entity_key": "character:example_npc",
+                "entity_type": "character",
+                "actor_role": "npc | monster | key_character",
                 "display_name": "",
                 "source": "campaign_initialization",
                 "memory_refs": [],
@@ -4178,9 +4086,12 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "Fixed gallery filters are only asset entry points, not story semantics. Do not force campaign-specific entities into a fixed semantic bucket; put campaign-specific semantics in custom_libraries.",
         "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
         "Return render_rules for player_portrait, companion_portrait, character_portrait, map, item, prop, and cg.",
-        "Return initial_assets.initial_map_canvas with map_route.nodes and canvas_draw_instructions; return initial_assets.initial_cg with generation_instruction and cg_prompt; also return initial_items and item_canvas_rules. Missing any of these makes setup invalid.",
-        "Return gallery_raw as the director-authored gallery source with schema trpg.gallery_raw.v2, campaign_id as an empty string, updated_turn, and assets. Each asset must include non-empty string id/type/title. Do not rely on backend inference for category, detail, display_zone, or payload.",
-        "Return visual_contract_candidates as campaign-bound visual intent for confirmed player, companion, map, item, scene, monster, or CG entities. Backend will validate and merge them into visual_contracts.json; do not make this a final image prompt or hard-code renderer-only fields.",
+        "Return initial_assets as an object with exactly these four required top-level fields: initial_map_canvas, initial_cg, initial_items, item_canvas_rules. initial_items must be present even when empty: []; item_canvas_rules must be present even when empty: {}.",
+        "Under initial_assets.initial_map_canvas, return map_route.nodes and canvas_draw_instructions. Under initial_assets.initial_cg, return generation_instruction and cg_prompt. Do not use legacy initial_assets keys: map_generation_instruction, map_canvas, map_route, cg_generation_instruction, cg_prompt, items, props, or canvas_rules.",
+        "Return gallery_raw as the director-authored gallery source with schema trpg.gallery_raw.v2, campaign_id as an empty string, updated_turn, and a non-empty assets array. gallery_raw.assets must contain at least one business asset card even before any PNG exists. Recommended startup cards are player_main character, opening_map map, opening_cg cg, and one initial item/prop; if no concrete item exists, still return at least player/map/cg cards. Each asset must include non-empty string id/type/title. Do not rely on backend inference for category, detail, display_zone, or payload. Do not use gallery_updates or visual_assets as gallery_raw asset storage fields; visual_assets is only for image or Canvas media requests and is not gallery_raw.",
+        "All tag/chip/badge fields must be string arrays only. Use conditions like [\"失忆\"] and badges like [\"主角\", \"医疗相关\"]. Do not output tag objects with id/label/icon/description.",
+        "Return visual_contract_candidates as campaign-bound visual intent using only these entity_type values: player, companion, character, map, cg, item, prop. The protagonist must use entity_type=player. Companions must use entity_type=companion. NPCs, monsters, enemies, and key characters must use entity_type=character with actor_role=npc, actor_role=monster, or actor_role=key_character. Maps and locations use entity_type=map. Opening or story images use entity_type=cg. Items use entity_type=item or entity_type=prop.",
+        "Do not output visual_contract_candidates with entity_type=player_character, npc, scene, or location. For NPC portraits use render_intent.primary=character_portrait and actor_role=npc; never use npc_portrait.",
         "Return story_memory_seed.custom_libraries or initial_memory_notes.custom_libraries for campaign-specific content libraries. Only declare the generic resource-slot structure; do not rely on backend fixed library names.",
         "Do not use protected franchise, character, trademark, or artist names in visual_style. Describe original medium, palette, composition, and mood instead.",
         "story_blueprint_patch.chapters must contain usable chapters, nodes, and beat_checklist. The first playable turn will start at chapters[0].nodes[0].beat_checklist[0].",
@@ -4207,6 +4118,19 @@ def sanitize_string_list(value: Any, limit: int = 12) -> list[str]:
     if not isinstance(value, list):
         return []
     return [stringify_brief(str(item), 220) for item in value[:limit] if str(item).strip()]
+
+
+def sanitize_tag_list(value: Any, key: str, limit: int = 12) -> list[str]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"{key} must be list[str]")
+    rows: list[str] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, str):
+            raise RuntimeError(f"{key}[{index}] must be string")
+        text = stringify_brief(item, 80)
+        if text:
+            rows.append(text)
+    return rows[:limit]
 
 
 BASE_CAMPAIGN_TAXONOMY = {
@@ -4552,6 +4476,12 @@ def sanitize_initial_assets(value: Any) -> dict[str, Any]:
         "initial_items",
         "item_canvas_rules",
     }
+    required_top_level = {
+        "initial_map_canvas",
+        "initial_cg",
+        "initial_items",
+        "item_canvas_rules",
+    }
     legacy_keys = {
         "MapCanvas",
         "canvas_rules",
@@ -4574,10 +4504,17 @@ def sanitize_initial_assets(value: Any) -> dict[str, Any]:
     unsupported = sorted(key for key in source if key not in allowed_keys)
     if unsupported:
         raise RuntimeError("unsupported initial_assets keys: " + ", ".join(unsupported))
+    missing_top_level = sorted(key for key in required_top_level if key not in source)
+    if missing_top_level:
+        raise RuntimeError("initial_assets missing required fields: " + ", ".join(missing_top_level))
+    if not isinstance(source.get("initial_items"), list):
+        raise RuntimeError("initial_assets.initial_items must be list")
+    if not isinstance(source.get("item_canvas_rules"), dict):
+        raise RuntimeError("initial_assets.item_canvas_rules must be object")
     initial_map_canvas = normalize_initial_map_canvas(source)
     initial_cg = normalize_initial_cg(source)
-    initial_items = source.get("initial_items", [])
-    item_canvas_rules = source.get("item_canvas_rules", {})
+    initial_items = source["initial_items"]
+    item_canvas_rules = source["item_canvas_rules"]
     result = {
         "initial_map_canvas": initial_map_canvas,
         "initial_cg": initial_cg,
@@ -4587,8 +4524,6 @@ def sanitize_initial_assets(value: Any) -> dict[str, Any]:
     required = {
         "initial_map_canvas.map_route": initial_map_canvas.get("map_route"),
         "initial_map_canvas.canvas_draw_instructions": initial_map_canvas.get("canvas_draw_instructions"),
-        "initial_items": result.get("initial_items"),
-        "item_canvas_rules": result.get("item_canvas_rules"),
         "initial_cg.generation_instruction": initial_cg.get("generation_instruction"),
         "initial_cg.cg_prompt": initial_cg.get("cg_prompt"),
     }
@@ -4621,15 +4556,22 @@ def sanitize_setup_gallery_raw(value: Any) -> dict[str, Any]:
     assets = value.get("assets")
     if not isinstance(assets, list):
         raise RuntimeError("gallery_raw.assets must be list")
+    if not assets:
+        raise RuntimeError("gallery_raw.assets must contain at least one asset")
     seen: set[str] = set()
     for index, asset in enumerate(assets):
         if not isinstance(asset, dict):
             raise RuntimeError(f"gallery_raw.assets[{index}] must be object")
+        for forbidden in ("gallery_updates", "inventory_updates"):
+            if forbidden in asset:
+                raise RuntimeError(f"gallery_raw.assets[{index}] must not contain {forbidden}")
         for key in ("id", "type", "title"):
             item = asset.get(key)
             if not isinstance(item, str) or not item.strip():
                 raise RuntimeError(f"gallery_raw.assets[{index}] missing required fields: {key}")
         asset_id = asset["id"]
+        if str(asset_id).startswith("npc_portrait_"):
+            raise RuntimeError(f"gallery_raw.assets[{index}].id must not use npc_portrait_ map-name placeholders")
         if asset_id in seen:
             raise RuntimeError(f"duplicate gallery_raw asset id: {asset_id}")
         seen.add(asset_id)
@@ -4656,6 +4598,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
     initial_assets = sanitize_initial_assets(data.get("initial_assets"))
     gallery_raw = sanitize_setup_gallery_raw(data.get("gallery_raw"))
     visual_contract_candidates = data.get("visual_contract_candidates") if isinstance(data.get("visual_contract_candidates"), list) else []
+    merge_visual_contracts({}, visual_contract_candidates, "", "campaign_setup_validation")
     custom_libraries = sanitize_custom_libraries(story_memory_seed.get("custom_libraries", memory_notes.get("custom_libraries", [])))
     for key in ("early_goals", "known_boundaries", "secrets_not_to_reveal_early", "director_notes"):
         require_list(direction.get(key), f"campaign_direction.{key}")
@@ -4666,7 +4609,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
         require_list(protagonist.get(key), f"protagonist_patch.{key}")
     require_dict(card_patch.get("identity"), "character_card_patch.identity")
     require_dict(card_patch.get("profile"), "character_card_patch.profile")
-    require_list(card_patch.get("badges"), "character_card_patch.badges")
+    sanitize_tag_list(card_patch.get("badges"), "character_card_patch.badges", 8)
     require_list(companion.get("unknown_or_later"), "companion_patch.unknown_or_later")
     for key in ("hard_lines", "soft_lines", "tone_limits"):
         require_list(safety.get(key), f"safety_interpretation.{key}")
@@ -4721,7 +4664,7 @@ def validate_v4_campaign_setup(raw: Any) -> dict[str, Any]:
                 "personality": stringify_brief(card_patch.get("profile", {}).get("personality"), 140),
                 "notes": sanitize_string_list(card_patch.get("profile", {}).get("notes")),
             },
-            "badges": sanitize_string_list(card_patch.get("badges"), 8),
+            "badges": sanitize_tag_list(card_patch.get("badges"), "character_card_patch.badges", 8),
         },
         "companion_patch": {
             "enabled": bool(companion.get("enabled")),
@@ -4794,7 +4737,7 @@ def merge_v4_setup_into_config(config: dict[str, Any], setup: dict[str, Any]) ->
         notes.extend(sanitize_string_list(patch_profile.get("notes"), 8))
     badges = character_card.setdefault("badges", [])
     if isinstance(badges, list):
-        badges.extend(sanitize_string_list(card_patch.get("badges"), 8))
+        badges.extend(sanitize_tag_list(card_patch.get("badges"), "character_card_patch.badges", 8))
 
 
 def enforce_v4_auto_generation(config: dict[str, Any], setup: dict[str, Any]) -> None:
@@ -6012,6 +5955,12 @@ def output_payload(campaign_id: str = "", require_parse_ready: bool = False) -> 
     audit_path = outbox_dir / "v4_audit_result.json"
     flavor_path = outbox_dir / "ai_flavor_report.json"
     image_job_path = outbox_dir / "image_job.json"
+    output_mtime = max(
+        file_mtime(blocks_path),
+        file_mtime(raw_path),
+        file_mtime(clean_path),
+        file_mtime(outbox_dir / "state_writeback.json"),
+    )
     public_marker_mtime = max(
         file_mtime(pressure_path),
         file_mtime(outbox_dir / "state_writeback.json"),
@@ -6026,6 +5975,10 @@ def output_payload(campaign_id: str = "", require_parse_ready: bool = False) -> 
     if blocks_path.exists() and (not blocks_stale or keep_previous_blocks):
         try:
             block_payload = read_json(blocks_path)
+            if isinstance(block_payload, dict) and "state_writeback" not in block_payload:
+                writeback_path = outbox_dir / "state_writeback.json"
+                if writeback_path.exists():
+                    block_payload = {**block_payload, "state_writeback": read_json(writeback_path)}
             block_text = json.dumps(block_payload, ensure_ascii=False)
             p = _parse(block_text)
             if p.blocks:
@@ -6062,6 +6015,7 @@ def output_payload(campaign_id: str = "", require_parse_ready: bool = False) -> 
     return {
         "campaign_id": resolved,
         "source": source,
+        "turn_id": f"{resolved}:{int(output_mtime * 1000)}" if output_mtime else "",
         "public_text": text,
         "parsed": parsed,
         "pressure_pack": normalize_pressure_pack_compat(read_json(pressure_path)) if pressure_path.exists() and (parse_ready or not require_parse_ready) else {},

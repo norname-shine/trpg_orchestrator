@@ -13,7 +13,7 @@ DEFAULT_CAPABILITIES = ["base_director", "base_actor", "story_progress", "recent
 KEYWORDS = {
     "map": ["地图", "更新地图", "点阵地图", "路线", "区域图", "map", "route"],
     "image": ["生图", "生成图", "画图", "图片", "立绘", "头像", "场景图", "怪物图", "image", "generate image", "portrait"],
-    "dossier": ["资料", "资料夹", "线索", "档案", "文献", "记录", "dossier", "clue", "archive"],
+    "dossier": ["资料", "资料夹", "档案", "dossier", "archive"],
     "inventory": ["物品", "背包", "装备", "道具", "检查物品", "使用", "获得", "丢失", "inventory", "item", "equipment"],
     "character_card": ["角色卡", "状态", "属性", "受伤", "成长", "经验", "character", "status", "injury", "growth"],
     "dice": ["检定", "骰子", "投骰", "判定", "d20", "dice", "roll", "check"],
@@ -65,8 +65,6 @@ def build_capability_plan(
         enable("dossier", "user_requested_dossier")
     if _has_keywords(action_lower, KEYWORDS["inventory"]):
         enable("inventory", "user_requested_inventory")
-        if _has_keywords(action_lower, ["检查", "鉴定", "识别", "刚获得", "inspect", "identify"]):
-            enable("dossier", "user_requested_dossier")
     if _has_keywords(action_lower, KEYWORDS["character_card"]):
         enable("character_card", "user_requested_character_card")
     if _has_keywords(action_lower, KEYWORDS["dice"]):
@@ -109,16 +107,14 @@ def build_capability_plan(
     if isinstance(frontend_flags, dict):
         if frontend_flags.get("map_panel") == "update":
             enable("map", "frontend_requested_map")
-        if frontend_flags.get("gallery") == "update" and not image_negated:
-            enable("visual_assets", "frontend_requested_visual_assets")
 
     for capability, request in _forecast_capability_requests(memory, warnings):
         enable(capability, request)
 
     if image_negated and "visual_assets" in loaded:
         loaded = [capability for capability in loaded if capability != "visual_assets"]
-        explicit = [request for request in explicit if request not in {"user_requested_image", "event_requested_image", "frontend_requested_visual_assets"}]
-        secondary = [request for request in secondary if request not in {"user_requested_image", "event_requested_image", "frontend_requested_visual_assets"}]
+        explicit = [request for request in explicit if request not in {"user_requested_image", "event_requested_image"}]
+        secondary = [request for request in secondary if request not in {"user_requested_image", "event_requested_image"}]
 
     return {
         "schema": "trpg_orchestrator.capability_plan.v1",
@@ -134,20 +130,21 @@ def build_capability_plan(
         "output_contract": {
             "allow_map_payload": "map" in loaded,
             "allow_visual_assets": "visual_assets" in loaded,
-            "allow_gallery_update": "visual_assets" in loaded,
+            "visual_assets_scope": "media_only",
             "allow_character_card_update": "character_card" in loaded,
-            "allow_inventory_update": "inventory" in loaded,
             "allow_dossier_update": "dossier" in loaded,
             "allow_dice_check": "dice_check_requested" in loaded,
             "allow_canvas_jobs": False,
             "allow_story_progress_writeback": True,
+            "gallery_assets": "global_state_writeback",
+            "inventory_items": "global_state_writeback",
         },
         "frontend_refresh": {
             "story_log": "update",
             "story_progress": "update",
             "map_panel": "update" if "map" in loaded else "keep_previous",
-            "gallery": "update" if "visual_assets" in loaded else "no_update",
-            "inventory": "update" if "inventory" in loaded else "no_update",
+            "gallery": "extension_store",
+            "inventory": "extension_store",
             "character_card": "update" if "character_card" in loaded else "no_update",
             "dossier": "update" if "dossier" in loaded else "no_update",
         },
@@ -175,8 +172,8 @@ def _event_capability_requests(event_name: str) -> list[tuple[str, str]]:
         "location_changed": [("map", "event_location_changed")],
         "item_obtained": [("inventory", "event_item_obtained")],
         "item_lost": [("inventory", "event_item_lost")],
-        "item_inspected": [("inventory", "event_item_inspected"), ("dossier", "event_item_inspected")],
-        "clue_observed": [("dossier", "event_clue_observed")],
+        "item_inspected": [("inventory", "event_item_inspected")],
+        "clue_observed": [],
         "npc_present": [("npc_voice", "event_npc_present"), ("npc_present", "event_npc_present")],
         "status_changed": [("character_card", "event_status_changed")],
         "dice_requested": [("dice_check_requested", "event_dice_requested")],

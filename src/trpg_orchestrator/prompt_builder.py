@@ -170,9 +170,8 @@ ACTOR_VISIBLE_CAPABILITY_PREFIXES = (
 
 ACTOR_WRITEBACK_TARGET_LABELS = {
     "story_progress": "story progress evidence for review",
-    "inventory": "inventory evidence for review",
     "character_card": "character status evidence for review",
-    "dossier": "clue or dossier evidence for review",
+    "dossier": "dossier presentation only; persistent visible facts use gallery_assets",
     "dice/check": "dice/check handling when allowed",
     "dice_or_check": "dice/check handling when allowed",
 }
@@ -478,7 +477,7 @@ def build_chatgpt_input(
             "## Scene Brief For This Turn",
             "Follow this turn's visible pressure, boundaries, NPC direction, forbidden items, choice requirements, and allowed state updates.",
             "```json\n" + json.dumps(actor_scene_control, ensure_ascii=False, indent=2) + "\n```",
-            "Output strict JSON only: turn_title, blocks, summary, and state_writeback. No text outside JSON.",
+            "Output strict JSON only: turn_title, blocks, summary, and state_writeback. No text outside JSON. If you include choice_prompt.choices, every choice must be an object with id, label, and risk strings, never a plain string.",
         ]
     )
 

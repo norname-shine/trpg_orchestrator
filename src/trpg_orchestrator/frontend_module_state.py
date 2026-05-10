@@ -33,9 +33,9 @@ def build_frontend_modules(
         "story_log": {"mode": "update", "state": "ready", "update_requested": True, "payload": {}, "payload_ref": module_refs.get("story_log", "")},
         "story_progress": {"mode": "update", "state": "ready", "update_requested": True, "payload": story_progress_payload},
         "map_panel": map_panel,
-        "gallery": _gallery_module(output_requests, payloads, ""),
-        "inventory": _payload_module(output_requests, payloads, "inventory", "inventory_updates", payloads.get("inventory_updates", []), payload_ref=module_refs.get("inventory", "")),
         "dossier": _payload_module(output_requests, payloads, "dossier", "dossier_updates", payloads.get("dossier_updates", []), payload_ref=module_refs.get("dossier", "")),
+        "gallery": _removed_module("gallery"),
+        "inventory": _removed_module("inventory"),
         "character_card": _payload_module(output_requests, payloads, "character_card", "character_card_update", payloads.get("character_card_update", {}), cached_state="cached"),
         "canvas_jobs": {
             "mode": "update" if canvas_jobs else "no_update",
@@ -52,6 +52,17 @@ def _request(output_requests: dict[str, Any], module: str, default_mode: str = "
     if not isinstance(request, dict):
         return {"mode": default_mode, "trigger": "none", "reason": ""}
     return request
+
+
+def _removed_module(module: str) -> dict[str, Any]:
+    return {
+        "mode": "removed",
+        "state": "removed",
+        "update_requested": False,
+        "payload": [],
+        "payload_ref": "",
+        "reason": f"legacy {module} module removed; use extension endpoint",
+    }
 
 
 def _map_module(request: dict[str, Any], payloads: dict[str, Any], assets: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
@@ -105,7 +116,3 @@ def _payload_module(
         "payload_ref": payload_ref,
         "reason": request.get("reason", ""),
     }
-
-
-def _gallery_module(output_requests: dict[str, Any], payloads: dict[str, Any], payload_ref: str = "") -> dict[str, Any]:
-    return {"mode": "no_update", "state": "removed", "update_requested": False, "payload": {}, "payload_ref": ""}

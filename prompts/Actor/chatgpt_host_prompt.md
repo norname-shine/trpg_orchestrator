@@ -21,8 +21,45 @@ Required top-level keys:
 - `summary`
 - `state_writeback`
 
-`blocks[0]` must echo the submitted player action as `type="player_action"` and `actor_kind="player"`. Use player-facing prose in the campaign language.
+`blocks[0]` must echo the submitted player action verbatim as `type="player_action"` and `actor_kind="player"`. Do not rewrite, summarize, translate, embellish, or add character intent inside this block. Put any literary expansion in later narration blocks only.
 
 Allowed block types: `player_action`, `gm_narration`, `npc_dialogue`, `system_check`, `choice_prompt`.
 
 NPC or player speech/action blocks must use stable `speaker`, `actor_id`, and `avatar_key` when available.
+
+If a `choice_prompt` block includes `choices`, each choice must be an object with non-empty string fields `id`, `label`, and `risk`. Never output choices as plain strings.
+
+Valid `choice_prompt.choices` shape:
+
+```json
+{
+  "type": "choice_prompt",
+  "actor_kind": "gm",
+  "speaker": "GM",
+  "body": "What do you do?",
+  "choices": [
+    {"id": "inspect_symbols", "label": "Inspect the symbols", "risk": "May cause a visible magical response."},
+    {"id": "listen_first", "label": "Listen first", "risk": "May lose a moment while the situation changes."}
+  ]
+}
+```
+
+`state_writeback` must always be a JSON object with these required keys:
+
+- `short_term_state`: object. Use `{}` if there is no short-term state evidence.
+- `long_term_memory`: object. Use `{}` if there is no durable evidence candidate.
+- `new_open_threads`: array. Use `[]` if no new open thread was visibly introduced.
+- `closed_threads`: array. Use `[]` if no thread was visibly closed.
+
+Minimal valid `state_writeback`:
+
+```json
+{
+  "short_term_state": {},
+  "long_term_memory": {},
+  "new_open_threads": [],
+  "closed_threads": []
+}
+```
+
+Never omit empty required writeback fields. Do not use object tags or badge objects; any tag/chip/badge list must be a string array only.

@@ -10,6 +10,8 @@ from typing import Any
 
 SCHEMA = "trpg_orchestrator.visual_contracts.v1"
 CONTRACT_FILE = "visual_contracts.json"
+ALLOWED_ENTITY_TYPES = {"player", "companion", "character", "map", "cg", "item", "prop"}
+ALLOWED_ACTOR_ROLES = {"", "npc", "key_character"}
 
 
 def default_visual_contracts(campaign_id: str) -> dict[str, Any]:
@@ -36,8 +38,7 @@ def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source
         return {}
     raw_entity_type = str(candidate.get("entity_type") or candidate.get("type") or candidate.get("kind") or "").strip()
     entity_type = safe_key(raw_entity_type) if raw_entity_type else ""
-    allowed_entity_types = {"player", "companion", "character", "map", "cg", "item", "prop"}
-    if entity_type and entity_type not in allowed_entity_types:
+    if entity_type and entity_type not in ALLOWED_ENTITY_TYPES:
         raise RuntimeError(f"unknown visual contract entity_type: {entity_type}")
     display = str(candidate.get("display_name") or candidate.get("title") or candidate.get("name") or "").strip()
     entity_key = str(candidate.get("entity_key") or "").strip()
@@ -49,8 +50,14 @@ def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source
         entity_type = safe_key(entity_key.split(":", 1)[0])
     if not entity_type:
         raise RuntimeError("visual contract entity_type is required")
-    if entity_type not in allowed_entity_types:
+    if entity_type not in ALLOWED_ENTITY_TYPES:
         raise RuntimeError(f"unknown visual contract entity_type: {entity_type}")
+    raw_actor_role = str(candidate.get("actor_role") or "").strip()
+    actor_role = safe_key(raw_actor_role) if raw_actor_role else ""
+    if actor_role and actor_role not in ALLOWED_ACTOR_ROLES:
+        raise RuntimeError(f"unknown visual contract actor_role: {actor_role}")
+    if actor_role and entity_type != "character":
+        raise RuntimeError("visual contract actor_role is only allowed for entity_type=character")
     render_intent = object_or_empty(candidate.get("render_intent"))
     primary = safe_key(render_intent.get("primary") or "")
     if "npc_portrait" in primary:
@@ -60,6 +67,7 @@ def normalize_visual_contract_candidate(candidate: Any, campaign_id: str, source
     contract = {
         "entity_key": entity_key,
         "entity_type": entity_type,
+        "actor_role": actor_role,
         "display_name": display or readable_from_key(entity_key),
         "source": str(candidate.get("source") or source or "director_candidate"),
         "binding": normalize_binding(candidate.get("binding"), campaign_id, candidate.get("memory_refs")),

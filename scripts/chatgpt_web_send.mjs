@@ -505,22 +505,36 @@ async function fillComposer(page, text) {
 async function clickSend(page) {
   const selectors = [
     '[data-testid="send-button"]',
+    '[data-testid*="send" i]',
     'button[aria-label="Send prompt"]',
     'button[aria-label="Send message"]',
     'button[aria-label*="Send"]',
+    'button[aria-label*="Submit"]',
     'button[aria-label*="发送"]',
+    'button[aria-label*="提交"]',
+    'button:has(svg)',
   ];
 
   for (const selector of selectors) {
     const locator = page.locator(selector).last();
 
-    if (await locator.isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (await locator.isVisible({ timeout: 2500 }).catch(() => false)) {
       await locator.click({ timeout: 10_000 });
       return;
     }
   }
 
-  fail("Send button not found.");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1200);
+  const stopVisible = await page
+    .locator('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="停止"]')
+    .first()
+    .isVisible({ timeout: 800 })
+    .catch(() => false);
+  const assistantStarted = Boolean((await latestAssistantText(page).catch(() => "")).trim());
+  if (stopVisible || assistantStarted) return;
+  const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+  fail(`Send button not found. page=${page.url()} preview=${bodyText.slice(0, 500)}`);
 }
 
 async function waitForAssistantCompletion(page) {

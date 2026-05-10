@@ -71,7 +71,7 @@
       "text": ""
     },
     "vitals": [],
-    "conditions": [],
+    "conditions": ["失忆"],
     "attributes": [],
     "equipment": [],
     "companion": {
@@ -82,7 +82,7 @@
       "personality": "",
       "visual_seed": "",
       "vitals": [],
-      "conditions": [],
+      "conditions": ["受伤"],
       "equipment": []
     }
   }
@@ -134,6 +134,7 @@
 ## 标签 / Conditions
 
 - `conditions` 本质是状态标签。
+- 所有标签、chip、badge 类字段只能是字符串数组，例如 `"conditions": ["失忆"]`、`"badges": ["主角", "医疗相关"]`；不得输出带 id、label、icon 或 description 元数据的对象标签。
 - 标签内容随跑团类型变化，例如伤势、恐惧、令咒、异常同步、疲劳、任务压力、灵感、资源紧张等。
 - 标签必须短，适合角色卡展示。
 - 不要把未经确认的推测写成已确认标签。

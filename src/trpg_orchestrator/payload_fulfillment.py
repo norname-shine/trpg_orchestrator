@@ -156,8 +156,6 @@ def _module_for_capability(capability: str) -> str:
     mapping = {
         "map": "map",
         "visual_assets": "visual_assets",
-        "gallery": "gallery",
-        "inventory": "inventory",
         "character_card": "character_card",
         "dossier": "dossier",
         "dice_check_requested": "dice_or_check",
@@ -171,8 +169,6 @@ def _payload_present_for_capability(capability: str, payloads: dict[str, Any]) -
     mapping = {
         "map": ("map_route", "map_canvas"),
         "visual_assets": ("visual_assets",),
-        "gallery": ("gallery_updates",),
-        "inventory": ("inventory_updates",),
         "character_card": ("character_card_update",),
         "dossier": ("dossier_updates",),
         "dice_or_check": ("dice_check_request",),
@@ -193,8 +189,6 @@ def _defer_unfulfilled_requests(pressure_pack: dict[str, Any]) -> None:
     requirements = {
         "map": ("map_route", "map_canvas"),
         "visual_assets": ("visual_assets",),
-        "gallery": ("gallery_updates",),
-        "inventory": ("inventory_updates",),
         "character_card": ("character_card_update",),
         "dossier": ("dossier_updates",),
         "dice_or_check": ("dice_check_request",),

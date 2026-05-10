@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -104,3 +105,37 @@ def test_true_browser_evidence_with_markers_allows_ingest_gate(tmp_path):
     write_evidence(outbox_dir)
 
     cli.verify_browser_evidence_before_ingest(raw_path, "demo")
+
+
+def test_send_rejects_stale_chatgpt_input(tmp_path):
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    write_text_utf8(outbox_dir / "last_player_action.txt", "观察林间空地")
+    write_text_utf8(outbox_dir / "pressure_pack.json", "{}")
+    write_text_utf8(outbox_dir / "chatgpt_input.md", "旧输入")
+    old_time = (outbox_dir / "pressure_pack.json").stat().st_mtime - 5
+    os.utime(outbox_dir / "chatgpt_input.md", (old_time, old_time))
+
+    with pytest.raises(RuntimeError, match="chatgpt_input.md stale"):
+        cli.ensure_chatgpt_input_current(outbox_dir)
+
+
+def test_send_rejects_chatgpt_input_for_previous_action(tmp_path):
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    write_text_utf8(outbox_dir / "last_player_action.txt", "观察林间空地")
+    write_text_utf8(outbox_dir / "pressure_pack.json", "{}")
+    write_text_utf8(outbox_dir / "chatgpt_input.md", "# TRPG Turn Input\n\n## Player Action\n检查医院大厅\n")
+
+    with pytest.raises(RuntimeError, match="does not contain current player action"):
+        cli.ensure_chatgpt_input_current(outbox_dir)
+
+
+def test_send_allows_current_chatgpt_input(tmp_path):
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    write_text_utf8(outbox_dir / "last_player_action.txt", "观察林间空地")
+    write_text_utf8(outbox_dir / "pressure_pack.json", "{}")
+    write_text_utf8(outbox_dir / "chatgpt_input.md", "# TRPG Turn Input\n\n## Player Action\n观察林间空地\n")
+
+    cli.ensure_chatgpt_input_current(outbox_dir)

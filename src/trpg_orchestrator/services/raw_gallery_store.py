@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,36 @@ def save_gallery_raw(campaign_id: str, payload: Any) -> dict[str, Any]:
     return payload
 
 
+def apply_gallery_assets(campaign_id: str, assets: Any) -> dict[str, Any]:
+    if not isinstance(assets, list):
+        raise RuntimeError("gallery_assets must be list")
+    incoming: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, asset in enumerate(assets):
+        if not isinstance(asset, dict):
+            raise RuntimeError(f"gallery_assets[{index}] must be object")
+        for key in ("id", "type", "title"):
+            required_asset_string(asset, key, index, prefix="gallery_assets")
+        asset_id = str(asset.get("id") or "").strip()
+        if asset_id in seen:
+            raise RuntimeError(f"duplicate gallery_assets id: {asset_id}")
+        seen.add(asset_id)
+        incoming.append(copy.deepcopy(asset))
+
+    raw = load_gallery_raw(campaign_id)
+    next_assets = [copy.deepcopy(asset) for asset in raw.get("assets", [])]
+    by_id = {str(asset.get("id") or ""): index for index, asset in enumerate(next_assets) if isinstance(asset, dict)}
+    for asset in incoming:
+        asset_id = str(asset["id"]).strip()
+        if asset_id in by_id:
+            next_assets[by_id[asset_id]] = asset
+        else:
+            by_id[asset_id] = len(next_assets)
+            next_assets.append(asset)
+    raw["assets"] = next_assets
+    return save_gallery_raw(campaign_id, raw)
+
+
 def build_gallery_index(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("gallery_raw payload must be object")
@@ -106,6 +137,8 @@ def validate_gallery_raw(campaign_id: str, payload: Any) -> None:
     assets = payload.get("assets")
     if not isinstance(assets, list):
         raise RuntimeError("gallery_raw.assets must be list")
+    if not assets:
+        raise RuntimeError("gallery_raw.assets must contain at least one asset")
     for index, asset in enumerate(assets):
         if not isinstance(asset, dict):
             raise RuntimeError(f"gallery_raw.assets[{index}] must be object")
@@ -116,8 +149,8 @@ def validate_gallery_raw(campaign_id: str, payload: Any) -> None:
     # asset business fields; gallery_raw is the director-authored source.
 
 
-def required_asset_string(asset: dict[str, Any], key: str, index: int) -> str:
+def required_asset_string(asset: dict[str, Any], key: str, index: int, prefix: str = "gallery_raw.assets") -> str:
     value = asset.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise RuntimeError(f"gallery_raw.assets[{index}] missing required fields: {key}")
+        raise RuntimeError(f"{prefix}[{index}] missing required fields: {key}")
     return value

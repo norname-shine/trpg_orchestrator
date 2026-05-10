@@ -160,6 +160,14 @@ def test_save_gallery_raw_rejects_assets_not_list(gallery_root: Path):
         raw_gallery_store.save_gallery_raw("demo", payload)
 
 
+def test_save_gallery_raw_rejects_empty_assets(gallery_root: Path):
+    payload = gallery_payload()
+    payload["assets"] = []
+
+    with pytest.raises(RuntimeError, match="gallery_raw.assets must contain at least one asset"):
+        raw_gallery_store.save_gallery_raw("demo", payload)
+
+
 @pytest.mark.parametrize("missing", ["id", "type", "title"])
 def test_save_gallery_raw_rejects_asset_missing_required_field(gallery_root: Path, missing: str):
     payload = gallery_payload()

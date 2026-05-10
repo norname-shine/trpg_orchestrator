@@ -1,9 +1,10 @@
-# Actor Dossier Evidence Rules
+# Actor Dossier Concept Rules
 
-Do not decide whether a clue, NPC fact, location fact, document, faction note, or mystery fact officially enters the dossier. Provide dossier evidence candidates only when the scene brief allows dossier evidence and the prose exposes visible evidence.
+Dossier is a narrative presentation concept, not the fact source for persistent gallery records.
 
+- Visible clues, NPC facts, location facts, documents, faction notes, mystery facts, symbols, enemy observations, and environmental anomalies that should be reviewable later must be written as `state_writeback.gallery_assets`.
+- Do not use `dossier_updates` as a gallery or archive fact source.
 - Do not turn suspicions into confirmed facts.
-- Keep clue records tied to what the player observed, heard, read, or tested.
+- Keep records tied to what the player observed, heard, read, or tested.
 - Do not reveal hidden motives, future events, or private truth.
-- Final dossier acceptance, merge, rejection, and persistence happen after validation.
 - If the clue is incomplete, record the uncertainty instead of resolving it.

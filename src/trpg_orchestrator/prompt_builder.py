@@ -10,7 +10,7 @@ from typing import Any
 from .capability_resolver import build_capability_plan
 from .config import CAMPAIGNS_DIR, PROMPTS_DIR
 from .encoding_utils import read_runtime_text
-from .memory_selector import select_memory_for_actor, select_memory_for_audit, select_memory_for_director
+from .memory_selector import build_director_memory_digest, select_memory_for_actor, select_memory_for_audit, select_memory_for_director
 from .output_contract import summarize_payload_keys
 from .prompt_module_registry import get_prompt_module_warnings, load_prompt_modules, select_prompt_modules
 
@@ -410,7 +410,7 @@ def build_director_user_prompt(
     capability_plan: dict[str, Any] | None = None,
 ) -> str:
     capability_plan = capability_plan or build_capability_plan(campaign_id, player_action, memory)
-    director_memory = sanitize_model_input(select_memory_for_director(memory, capability_plan))
+    director_memory = sanitize_model_input(build_director_memory_digest(memory, capability_plan))
     module_ids = select_prompt_modules(capability_plan, "director")
     module_text = sanitize_model_terms(load_prompt_modules(module_ids))
     _append_module_warnings(capability_plan)

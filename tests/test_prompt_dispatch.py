@@ -1,7 +1,10 @@
+import json
+import re
+
 from trpg_orchestrator.capability_resolver import build_capability_plan
 from trpg_orchestrator.config import PROMPTS_DIR
 from trpg_orchestrator.encoding_utils import read_runtime_text
-from trpg_orchestrator.memory_selector import select_memory_for_actor
+from trpg_orchestrator.memory_selector import select_memory_for_actor, select_memory_for_director
 from trpg_orchestrator.memory_store import default_memory
 from trpg_orchestrator.prompt_builder import build_actor_capability_view, build_chatgpt_input, build_director_user_prompt
 from trpg_orchestrator.prompt_module_registry import get_prompt_module_warnings, select_prompt_modules
@@ -43,6 +46,70 @@ def _writeback() -> dict:
         "new_open_threads": [],
         "closed_threads": [],
     }
+
+
+def _director_digest_memory() -> dict:
+    memory = default_memory("demo")
+    memory["campaign_profile.json"].update({
+        "genre": "mystery",
+        "tone": "quiet",
+        "premise": "Investigate a shifting fog entrance.",
+        "director_setup": {"heavy": "director_setup should not be sent"},
+        "campaign_taxonomy": {"heavy": "campaign_taxonomy should not be sent"},
+        "character_attribute_schema": {"heavy": "character_attribute_schema should not be sent"},
+        "render_rules": {"heavy": "render_rules should not be sent"},
+        "custom_libraries": {"heavy": "custom_libraries should not be sent"},
+        "initial_assets": {
+            "initial_map_canvas": {
+                "map_route": {
+                    "title": "Fog Path",
+                    "nodes": [{"label": "Clearing", "canvas_draw_instructions": "should not be sent"}],
+                },
+                "canvas_draw_instructions": "should not be sent",
+            },
+            "initial_cg": {
+                "generation_instruction": "A low fog line under dark trees.",
+                "cg_prompt": "should not be sent",
+            },
+            "visual_contract_candidates": ["should not be sent"],
+        },
+    })
+    memory["campaign_direction.json"].update({
+        "story_blueprint_patch": {"future": "should not be sent"},
+    })
+    memory["story_progress.json"].update({
+        "current_chapter_id": "chapter_1",
+        "current_phase_id": "phase_1",
+        "current_node_id": "node_fog",
+        "turns_in_node": 2,
+    })
+    memory["story_blueprint.json"].update({
+        "chapters": [
+            {
+                "chapter_id": "chapter_1",
+                "title": "Fog Chapter",
+                "nodes": [
+                    {
+                        "node_id": "node_fog",
+                        "title": "Fog Entrance",
+                        "goal": "Confirm the entrance without revealing its source.",
+                        "beat_checklist": ["observe", "mark_map"],
+                        "next_nodes": ["node_tracks"],
+                        "requires_deep_instruction": False,
+                    }
+                ],
+            }
+        ],
+    })
+    return memory
+
+
+def _json_after_heading(prompt: str, heading: str) -> dict:
+    heading_index = prompt.find(heading)
+    assert heading_index >= 0, f"missing heading {heading}"
+    match = re.search(r"```json\n(.*?)\n```", prompt[heading_index:], re.S)
+    assert match, f"missing JSON section after {heading}"
+    return json.loads(match.group(1))
 
 
 WRITEBACK_SEMANTIC_TERMS = (
@@ -290,6 +357,69 @@ def test_build_director_prompt_preloads_visual_and_map_rules_without_authorizing
     assert plan["output_contract"]["allow_map_payload"] is False
 
 
+def test_build_director_prompt_uses_memory_digest_in_selected_memory():
+    memory = _director_digest_memory()
+    plan = _plan(["base_director"])
+    prompt = build_director_user_prompt("demo", "continue", memory, plan)
+    selected_memory = _json_after_heading(prompt, "## Selected Director Memory")
+
+    assert set(selected_memory) == {
+        "campaign_brief",
+        "current_story_anchor",
+        "current_runtime",
+        "player_brief",
+        "companion_brief",
+        "node_brief",
+        "thread_brief",
+        "asset_refs",
+        "forbidden_brief",
+    }
+    assert selected_memory["campaign_brief"]["genre"] == "mystery"
+    assert selected_memory["current_story_anchor"]["current_node_id"] == "node_fog"
+    assert selected_memory["node_brief"]["goal"] == "Confirm the entrance without revealing its source."
+    assert "Fog Path" in selected_memory["asset_refs"]["existing_map_summary"]
+
+
+def test_build_director_prompt_digest_excludes_raw_memory_and_heavy_fields():
+    memory = _director_digest_memory()
+    prompt = build_director_user_prompt("demo", "continue", memory, _plan(["base_director"]))
+    selected_memory_text = json.dumps(_json_after_heading(prompt, "## Selected Director Memory"), ensure_ascii=False)
+
+    for raw_key in (
+        "campaign_profile.json",
+        "campaign_direction.json",
+        "story_blueprint.json",
+        "recent_context.json",
+        "story_progress.json",
+        "main_threads.json",
+    ):
+        assert raw_key not in selected_memory_text
+    for heavy_key in (
+        "director_setup",
+        "initial_assets",
+        "initial_map_canvas",
+        "canvas_draw_instructions",
+        "render_rules",
+        "visual_contract_candidates",
+        "cg_prompt",
+        "campaign_taxonomy",
+        "character_attribute_schema",
+        "story_blueprint_patch",
+        "custom_libraries",
+    ):
+        assert heavy_key not in selected_memory_text
+
+
+def test_build_chatgpt_input_keeps_actor_visible_memory_shape():
+    memory = _director_digest_memory()
+    prompt = build_chatgpt_input("demo", "continue", memory, _pressure_pack(), _plan(["base_actor"]))
+    visible_memory = _json_after_heading(prompt, "## Visible Memory For This Turn")
+
+    assert "campaign_profile.json" in visible_memory
+    assert "campaign_brief" not in visible_memory
+    assert "node_brief" not in visible_memory
+
+
 def test_orchestration_forecast_ignored_when_expired_or_node_mismatch():
     expired = default_memory("demo")
     expired["recent_context.json"]["turn_index"] = 5
@@ -336,6 +466,15 @@ def test_actor_memory_does_not_include_forecast_fields():
     assert "upcoming_assets" not in text
     assert "future_asset" not in text
     assert "hidden_reason" not in text
+
+
+def test_select_memory_for_director_keeps_raw_memory_shape_after_digest_switch():
+    memory = _director_digest_memory()
+    selected = select_memory_for_director(memory, _plan(["base_director"]))
+
+    assert "campaign_profile.json" in selected
+    assert "story_blueprint.json" in selected
+    assert "campaign_brief" not in selected
 
 
 def test_preload_capabilities_are_not_actor_visible_tools():

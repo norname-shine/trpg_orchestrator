@@ -70,3 +70,101 @@ From `scripts/prompt_size_report.py`:
 - If a change needs memory semantic routing, use a separate `memory-semantics` branch.
 - If a change needs asset pre-generation, use a separate `asset-pipeline` branch.
 - If a change needs frontend display work, use a separate `frontend-display` branch.
+
+## 7. Memory Digest Rules
+
+Memory payload compression is now part of the prompt dispatch contract. Ordinary model inputs must receive curated digest structures, not raw memory file bundles.
+
+### Director Memory Digest
+
+- `build_director_user_prompt()` `Selected Director Memory` must use `build_director_memory_digest()`.
+- Raw memory files must not be placed wholesale into ordinary director model input.
+- `select_memory_for_director()` may remain available for raw, debug, backend analysis, or audit-oriented flows, but it must not be used directly for ordinary director model input.
+
+Director digest top-level keys are fixed:
+
+- `campaign_brief`
+- `current_story_anchor`
+- `current_runtime`
+- `player_brief`
+- `companion_brief`
+- `node_brief`
+- `thread_brief`
+- `asset_refs`
+- `forbidden_brief`
+
+Ordinary director input must not contain:
+
+- `campaign_profile.json`
+- `campaign_direction.json`
+- `story_blueprint.json`
+- `recent_context.json`
+- `story_progress.json`
+- `main_threads.json`
+- `director_setup`
+- `initial_assets`
+- `initial_map_canvas`
+- `canvas_draw_instructions`
+- `render_rules`
+- `visual_contract_candidates`
+- `cg_prompt`
+- `campaign_taxonomy`
+- `character_attribute_schema`
+- `story_blueprint_patch`
+- `custom_libraries`
+
+### Actor Visible Memory Digest
+
+- `build_chatgpt_input()` `Visible Memory For This Turn` must use `build_actor_memory_digest()`.
+- Raw actor memory files must not be placed wholesale into ordinary actor model input.
+- `select_memory_for_actor()` may remain available for raw, debug, backend analysis, or audit-oriented flows, but it must not be used directly for ordinary actor model input.
+
+Actor digest top-level keys are fixed:
+
+- `actor_campaign_brief`
+- `visible_runtime`
+- `visible_player_state`
+- `visible_npc_state`
+- `visible_items`
+- `style_brief`
+- `visible_forbidden`
+- `actor_visible_story_progress`
+
+Ordinary actor input must not contain:
+
+- `campaign_profile.json`
+- `style_profile.json`
+- `recent_context.json`
+- `player_state.json`
+- `forbidden_changes.json`
+- `npc_memory.json`
+- `equipment_history.json`
+- `director_setup`
+- `initial_assets`
+- `render_rules`
+- `campaign_taxonomy`
+- `character_attribute_schema`
+- `prompt_routing`
+- `canvas_draw_instructions`
+- `item_canvas_rules`
+- `orchestration_forecast`
+- `actor_dispatch`
+- `hotload_next_turn`
+- `upcoming_assets`
+- `hidden_reason`
+- `future_node`
+- `future_asset`
+
+### Quality Rule
+
+- If player-facing prose becomes too thin, do not roll ordinary model input back to raw memory bundle transmission.
+- Add or refine digest source fields instead, such as `visible_player_state`, `style_brief`, or `visible_forbidden`.
+- Raw memory may be used only for backend work, debug views, audit-oriented flows, or local analysis. It must not enter ordinary director or actor model input.
+
+### Acceptance Snapshot
+
+- Director `Selected Director Memory` now uses the director memory digest.
+- Actor `Visible Memory For This Turn` now uses the actor visible memory digest.
+- Real two-layer prompt input has dropped from roughly the 120k-character range to roughly the 30k-character range.
+- The memory payload compression phase is complete.
+- Further prompt size work should open a separate `prompt-module-slim` phase for prompt module text itself.

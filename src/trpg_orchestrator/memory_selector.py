@@ -115,6 +115,46 @@ def select_memory_for_actor(memory: dict[str, Any], capability_plan: dict[str, A
     return selected
 
 
+def build_actor_memory_digest(
+    memory: dict[str, Any],
+    capability_plan: dict[str, Any],
+    pressure_pack: dict[str, Any],
+) -> dict[str, Any]:
+    profile = memory.get("campaign_profile.json", {})
+    style = memory.get("style_profile.json", {})
+    recent = memory.get("recent_context.json", {})
+    player_state = memory.get("player_state.json", {})
+    forbidden = memory.get("forbidden_changes.json", {})
+    npc_memory = memory.get("npc_memory.json", {})
+    equipment = memory.get("equipment_history.json", {})
+    if not isinstance(profile, dict):
+        profile = {}
+    if not isinstance(style, dict):
+        style = {}
+    if not isinstance(recent, dict):
+        recent = {}
+    if not isinstance(player_state, dict):
+        player_state = {}
+    if not isinstance(forbidden, dict):
+        forbidden = {}
+    if not isinstance(npc_memory, dict):
+        npc_memory = {}
+    if not isinstance(equipment, dict):
+        equipment = {}
+
+    digest = {
+        "actor_campaign_brief": _actor_campaign_brief(profile),
+        "visible_runtime": _visible_runtime(recent),
+        "visible_player_state": _visible_player_state(player_state),
+        "visible_npc_state": _visible_npc_state(recent, npc_memory, capability_plan),
+        "visible_items": _visible_items(profile, player_state, equipment),
+        "style_brief": _style_brief(style, profile),
+        "visible_forbidden": _visible_forbidden(forbidden, profile),
+        "actor_visible_story_progress": _actor_visible_story_progress(pressure_pack),
+    }
+    return _compact_digest(_actor_digest_clean(digest))
+
+
 def select_memory_for_audit(
     memory: dict[str, Any],
     capability_plan: dict[str, Any],
@@ -387,6 +427,184 @@ def _forbidden_brief(profile: dict[str, Any], direction: dict[str, Any], forbidd
     return brief
 
 
+def _actor_campaign_brief(profile: dict[str, Any]) -> dict[str, Any]:
+    brief = _pick_allowed(profile, ["campaign_id", "title", "name", "genre", "tone", "premise"])
+    player = _actor_person_visible_summary(
+        profile.get("protagonist_patch"),
+        (profile.get("character_card_patch") or {}).get("identity") if isinstance(profile.get("character_card_patch"), dict) else None,
+        (profile.get("character_card_patch") or {}).get("profile") if isinstance(profile.get("character_card_patch"), dict) else None,
+    )
+    companion = _actor_companion_visible_summary(profile)
+    if player:
+        brief["protagonist_visible_summary"] = player
+    if companion:
+        brief["companion_visible_summary"] = companion
+    return brief
+
+
+def _actor_person_visible_summary(*sources: Any) -> dict[str, Any]:
+    allowed = [
+        "identity",
+        "name",
+        "role",
+        "summary",
+        "visible_summary",
+        "background",
+        "personality",
+        "motivation",
+        "abilities_and_limits",
+        "visible_unknowns_or_player_owned",
+    ]
+    summary: dict[str, Any] = {}
+    for source in sources:
+        if isinstance(source, dict):
+            summary.update(_pick_allowed(source, allowed))
+    return summary
+
+
+def _actor_companion_visible_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    config = profile.get("companion_config")
+    if isinstance(config, dict):
+        mapped = {
+            "enabled": config.get("enabled", config.get("companion_enabled")),
+            "name": config.get("name", config.get("companion_name")),
+            "role": config.get("role", config.get("companion_role")),
+            "personality": config.get("personality", config.get("companion_personality")),
+            "relationship_to_protagonist": config.get("relationship_to_protagonist"),
+            "availability_note": config.get("availability_note"),
+            "visible_summary": config.get("visible_summary"),
+        }
+        summary.update({key: value for key, value in mapped.items() if value not in (None, "", [], {})})
+    patch = profile.get("companion_patch")
+    if isinstance(patch, dict):
+        summary.update(_pick_allowed(patch, ["name", "role", "personality", "relationship_to_protagonist", "availability_note", "visible_summary"]))
+    return summary
+
+
+def _visible_runtime(recent: dict[str, Any]) -> dict[str, Any]:
+    return _pick_allowed(
+        recent,
+        [
+            "turn_index",
+            "recent_summary",
+            "current_scene",
+            "last_player_action",
+            "last_outcome",
+            "short_term_state",
+        ],
+    )
+
+
+def _visible_player_state(player_state: dict[str, Any]) -> dict[str, Any]:
+    brief = _pick_allowed(
+        player_state,
+        [
+            "identity",
+            "name",
+            "role",
+            "current_condition",
+            "visible_status",
+            "equipment_summary",
+            "known_items",
+            "current_location",
+            "visible_flags",
+            "player_owned_unknowns",
+        ],
+    )
+    player = player_state.get("player")
+    if isinstance(player, dict):
+        brief.update(_pick_allowed(player, ["identity", "name", "role", "current_condition", "visible_status", "equipment_summary", "known_items", "current_location", "visible_flags", "player_owned_unknowns"]))
+    return brief
+
+
+def _style_brief(style: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    allowed = [
+        "language",
+        "prose_tone",
+        "narration_style",
+        "dialogue_style",
+        "avoid",
+        "safety_lines",
+        "tone_limits",
+    ]
+    brief = _pick_allowed(style, allowed)
+    for key in ("language", "prose_tone", "narration_style", "dialogue_style", "avoid", "safety_lines", "tone_limits"):
+        if key not in brief and key in profile:
+            brief[key] = profile[key]
+    return brief
+
+
+def _visible_forbidden(forbidden: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    brief = _pick_allowed(
+        forbidden,
+        [
+            "global_forbidden",
+            "campaign_specific_forbidden",
+            "unconfirmed_should_not_be_written_as_fact",
+            "tone_limits",
+            "safety_lines",
+        ],
+        keep_empty=True,
+    )
+    for key in ("tone_limits", "safety_lines"):
+        if key not in brief and key in profile:
+            brief[key] = profile[key]
+    return brief
+
+
+def _visible_npc_state(recent: dict[str, Any], npc_memory: dict[str, Any], capability_plan: dict[str, Any]) -> dict[str, Any]:
+    if not _has_any(_capabilities(capability_plan), {"npc_present", "npc_voice", "dialogue_expected", "social"}):
+        return {}
+    current_scene = recent.get("current_scene") if isinstance(recent.get("current_scene"), dict) else {}
+    state: dict[str, Any] = {}
+    active_npcs = current_scene.get("active_npcs")
+    if active_npcs not in (None, "", [], {}):
+        state["active_npcs"] = active_npcs
+    for key in ("visible_relationship_summary", "relationship_summary", "last_visible_dialogue_summary"):
+        value = recent.get(key)
+        if value in (None, "", [], {}):
+            value = npc_memory.get(key)
+        if value not in (None, "", [], {}):
+            state[key] = value
+    return state
+
+
+def _visible_items(profile: dict[str, Any], player_state: dict[str, Any], equipment: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for source in (
+        player_state.get("known_items"),
+        player_state.get("items"),
+        player_state.get("inventory"),
+        equipment.get("known_items"),
+        equipment.get("items"),
+        equipment.get("inventory"),
+        ((profile.get("initial_assets") or {}).get("initial_items") if isinstance(profile.get("initial_assets"), dict) else None),
+    ):
+        if isinstance(source, list):
+            for item in source:
+                if isinstance(item, dict):
+                    ref = _actor_item_ref(item)
+                    if ref:
+                        items.append(ref)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        identity = str(item.get("item_id") or item.get("id") or item.get("title") or item.get("name") or _stable_repr(item))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduped.append(item)
+    return deduped
+
+
+def _actor_item_ref(item: dict[str, Any]) -> dict[str, Any]:
+    ref = _pick_allowed(item, ["item_id", "id", "title", "name", "type", "state", "visible_description"])
+    if "visible_description" not in ref and item.get("description"):
+        ref["visible_description"] = item.get("description")
+    return ref
+
+
 def _pick_allowed(source: dict[str, Any], keys: list[str], keep_empty: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in keys:
@@ -463,6 +681,81 @@ def _short_text(value: Any, limit: int = 500) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+def _actor_digest_clean(value: Any) -> Any:
+    hidden_keys = {
+        "director_setup",
+        "setup_patch",
+        "prompt_routing",
+        "story_memory_seed",
+        "initial_assets",
+        "initial_map_canvas",
+        "render_rules",
+        "visual_contract_candidates",
+        "campaign_taxonomy",
+        "character_attribute_schema",
+        "custom_libraries",
+        "mechanics",
+        "story_blueprint_patch",
+        "canvas_draw_instructions",
+        "item_canvas_rules",
+        "icon_rules",
+        "asset_key",
+        "canvas",
+        "image_prompt",
+        "orchestration_forecast",
+        "actor_dispatch",
+        "hotload_next_turn",
+        "upcoming_assets",
+        "hidden_reason",
+        "future_node",
+        "future_asset",
+        "applied_writeback_hashes",
+        "hidden_truth",
+        "hidden_motive",
+        "secret",
+        "secrets_not_to_reveal",
+        "forbidden_reveals",
+        "director_notes",
+        "future_nodes",
+        "npc_knowledge_boundaries",
+    }
+    hidden_tokens = (
+        "backend",
+        "cache",
+        "canvas",
+        "debug",
+        "director_note",
+        "forecast",
+        "future_asset",
+        "future_node",
+        "hidden",
+        "hotload_next_turn",
+        "orchestration_forecast",
+        "secret",
+        "upcoming_assets",
+    )
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            if key_text in hidden_keys or any(token in lowered for token in hidden_tokens):
+                continue
+            cleaned = _actor_digest_clean(item)
+            clean[key_text] = cleaned
+        return clean
+    if isinstance(value, list):
+        return [_actor_digest_clean(item) for item in value]
+    return value
+
+
+def _stable_repr(value: Any) -> str:
+    try:
+        return repr(sorted(value.items())) if isinstance(value, dict) else repr(value)
+    except Exception:
+        return repr(value)
 
 
 def _sanitize_actor_memory(data: Any) -> Any:

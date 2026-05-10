@@ -1,6 +1,6 @@
 import pytest
 
-from trpg_orchestrator.schema_validator import SchemaValidationError, validate_chatgpt_blocks, validate_pressure_pack, validate_writeback
+from trpg_orchestrator.schema_validator import SchemaValidationError, validate_actor_output, validate_chatgpt_blocks, validate_pressure_pack, validate_writeback
 
 
 def minimal_pressure_pack():
@@ -149,6 +149,8 @@ def test_writeback_metadata_is_not_interpreted_by_this_branch():
         "long_term_memory": {"world_state_updates": {"memory_type": "truth", "value": "legacy-compatible"}},
         "new_open_threads": [],
         "closed_threads": [],
+        "gallery_assets": [],
+        "inventory_items": [],
     })
 
 
@@ -171,6 +173,7 @@ def test_writeback_rejects_invalid_global_gallery_and_inventory_shapes():
             "new_open_threads": [],
             "closed_threads": [],
             "gallery_assets": {},
+            "inventory_items": [],
         })
 
     with pytest.raises(SchemaValidationError, match="state_writeback.gallery_assets\\[1\\] missing non-empty type"):
@@ -180,6 +183,7 @@ def test_writeback_rejects_invalid_global_gallery_and_inventory_shapes():
             "new_open_threads": [],
             "closed_threads": [],
             "gallery_assets": [{"id": "trace", "title": "Trace"}],
+            "inventory_items": [],
         })
 
     with pytest.raises(SchemaValidationError, match="state_writeback.inventory_items must be a list"):
@@ -188,6 +192,7 @@ def test_writeback_rejects_invalid_global_gallery_and_inventory_shapes():
             "long_term_memory": {},
             "new_open_threads": [],
             "closed_threads": [],
+            "gallery_assets": [],
             "inventory_items": {},
         })
 
@@ -197,6 +202,7 @@ def test_writeback_rejects_invalid_global_gallery_and_inventory_shapes():
             "long_term_memory": {},
             "new_open_threads": [],
             "closed_threads": [],
+            "gallery_assets": [],
             "inventory_items": [{"item_id": "rune_pendant"}],
         })
 
@@ -206,6 +212,7 @@ def test_writeback_rejects_invalid_global_gallery_and_inventory_shapes():
             "long_term_memory": {},
             "new_open_threads": [],
             "closed_threads": [],
+            "gallery_assets": [],
             "inventory_items": [
                 {"item_id": "rune_pendant", "title": "Rune Pendant"},
                 {"item_id": "rune_pendant", "title": "Rune Pendant"},
@@ -219,6 +226,8 @@ def test_writeback_requires_thread_arrays_even_when_empty():
             "short_term_state": {},
             "long_term_memory": {},
             "closed_threads": [],
+            "gallery_assets": [],
+            "inventory_items": [],
         })
 
     with pytest.raises(SchemaValidationError, match="state writeback missing key: closed_threads"):
@@ -226,6 +235,8 @@ def test_writeback_requires_thread_arrays_even_when_empty():
             "short_term_state": {},
             "long_term_memory": {},
             "new_open_threads": [],
+            "gallery_assets": [],
+            "inventory_items": [],
         })
 
     validate_writeback({
@@ -233,6 +244,99 @@ def test_writeback_requires_thread_arrays_even_when_empty():
         "long_term_memory": {},
         "new_open_threads": [],
         "closed_threads": [],
+        "gallery_assets": [],
+        "inventory_items": [],
+    })
+
+
+def test_writeback_requires_gallery_and_inventory_arrays_even_when_empty():
+    with pytest.raises(SchemaValidationError, match="state writeback missing key: gallery_assets"):
+        validate_writeback({
+            "short_term_state": {},
+            "long_term_memory": {},
+            "new_open_threads": [],
+            "closed_threads": [],
+            "inventory_items": [],
+        })
+
+    with pytest.raises(SchemaValidationError, match="state writeback missing key: inventory_items"):
+        validate_writeback({
+            "short_term_state": {},
+            "long_term_memory": {},
+            "new_open_threads": [],
+            "closed_threads": [],
+            "gallery_assets": [],
+        })
+
+    validate_writeback({
+        "short_term_state": {},
+        "long_term_memory": {},
+        "new_open_threads": [],
+        "closed_threads": [],
+        "gallery_assets": [],
+        "inventory_items": [],
+    })
+
+
+def test_actor_output_missing_state_writeback_fails_schema_validation():
+    with pytest.raises(SchemaValidationError, match="actor output missing key: state_writeback"):
+        validate_actor_output({
+            "turn_title": "Look",
+            "blocks": [
+                {"type": "player_action", "actor_kind": "player", "actor_id": "pc", "avatar_key": "pc", "body": "look"},
+                {"type": "gm_narration", "actor_kind": "gm", "body": "The clearing is quiet."},
+            ],
+            "summary": "Looked around.",
+        })
+
+
+def test_actor_output_system_check_without_state_writeback_fails_schema_validation():
+    with pytest.raises(SchemaValidationError, match="actor output missing key: state_writeback"):
+        validate_actor_output({
+            "turn_title": "Check",
+            "blocks": [
+                {"type": "player_action", "actor_kind": "player", "actor_id": "pc", "avatar_key": "pc", "body": "inspect"},
+                {"type": "system_check", "actor_kind": "system", "body": "Check result: success."},
+            ],
+            "summary": "Checked.",
+        })
+
+
+def test_actor_output_allows_empty_gallery_and_inventory_when_no_asset_changes():
+    validate_actor_output({
+        "turn_title": "Look",
+        "blocks": [
+            {"type": "player_action", "actor_kind": "player", "actor_id": "pc", "avatar_key": "pc", "body": "look"},
+            {"type": "gm_narration", "actor_kind": "gm", "body": "The clearing is quiet."},
+        ],
+        "summary": "Looked around.",
+        "state_writeback": {
+            "short_term_state": {},
+            "long_term_memory": {},
+            "new_open_threads": [],
+            "closed_threads": [],
+            "gallery_assets": [],
+            "inventory_items": [],
+        },
+    })
+
+
+def test_actor_output_clue_uses_gallery_assets():
+    validate_actor_output({
+        "turn_title": "Trace",
+        "blocks": [
+            {"type": "player_action", "actor_kind": "player", "actor_id": "pc", "avatar_key": "pc", "body": "inspect traces"},
+            {"type": "gm_narration", "actor_kind": "gm", "body": "A broken twig points toward the fog."},
+        ],
+        "summary": "Found a visible trace.",
+        "state_writeback": {
+            "short_term_state": {},
+            "long_term_memory": {},
+            "new_open_threads": [],
+            "closed_threads": [],
+            "gallery_assets": [{"id": "fog_trace", "type": "clue", "title": "Broken twig near the fog"}],
+            "inventory_items": [],
+        },
     })
 
 

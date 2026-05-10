@@ -28,6 +28,8 @@ def valid_json_output():
             "long_term_memory": {},
             "new_open_threads": [],
             "closed_threads": [],
+            "gallery_assets": [],
+            "inventory_items": [],
         },
     }
 
@@ -49,4 +51,20 @@ def test_parse_structured_json_missing_state_writeback_fails():
     payload.pop("state_writeback")
 
     with pytest.raises(ValueError):
+        parse_chatgpt_output(json.dumps(payload, ensure_ascii=False))
+
+
+def test_parse_structured_json_system_check_missing_state_writeback_fails():
+    import json
+
+    payload = valid_json_output()
+    payload["blocks"].append({
+        "type": "system_check",
+        "actor_kind": "system",
+        "speaker": "System",
+        "body": "Check result: success.",
+    })
+    payload.pop("state_writeback")
+
+    with pytest.raises(ValueError, match="state_writeback"):
         parse_chatgpt_output(json.dumps(payload, ensure_ascii=False))

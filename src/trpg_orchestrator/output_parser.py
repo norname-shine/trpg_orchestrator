@@ -60,7 +60,11 @@ def parse_chatgpt_output(text: str) -> ParsedOutput:
     if stripped.startswith("{") or stripped.startswith("```"):
         try:
             return _parse_json_output(stripped)
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (json.JSONDecodeError, TypeError):
+            pass
+        except ValueError as exc:
+            if "state_writeback" in str(exc):
+                raise
             pass
 
     missing = missing_markers(text)
@@ -76,6 +80,21 @@ def parse_chatgpt_output(text: str) -> ParsedOutput:
     except json.JSONDecodeError as exc:
         raise ValueError(f"状态回写 JSON 解析失败: {exc}") from exc
     return ParsedOutput(body=body, choices=choices, summary=summary, writeback=writeback, blocks=_legacy_blocks(body, choices))
+
+
+def parse_chatgpt_output_for_display(text: str) -> ParsedOutput:
+    """Parse JSON actor output for display even when writeback is missing."""
+    data = _loads_json_payload(text)
+    if not isinstance(data, dict):
+        raise ValueError("ChatGPT JSON output must be an object")
+    blocks = _normalize_blocks(data.get("blocks") or data.get("narrative_blocks") or [])
+    if not blocks:
+        raise ValueError("ChatGPT JSON output must include non-empty blocks")
+    body = str(data.get("body") or _join_blocks(blocks, {"gm_narration", "npc_dialogue", "system_check", "cg_image"})).strip()
+    choices = str(data.get("choices") or _choices_text(blocks)).strip()
+    summary = str(data.get("summary") or data.get("turn_summary") or "").strip()
+    writeback = data.get("state_writeback") if isinstance(data.get("state_writeback"), dict) else {}
+    return ParsedOutput(body=body, choices=choices, summary=summary, writeback=writeback, blocks=blocks)
 
 
 def public_output(parsed: ParsedOutput) -> str:

@@ -20,7 +20,7 @@ from .encoding_validator import validate_repository_encoding
 from .json_utils import extract_json_object, read_json, write_json
 from .memory_store import MemoryStore
 from .memory_compactor import build_compaction_report
-from .output_parser import parse_chatgpt_output, public_output, visible_prose_chars
+from .output_parser import parse_chatgpt_output, parse_chatgpt_output_for_display, public_output, visible_prose_chars
 from .output_contract import summarize_payload_keys
 from .payload_fulfillment import build_payload_fulfillment_input, defer_unfulfilled_requests, diff_requested_capabilities, finalize_capability_plan, merge_payload_patch, skipped_payload_patch
 from .prompt_builder import build_audit_user_prompt, build_chatgpt_image_input, build_chatgpt_input, build_director_user_prompt, build_v4_light_action_user_prompt, read_prompt, selected_memory_debug, selected_prompt_modules_debug
@@ -807,7 +807,23 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     verify_browser_evidence_before_ingest(raw_path, resolved)
     raw_output = read_runtime_text(raw_path)
     emit_public_job_status("parsing", "正在解析正文与状态回写", 76)
-    gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
+    try:
+        gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
+    except ValueError as exc:
+        if "state_writeback" not in str(exc):
+            raise
+        parsed_for_display = parse_chatgpt_output_for_display(raw_output)
+        parsed_for_display = preserve_submitted_player_action(parsed_for_display, action_text(outbox_dir))
+        validate_chatgpt_blocks(parsed_for_display.blocks)
+        write_text_utf8(outbox_dir / "chatgpt_clean_output.md", public_output(parsed_for_display))
+        write_json(outbox_dir / "chatgpt_blocks.json", {
+            "blocks": parsed_for_display.blocks,
+            "body": parsed_for_display.body,
+            "choices": parsed_for_display.choices,
+            "summary": parsed_for_display.summary,
+            "writeback_missing": True,
+        })
+        raise RuntimeError("actor output missing state_writeback; displayed prose but writeback_missing=true") from exc
     parsed = gate["parsed"]
     parsed = preserve_submitted_player_action(parsed, action_text(outbox_dir))
     validate_chatgpt_blocks(parsed.blocks)
@@ -1114,7 +1130,14 @@ def write_scene_action_warning_turn(
     if not warning:
         return False
     store = MemoryStore()
-    writeback = {"short_term_state": {}, "long_term_memory": {}, "new_open_threads": [], "closed_threads": []}
+    writeback = {
+        "short_term_state": {},
+        "long_term_memory": {},
+        "new_open_threads": [],
+        "closed_threads": [],
+        "gallery_assets": [],
+        "inventory_items": [],
+    }
     blocks = [
         {
             "type": "player_action",
@@ -1451,6 +1474,8 @@ def normalize_light_writeback(writeback: dict) -> dict:
     data.setdefault("long_term_memory", {})
     data.setdefault("new_open_threads", [])
     data.setdefault("closed_threads", [])
+    data.setdefault("gallery_assets", [])
+    data.setdefault("inventory_items", [])
     data.setdefault("next_turn_suggestions", "")
     data.setdefault("summary_for_recent_context", "")
     return data

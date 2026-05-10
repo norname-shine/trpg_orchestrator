@@ -203,7 +203,7 @@ def validate_writeback(data: dict[str, Any]) -> None:
         raise SchemaValidationError("state writeback must be a JSON object")
     validate_tag_list_fields(data)
     _reject_forbidden_progress_fields(data, "state_writeback")
-    for key in ("short_term_state", "long_term_memory", "new_open_threads", "closed_threads"):
+    for key in ("short_term_state", "long_term_memory", "new_open_threads", "closed_threads", "gallery_assets", "inventory_items"):
         if key not in data:
             raise SchemaValidationError(f"state writeback missing key: {key}")
     if not isinstance(data["short_term_state"], dict):
@@ -214,12 +214,20 @@ def validate_writeback(data: dict[str, Any]) -> None:
         raise SchemaValidationError("new_open_threads must be a list")
     if not isinstance(data["closed_threads"], list):
         raise SchemaValidationError("closed_threads must be a list")
+    validate_gallery_assets(data["gallery_assets"])
+    validate_inventory_items(data["inventory_items"])
     if "progress_writeback" in data:
         validate_progress_writeback(data["progress_writeback"])
-    if "gallery_assets" in data:
-        validate_gallery_assets(data["gallery_assets"])
-    if "inventory_items" in data:
-        validate_inventory_items(data["inventory_items"])
+
+
+def validate_actor_output(data: dict[str, Any]) -> None:
+    if not isinstance(data, dict):
+        raise SchemaValidationError("actor output must be a JSON object")
+    for key in ("turn_title", "blocks", "summary", "state_writeback"):
+        if key not in data:
+            raise SchemaValidationError(f"actor output missing key: {key}")
+    validate_chatgpt_blocks(data["blocks"])
+    validate_writeback(data["state_writeback"])
 
 
 def validate_output_requests(data: dict[str, Any]) -> None:

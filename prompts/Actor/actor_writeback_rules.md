@@ -2,14 +2,17 @@
 
 Write only player-visible evidence candidates. `state_writeback` is reviewed before persistence; it is still the actor layer's responsibility to structure visible facts that future turns may need.
 
-- `state_writeback` must always include `short_term_state`, `long_term_memory`, `new_open_threads`, and `closed_threads`.
+- `state_writeback` must always include `short_term_state`, `long_term_memory`, `new_open_threads`, `closed_threads`, `gallery_assets`, and `inventory_items`.
 - If no new open thread exists, output `new_open_threads: []`.
 - If no thread closed, output `closed_threads: []`.
+- If no gallery fact changed, output `gallery_assets: []`.
+- If no inventory item changed, output `inventory_items: []`.
 - Empty evidence objects are allowed only for the two required containers: `short_term_state: {}` and `long_term_memory: {}`.
 - `long_term_memory` may record only facts or changes already visible in this turn's prose.
 - Story progress writeback may record only visible progress evidence from this turn; final node completion or transition is judged after validation.
 - Do not write empty placeholder objects.
 - Do not include scheduling fields, local routing notes, admin diagnostics, forecast data, hidden causes, or future nodes.
+- `blocks` are display-only; `system_check` shows check results only. Durable facts belong in `state_writeback`.
 
 ## Global Gallery Writeback
 

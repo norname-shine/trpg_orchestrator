@@ -97,6 +97,31 @@ def test_output_hash_mismatch_stops_ingest_before_writeback(tmp_path, monkeypatc
     assert FakeStore.wrote_updates is False
 
 
+def test_ingest_marks_writeback_missing_without_completing(tmp_path, monkeypatch):
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    raw_path = outbox_dir / "chatgpt_raw_output.md"
+    write_text_utf8(outbox_dir / "last_player_action.txt", "look")
+    write_text_utf8(raw_path, json.dumps({
+        "turn_title": "Look",
+        "blocks": [
+            {"type": "player_action", "actor_kind": "player", "actor_id": "pc", "avatar_key": "pc", "body": "look"},
+            {"type": "gm_narration", "actor_kind": "gm", "body": "The clearing is quiet."},
+        ],
+        "summary": "Looked around.",
+    }, ensure_ascii=False))
+    write_evidence(outbox_dir)
+    install_ingest_fakes(monkeypatch, outbox_dir)
+
+    with pytest.raises(RuntimeError, match="writeback_missing=true"):
+        cli.cmd_ingest("demo", skip_v4_audit=True)
+
+    assert FakeStore.wrote_updates is False
+    blocks = json.loads((outbox_dir / "chatgpt_blocks.json").read_text(encoding="utf-8"))
+    assert blocks["writeback_missing"] is True
+    assert not (outbox_dir / "state_writeback.json").exists()
+
+
 def test_true_browser_evidence_with_markers_allows_ingest_gate(tmp_path):
     outbox_dir = tmp_path / "outbox"
     outbox_dir.mkdir()

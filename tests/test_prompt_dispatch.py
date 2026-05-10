@@ -147,8 +147,12 @@ def test_build_actor_prompt_uses_min_style_and_turn_title_contract():
     assert "`state_writeback` must always be a JSON object with these required keys" in prompt
     assert "`new_open_threads`: array. Use `[]` if no new open thread was visibly introduced." in prompt
     assert "`closed_threads`: array. Use `[]` if no thread was visibly closed." in prompt
+    assert "`gallery_assets`: array. Use `[]`" in prompt
+    assert "`inventory_items`: array. Use `[]`" in prompt
     assert '"new_open_threads": []' in prompt
     assert '"closed_threads": []' in prompt
+    assert '"gallery_assets": []' in prompt
+    assert '"inventory_items": []' in prompt
     assert "every choice must be an object with id, label, and risk strings, never a plain string" in prompt
     assert '"choices": [' in prompt
     assert '"risk":' in prompt
@@ -157,9 +161,11 @@ def test_build_actor_prompt_uses_min_style_and_turn_title_contract():
 def test_actor_writeback_rules_require_thread_arrays():
     text = read_runtime_text(PROMPTS_DIR / "Actor" / "actor_writeback_rules.md")
 
-    assert "`state_writeback` must always include `short_term_state`, `long_term_memory`, `new_open_threads`, and `closed_threads`." in text
+    assert "`state_writeback` must always include `short_term_state`, `long_term_memory`, `new_open_threads`, `closed_threads`, `gallery_assets`, and `inventory_items`." in text
     assert "output `new_open_threads: []`" in text
     assert "output `closed_threads: []`" in text
+    assert "output `gallery_assets: []`" in text
+    assert "output `inventory_items: []`" in text
 
 
 def test_actor_prompt_contains_global_gallery_and_inventory_writeback_protocol():

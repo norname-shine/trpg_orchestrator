@@ -51,6 +51,7 @@ def test_director_prompt_forbids_continue_turn_type():
     assert "`choice_requirement.choice_level` is a closed enum" in prompt
     assert "Never output `implicit`" in prompt
     assert "`output_requests` module names are closed" in prompt
+    assert "`map`: `none|keep_previous|update_route|update_canvas` (never `update`)" in prompt
     assert "Do not output `story_log`" in prompt
     assert '`orchestration_forecast` is optional' in prompt
     assert '"for_backend_only": true' in prompt

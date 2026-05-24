@@ -313,6 +313,10 @@
           <img id="galleryInspectorImage" alt="资料图像 PNG">
           <b id="galleryInspectorTitle">选择一项资料</b>
           <p id="galleryInspectorDetail">点击左侧资料查看完整说明。</p>
+          <details id="galleryInspectorInventory" class="galleryInspectorInventory" hidden>
+            <summary>状态更新</summary>
+            <div id="galleryInspectorInventoryText" class="inventoryStatusRows" aria-live="polite"></div>
+          </details>
           <span id="galleryInspectorMeta">资料</span>
           <button id="useGalleryAssetBtn" type="button">引用到行动输入</button>
         </aside>
@@ -373,6 +377,6 @@
       </div>
     </div>
   </div>
-  <script src="/app.js?v=22"></script>
+  <script src="/app.js?v=24"></script>
 </body>
 </html>

@@ -145,7 +145,7 @@ def validate_pressure_pack(data: dict[str, Any], expected_campaign_id: str | Non
     _require_object(data, "progress_control")
     validate_output_requests(data["output_requests"])
     if require_payloads:
-        validate_payloads_against_output_requests(data.get("payloads", {}), data["output_requests"])
+        validate_payloads_against_output_requests(data.get("payloads", {}), data["output_requests"], data.get("campaign_id"))
     if "visual_assets" in data and not isinstance(data.get("visual_assets"), list):
         raise SchemaValidationError("visual_assets must be a list")
     if "map_route" in data and not isinstance(data.get("map_route"), dict):
@@ -282,7 +282,11 @@ def validate_orchestration_forecast(value: Any) -> None:
             raise SchemaValidationError(f"orchestration_forecast.hotload_next_turn.{key} must be a list")
 
 
-def validate_payloads_against_output_requests(payloads: dict[str, Any], output_requests: dict[str, Any]) -> None:
+def validate_payloads_against_output_requests(
+    payloads: dict[str, Any],
+    output_requests: dict[str, Any],
+    campaign_id: str | None = None,
+) -> None:
     if payloads in (None, {}):
         return
     if not isinstance(payloads, dict):
@@ -300,8 +304,12 @@ def validate_payloads_against_output_requests(payloads: dict[str, Any], output_r
         raise SchemaValidationError("payloads.map_route must be non-empty for update_route")
     if map_mode == "update_canvas" and not (_valid_map_canvas(map_canvas) or _valid_map_route(map_route)):
         raise SchemaValidationError("payloads.map_canvas or payloads.map_route must be non-empty for update_canvas")
+    if map_mode == "update_canvas" and _has_payload(map_canvas):
+        validate_map_canvas_payload(map_canvas)
 
     _validate_payload_mode(output_requests, payloads, "visual_assets", "visual_assets", list)
+    if _has_payload(payloads.get("visual_assets")):
+        validate_visual_assets_payload(payloads["visual_assets"], campaign_id)
     _validate_payload_mode(output_requests, payloads, "character_card", "character_card_update", dict)
     _validate_payload_mode(output_requests, payloads, "dossier", "dossier_updates", list)
     _validate_payload_mode(output_requests, payloads, "dice_or_check", "dice_check_request", dict)
@@ -351,6 +359,154 @@ def validate_canvas_jobs(jobs: Any) -> None:
         text = " ".join(str(job.get(key) or "").lower() for key in ("job_id", "input_ref", "asset_key"))
         if "placeholder" in text or "todo" in text or "tbd" in text:
             raise SchemaValidationError(f"{prefix} placeholder job forbidden")
+        if "canvas_spec" in job:
+            validate_canvas_spec(job.get("canvas_spec"), prefix)
+
+
+def validate_visual_assets_payload(assets: Any, campaign_id: str | None = None) -> None:
+    if not isinstance(assets, list):
+        raise SchemaValidationError("payloads.visual_assets must be a list")
+    seen_ids: set[str] = set()
+    for index, asset in enumerate(assets, start=1):
+        if not isinstance(asset, dict):
+            raise SchemaValidationError(f"payloads.visual_assets[{index}] must be an object")
+        prefix = f"payloads.visual_assets[{index}]"
+        for key in ("id", "title", "kind", "gallery_category", "display_zone", "detail", "canvas_spec"):
+            if key == "canvas_spec":
+                validate_canvas_spec(asset.get(key), prefix)
+            else:
+                _require_nonempty_string(asset, key, prefix)
+        asset_id = str(asset.get("id") or "").strip()
+        if asset_id in seen_ids:
+            raise SchemaValidationError(f"duplicate payloads.visual_assets id: {asset_id}")
+        seen_ids.add(asset_id)
+        validate_visual_asset_gallery_category(asset.get("gallery_category"), campaign_id, prefix)
+        if "gallery_categories" in asset:
+            _require_string_list(asset.get("gallery_categories"), f"{prefix}.gallery_categories")
+            categories = [str(item).strip() for item in asset.get("gallery_categories", [])]
+            if str(asset.get("gallery_category") or "").strip() not in categories:
+                raise SchemaValidationError(f"{prefix}.gallery_categories must include gallery_category")
+            validate_visual_asset_gallery_categories(categories, campaign_id, prefix)
+
+
+def validate_map_canvas_payload(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise SchemaValidationError("payloads.map_canvas must be an object")
+    if _is_map_asset_protocol(value):
+        validate_map_asset_protocol(value)
+        return
+    if value.get("render_token") != "map_canvas.v1":
+        raise SchemaValidationError("payloads.map_canvas.render_token must be map_canvas.v1")
+    if not any(_has_payload(value.get(key)) for key in ("ascii", "points", "routes", "legend")):
+        raise SchemaValidationError("payloads.map_canvas must include ascii, points, routes, or legend drawing data")
+    if "ascii" in value and not (
+        isinstance(value.get("ascii"), list) and all(isinstance(row, str) for row in value.get("ascii", []))
+    ):
+        raise SchemaValidationError("payloads.map_canvas.ascii must be a list of strings")
+    for key in ("points", "routes", "hazards"):
+        if key in value and not isinstance(value.get(key), list):
+            raise SchemaValidationError(f"payloads.map_canvas.{key} must be a list")
+    if "legend" in value and not isinstance(value.get("legend"), dict):
+        raise SchemaValidationError("payloads.map_canvas.legend must be an object")
+
+
+def _is_map_asset_protocol(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("schema") == "trpg.map_asset_protocol.v1"
+
+
+def validate_map_asset_protocol(value: dict[str, Any]) -> None:
+    if not isinstance(value.get("layers"), list) or not value.get("layers"):
+        raise SchemaValidationError("payloads.map_canvas.layers must be a non-empty list")
+    allowed_layers = {"area", "route", "site", "overlay"}
+    for index, layer in enumerate(value.get("layers", []), start=1):
+        if not isinstance(layer, dict):
+            raise SchemaValidationError(f"payloads.map_canvas.layers[{index}] must be an object")
+        layer_type = str(layer.get("type") or "")
+        if layer_type not in allowed_layers:
+            raise SchemaValidationError(f"payloads.map_canvas.layers[{index}] invalid type: {layer_type}")
+        if not isinstance(layer.get("features"), list):
+            raise SchemaValidationError(f"payloads.map_canvas.layers[{index}].features must be a list")
+
+
+def validate_visual_asset_gallery_category(value: Any, campaign_id: str | None, prefix: str) -> None:
+    category = str(value or "").strip()
+    if not campaign_id:
+        return
+    from .services.asset_rules import gallery_category_ids
+
+    allowed = {str(item).strip() for item in gallery_category_ids(campaign_id)}
+    if category not in allowed:
+        raise SchemaValidationError(f"{prefix}.gallery_category is not a registered campaign filter id: {category or '<empty>'}")
+
+
+def validate_visual_asset_gallery_categories(categories: list[str], campaign_id: str | None, prefix: str) -> None:
+    if not campaign_id:
+        return
+    from .services.asset_rules import gallery_category_ids
+
+    allowed = {str(item).strip() for item in gallery_category_ids(campaign_id)}
+    seen: set[str] = set()
+    for category in categories:
+        if category not in allowed:
+            raise SchemaValidationError(f"{prefix}.gallery_categories contains unregistered campaign filter id: {category or '<empty>'}")
+        if category in seen:
+            raise SchemaValidationError(f"{prefix}.gallery_categories contains duplicate id: {category}")
+        seen.add(category)
+
+
+def validate_canvas_spec(value: Any, prefix: str) -> None:
+    if not isinstance(value, dict):
+        raise SchemaValidationError(f"{prefix}.canvas_spec must be an object")
+    forbidden = {"js", "javascript", "script", "function", "canvas_command", "draw_commands", "raw_code"}
+    blocked = sorted(key for key in value if str(key).strip().lower() in forbidden)
+    if blocked:
+        raise SchemaValidationError(f"{prefix}.canvas_spec forbidden executable fields: {', '.join(blocked)}")
+    allowed = {
+        "schema",
+        "archetype",
+        "silhouette",
+        "materials",
+        "material",
+        "palette",
+        "parts",
+        "state_effects",
+        "state_tags",
+        "marks",
+        "markers",
+        "features",
+        "role_archetype",
+        "body_type",
+        "shape",
+        "scene",
+        "area",
+        "biome",
+        "lighting",
+        "mood",
+        "subjects",
+        "elements",
+        "surroundings",
+        "style",
+        "atmosphere",
+        "source_text",
+        "id",
+        "title",
+        "genre",
+        "scale",
+        "layers",
+        "description",
+    }
+    unknown = sorted(key for key in value if str(key).strip() not in allowed)
+    if unknown:
+        raise SchemaValidationError(f"{prefix}.canvas_spec unknown fields: {', '.join(unknown)}")
+    if "materials" in value and not isinstance(value.get("materials"), list):
+        raise SchemaValidationError(f"{prefix}.canvas_spec.materials must be a list")
+    for key in ("parts", "state_effects", "state_tags", "marks", "markers", "features", "subjects", "elements", "surroundings"):
+        if key in value and not isinstance(value.get(key), list):
+            raise SchemaValidationError(f"{prefix}.canvas_spec.{key} must be a list")
+    if "palette" in value and not isinstance(value.get("palette"), dict):
+        raise SchemaValidationError(f"{prefix}.canvas_spec.palette must be an object")
+    if "layers" in value and not isinstance(value.get("layers"), list):
+        raise SchemaValidationError(f"{prefix}.canvas_spec.layers must be a list")
 
 
 def validate_progress_writeback(data: dict[str, Any]) -> None:
@@ -458,8 +614,22 @@ def normalize_pressure_pack_compat(data: dict[str, Any]) -> dict[str, Any]:
         visual_request = output_requests.get("visual_assets", {})
         if isinstance(map_request, dict) and map_request.get("mode") in {"update_route", "update_canvas"} and _has_payload(normalized.get("map_route")):
             payloads.setdefault("map_route", normalized.get("map_route"))
+        if isinstance(map_request, dict) and map_request.get("mode") in {"update_route", "update_canvas"}:
+            map_canvas = payloads.get("map_canvas")
+            if isinstance(map_canvas, dict) and not _valid_map_canvas(map_canvas) and _valid_map_route(map_canvas):
+                payloads.setdefault("map_route", {
+                    "title": map_canvas.get("title") or map_canvas.get("label") or "",
+                    "nodes": map_canvas.get("nodes") if isinstance(map_canvas.get("nodes"), list) else [],
+                    "edges": map_canvas.get("edges") if isinstance(map_canvas.get("edges"), list) else [],
+                    "markers": map_canvas.get("markers") if isinstance(map_canvas.get("markers"), list) else [],
+                })
+                payloads.pop("map_canvas", None)
         if isinstance(visual_request, dict) and visual_request.get("mode") in {"create", "update"} and _has_payload(normalized.get("visual_assets")):
             payloads.setdefault("visual_assets", normalized.get("visual_assets"))
+        if isinstance(visual_request, dict) and visual_request.get("mode") in {"create", "update"}:
+            visual_assets = payloads.get("visual_assets")
+            if isinstance(visual_assets, dict) and isinstance(visual_assets.get("assets"), list):
+                payloads["visual_assets"] = visual_assets["assets"]
     normalized["payloads"] = payloads
     return normalized
 
@@ -484,8 +654,11 @@ def validate_gallery_assets(assets: Any) -> None:
         if not isinstance(asset, dict):
             raise SchemaValidationError(f"state_writeback.gallery_assets[{index}] must be an object")
         prefix = f"state_writeback.gallery_assets[{index}]"
-        for key in ("id", "type", "title"):
+        for key in ("id", "type", "title", "gallery_category"):
             _require_nonempty_string(asset, key, prefix)
+        asset_type = str(asset.get("type") or "").strip().lower()
+        if asset_type in {"item_record", "inventory_record"}:
+            raise SchemaValidationError(f"{prefix}.type must not be {asset_type}; use item or prop with gallery_category")
         if "asset_tags" in asset:
             _require_string_list(asset.get("asset_tags"), f"{prefix}.asset_tags")
         asset_id = str(asset.get("id") or "").strip()
@@ -654,7 +827,14 @@ def _valid_map_route(value: Any) -> bool:
 
 def _valid_map_canvas(value: Any) -> bool:
     return isinstance(value, dict) and (
-        bool(value.get("ascii")) or bool(value.get("points")) or bool(value.get("routes")) or bool(value.get("hazards"))
+        _is_map_asset_protocol(value)
+        or
+        bool(value.get("render_token"))
+        or bool(value.get("ascii"))
+        or bool(value.get("points"))
+        or bool(value.get("routes"))
+        or bool(value.get("hazards"))
+        or bool(value.get("legend"))
     )
 
 

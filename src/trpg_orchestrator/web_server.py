@@ -31,7 +31,7 @@ from .output_parser import parse_chatgpt_output, public_output, visible_prose_ch
 from .prompt_builder import build_audit_user_prompt, read_prompt
 from .deepseek_client import DeepSeekClient
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_writeback
-from .services.asset_rules import asset_contract_payload
+from .services.asset_rules import asset_contract_payload, validate_custom_gallery_categories
 from .services.raw_gallery_store import RAW_GALLERY_SCHEMA
 from .services.raw_gallery_store import gallery_response as raw_gallery_response
 from .services.raw_gallery_store import save_gallery_raw
@@ -623,6 +623,7 @@ CORE_GALLERY_CATEGORIES = [
 ]
 CORE_GALLERY_CATEGORY_IDS = {row["id"] for row in CORE_GALLERY_CATEGORIES}
 MAX_CAMPAIGN_GALLERY_CATEGORIES = 3
+GALLERY_RAW_SCENE_RENDERER_VERSION = "gallery_scene_canvas.v2"
 
 ACTOR_ROLES = {"player", "companion", "master", "npc", "key_character", "monster"}
 GALLERY_VISIBLE_KINDS = {
@@ -1524,15 +1525,102 @@ def module_payload_response(module_name: str, campaign_id: str = "", cursor: str
     return {"ok": False, "error": f"unknown module: {module_name}"}
 
 
+def cached_gallery_raw_subject_current(assets: list[dict[str, Any]], subject_key: str, renderer_version: str = "") -> bool:
+    for asset in assets:
+        if not isinstance(asset, dict) or asset.get("exists") is False or not asset.get("url"):
+            continue
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        cached_subject = str(metadata.get("subject_key") or asset.get("subject_key") or "").strip()
+        if cached_subject != subject_key:
+            continue
+        if not renderer_version:
+            return True
+        cached_renderer = str(metadata.get("renderer_version") or asset.get("renderer_version") or "").strip()
+        return cached_renderer == renderer_version
+    return False
+
+
+def gallery_raw_canvas_job_kind(asset: dict[str, Any]) -> str:
+    asset_type = str(asset.get("type") or "").strip().lower()
+    category = str(asset.get("gallery_category") or "").strip().lower()
+    canvas_spec = asset.get("canvas_spec") if isinstance(asset.get("canvas_spec"), dict) else {}
+    schema = str(canvas_spec.get("schema") or "").strip().lower()
+    if category == "cg" or asset_type == "cg":
+        return "cg"
+    if category == "map" or asset_type in {"map", "location", "location_record"} or "map_canvas" in schema or "scene_canvas" in schema:
+        return "map"
+    if category == "character" or asset_type in {"character", "npc", "monster"} or "character_canvas" in schema or "portrait" in schema:
+        return "monster_portrait" if asset_type == "monster" else "character_portrait"
+    if category == "item" or asset_type in {"item", "equipment", "consumable"}:
+        return "item"
+    return "prop"
+
+
+def gallery_raw_canvas_renderer_version(asset: dict[str, Any], kind: str) -> str:
+    canvas_spec = asset.get("canvas_spec") if isinstance(asset.get("canvas_spec"), dict) else {}
+    schema = str(canvas_spec.get("schema") or "").strip().lower()
+    if kind == "map" and schema == "trpg.map_asset_protocol.v1":
+        return "map_asset_protocol.v1"
+    if kind == "map" and schema == "scene_canvas_spec.v1":
+        return GALLERY_RAW_SCENE_RENDERER_VERSION
+    return ""
+
+
+def gallery_raw_canvas_jobs(campaign_id: str, assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    response = raw_gallery_response(campaign_id)
+    raw = response.get("raw") if isinstance(response.get("raw"), dict) else {}
+    rows = raw.get("assets") if isinstance(raw.get("assets"), list) else []
+    jobs: list[dict[str, Any]] = []
+    for asset in rows:
+        if not isinstance(asset, dict):
+            continue
+        if str(asset.get("display_zone") or "gallery").strip().lower() == "hidden":
+            continue
+        asset_type = str(asset.get("type") or "").strip().lower()
+        category = str(asset.get("gallery_category") or "").strip().lower()
+        if asset_type in {"character", "npc", "monster", "portrait", "cg"} or category in {"character", "cg"}:
+            continue
+        canvas_spec = asset.get("canvas_spec") if isinstance(asset.get("canvas_spec"), dict) else {}
+        if not canvas_spec:
+            continue
+        asset_id = safe_segment(str(asset.get("id") or asset.get("title") or "gallery_asset"))
+        subject_key = f"gallery:{asset_id}"
+        kind = gallery_raw_canvas_job_kind(asset)
+        renderer_version = gallery_raw_canvas_renderer_version(asset, kind)
+        if cached_gallery_raw_subject_current(assets, subject_key, renderer_version):
+            continue
+        renderer = "map_asset_protocol" if renderer_version == "map_asset_protocol.v1" else "pixel_map" if kind == "map" else "pixel_item"
+        title = str(asset.get("title") or asset_id).strip()
+        jobs.append({
+            "job_id": f"gallery_{asset_id}",
+            "source": "gallery_raw",
+            "kind": kind,
+            "renderer": renderer,
+            "trigger": "system_required",
+            "input_ref": f"extensions.gallery_raw.assets.{asset_id}.canvas_spec",
+            "asset_key": f"gallery_{asset_id}",
+            "asset_id": asset_id,
+            "subject_key": subject_key,
+            "gallery_category": str(asset.get("gallery_category") or kind).strip(),
+            "renderer_version": renderer_version,
+            "cache_policy": "stable",
+            "campaign_id": campaign_id,
+            "asset_seed": campaign_asset_seed(campaign_id),
+            "title": title,
+            "detail": str(asset.get("detail") or asset.get("description") or ""),
+            "canvas_spec": canvas_spec,
+            "visual_prompt": {"canvas_spec": canvas_spec},
+        })
+    return jobs
+
+
 def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, Any], assets: list[dict[str, Any]]) -> dict[str, Any]:
     root = CAMPAIGNS_DIR / safe_segment(campaign_id)
     profile_path = root / "campaign_profile.json"
     profile = read_json(profile_path) if profile_path.exists() else {}
     visual_contracts = read_json(root / CONTRACT_FILE) if (root / CONTRACT_FILE).exists() else {}
     initial_assets = profile.get("initial_assets") if isinstance(profile.get("initial_assets"), dict) else {}
-    if not initial_assets:
-        return {}
-    initial_assets = sanitize_initial_assets(initial_assets)
+    initial_assets = sanitize_initial_assets(initial_assets) if initial_assets else {}
     initial_map_canvas = initial_assets.get("initial_map_canvas") if isinstance(initial_assets.get("initial_map_canvas"), dict) else {}
     initial_cg = initial_assets.get("initial_cg") if isinstance(initial_assets.get("initial_cg"), dict) else {}
     route = initial_map_canvas.get("map_route") if isinstance(initial_map_canvas.get("map_route"), dict) else {}
@@ -1645,6 +1733,10 @@ def campaign_initialization_frontend_payload(campaign_id: str, state: dict[str, 
         })
         result["cg_contract"] = cg_contract
     if jobs:
+        result["canvas_jobs"] = jobs
+    gallery_jobs = gallery_raw_canvas_jobs(campaign_id, assets)
+    if gallery_jobs:
+        jobs.extend(gallery_jobs)
         result["canvas_jobs"] = jobs
     return result
 
@@ -2107,7 +2199,8 @@ def frontend_map_panel(campaign_id: str, scene: dict[str, Any], output: dict[str
             "payload_ref": "",
             "reason": "no current campaign map asset",
         }
-    if not isinstance(route.get("nodes"), list) or not route.get("nodes"):
+    has_canvas_payload = bool(canvas.get("ascii") or canvas.get("points") or _is_map_asset_protocol_canvas(canvas))
+    if (not isinstance(route.get("nodes"), list) or not route.get("nodes")) and not has_canvas_payload:
         return {
             "mode": "keep_previous",
             "state": "empty" if not latest else "cached",
@@ -2120,7 +2213,7 @@ def frontend_map_panel(campaign_id: str, scene: dict[str, Any], output: dict[str
         "latest_map": {
             "asset_key": latest.get("key") or f"{campaign_id}:{campaign_asset_seed(campaign_id)}:map:{safe_segment(scene.get('location') or campaign_id)}:route:v17",
             "url": latest.get("url", ""),
-            "source": "map_canvas" if canvas.get("points") else "cached_or_generated",
+            "source": "map_canvas" if has_canvas_payload else "cached_or_generated",
             "ascii_grid": "\n".join(canvas.get("ascii", [])) if isinstance(canvas.get("ascii"), list) else "",
             "generated_at_turn": scene.get("turn_index", ""),
             "title": route.get("title") or scene.get("location") or "当前区域地图",
@@ -2178,7 +2271,12 @@ def frontend_modules(output: dict[str, Any], story_progress: dict[str, Any], map
         "map_panel": {
             "mode": map_mode,
             "state": "ready" if map_panel.get("latest_map") else "cached",
-            "update_requested": map_mode in {"update_route", "update_canvas"} and bool(map_panel.get("latest_map", {}).get("map_route", {}).get("nodes")),
+            "update_requested": map_mode in {"update_route", "update_canvas"} and bool(
+                map_panel.get("latest_map", {}).get("map_route", {}).get("nodes")
+                or map_panel.get("latest_map", {}).get("map_canvas", {}).get("ascii")
+                or map_panel.get("latest_map", {}).get("map_canvas", {}).get("points")
+                or _is_map_asset_protocol_canvas(map_panel.get("latest_map", {}).get("map_canvas", {}))
+            ),
             "payload": map_panel.get("latest_map", {}),
             "payload_ref": map_panel.get("latest_map", {}).get("url") or "",
             "reason": map_request.get("reason", ""),
@@ -2206,7 +2304,18 @@ def normalize_map_canvas(raw: Any, route: dict[str, Any], scene: dict[str, Any])
         result["legend"] = {**base["legend"], **(raw.get("legend") if isinstance(raw.get("legend"), dict) else {})}
         result["ascii"] = normalize_ascii_grid(result.get("ascii"), result["canvas"]["grid_cols"], result["canvas"]["grid_rows"])
         return result
+    if isinstance(raw, dict) and _is_map_asset_protocol_canvas(raw):
+        return raw
     return map_canvas_from_route(route, scene, base)
+
+
+def _is_map_asset_protocol_canvas(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("schema") == "trpg.map_asset_protocol.v1"
+        and isinstance(value.get("layers"), list)
+        and bool(value.get("layers"))
+    )
 
 
 def normalize_ascii_grid(value: Any, cols: int, rows: int) -> list[str]:
@@ -2583,7 +2692,7 @@ def normalize_frontend_tags(value: Any, fallback: list[str]) -> list[str]:
     labels = []
     for item in rows:
         if isinstance(item, str) and item.strip():
-            labels.append(item.strip())
+            labels.append(stringify_brief(item.strip(), 80))
     return labels[:8]
 
 
@@ -2831,14 +2940,15 @@ def normalize_frontend_gallery_kind(kind: Any) -> str:
 
 def normalize_campaign_category_row(row: Any, source: str = "campaign_taxonomy") -> dict[str, Any]:
     if isinstance(row, str):
-        category_id = safe_segment(row.lower())
+        category_id = safe_segment(row)
         label = row
     elif isinstance(row, dict):
-        category_id = safe_segment(str(row.get("id") or row.get("key") or row.get("name") or "").lower())
+        category_id = safe_segment(str(row.get("id") or row.get("key") or row.get("name") or ""))
         label = str(row.get("label") or row.get("title") or category_id).strip()
     else:
         return {}
-    if not category_id or category_id in {"all", "hidden", "player", "companion", "companion_portrait"}:
+    category_key = category_id.casefold()
+    if not category_id or category_key in {"all", "hidden", "player", "companion", "companion_portrait"}:
         return {}
     category_aliases = {
         "npc": "character",
@@ -2851,7 +2961,7 @@ def normalize_campaign_category_row(row: Any, source: str = "campaign_taxonomy")
         "anomaly": "prop",
         "quest": "prop",
     }
-    category_id = category_aliases.get(category_id, category_id)
+    category_id = category_aliases.get(category_key, category_id)
     result = {"id": category_id, "label": label or category_id, "source": source}
     if isinstance(row, dict) and row.get("locked") is not None:
         result["locked"] = bool(row.get("locked"))
@@ -4082,13 +4192,16 @@ def build_campaign_director_setup_prompt(config: dict[str, Any]) -> str:
         "If companion_config.companion_enabled is true and companion_mode is auto, create a concrete companion_patch with a usable name, role, personality, and relationship_to_protagonist.",
         "If user_prompt is auto, generate campaign premise, background, opening situation, main conflict, early goals, and story seeds from the selected template and title.",
         "Return campaign_taxonomy.asset_categories exactly as prop/item/character/map/cg. Do not add clue, document, npc, scene, monster, anomaly, or quest as fixed gallery filters.",
-        "Return campaign_taxonomy.campaign_categories as 0-3 story-specific custom gallery folders. Never output 4 or more.",
+        "Return campaign_taxonomy.campaign_categories as 0-3 story-specific custom gallery folders. Never output 4 or more. Each custom folder must use the same field shape as fixed filters: id, label, source=campaign. The id is the stable local key and must be reused exactly later; do not rely on backend fallback or semantic remapping.",
+        "自定义资料夹筛选必须是少量、跨回合复用的本团专属资料维度；不是地点、章节、角色、物品、道具、地图或CG的同义词。没有强需求就返回 []。",
+        "不得把地图区域、地点名称、章节阶段或场景名作为自定义资料夹筛选；这类内容应进入固定 map 筛选或 map/location 记忆。不得输出等同于固定筛选的分类，例如角色资料、物品资料、道具资料、地图区域、CG集。",
+        "`item` 是玩家持有、可装备、可消耗或可纳入物品栏追踪的物；`prop` 是场景线索、机关器物、环境物、不可携带物或尚未归属给玩家的物。",
         "Fixed gallery filters are only asset entry points, not story semantics. Do not force campaign-specific entities into a fixed semantic bucket; put campaign-specific semantics in custom_libraries.",
         "Return character_attribute_schema if this campaign should rename the three/six attribute fields.",
         "Return render_rules for player_portrait, companion_portrait, character_portrait, map, item, prop, and cg.",
         "Return initial_assets as an object with exactly these four required top-level fields: initial_map_canvas, initial_cg, initial_items, item_canvas_rules. initial_items must be present even when empty: []; item_canvas_rules must be present even when empty: {}.",
         "Under initial_assets.initial_map_canvas, return map_route.nodes and canvas_draw_instructions. Under initial_assets.initial_cg, return generation_instruction and cg_prompt. Do not use legacy initial_assets keys: map_generation_instruction, map_canvas, map_route, cg_generation_instruction, cg_prompt, items, props, or canvas_rules.",
-        "Return gallery_raw as the director-authored gallery source with schema trpg.gallery_raw.v2, campaign_id as an empty string, updated_turn, and a non-empty assets array. gallery_raw.assets must contain at least one business asset card even before any PNG exists. Recommended startup cards are player_main character, opening_map map, opening_cg cg, and one initial item/prop; if no concrete item exists, still return at least player/map/cg cards. Each asset must include non-empty string id/type/title. Do not rely on backend inference for category, detail, display_zone, or payload. Do not use gallery_updates or visual_assets as gallery_raw asset storage fields; visual_assets is only for image or Canvas media requests and is not gallery_raw.",
+        "Return gallery_raw as the director-authored gallery source with schema trpg.gallery_raw.v2, campaign_id as an empty string, updated_turn, and a non-empty assets array. gallery_raw.assets must contain at least one business asset card even before any PNG exists. Recommended startup cards are opening_map map, opening_cg cg, and one initial item/prop; if no concrete item exists, still return at least map/cg cards. Do not create gallery_raw cards for the current player or current companion/sub-player; they belong only in the left character cards. Each asset must include non-empty string id/type/title. Do not rely on backend inference for category, detail, display_zone, or payload. Do not use gallery_updates or visual_assets as gallery_raw asset storage fields; visual_assets is only for image or Canvas media requests and is not gallery_raw.",
         "All tag/chip/badge fields must be string arrays only. Use conditions like [\"失忆\"] and badges like [\"主角\", \"医疗相关\"]. Do not output tag objects with id/label/icon/description.",
         "Return visual_contract_candidates as campaign-bound visual intent using only these entity_type values: player, companion, character, map, cg, item, prop. The protagonist must use entity_type=player. Companions must use entity_type=companion. NPCs, monsters, enemies, and key characters must use entity_type=character with actor_role=npc, actor_role=monster, or actor_role=key_character. Maps and locations use entity_type=map. Opening or story images use entity_type=cg. Items use entity_type=item or entity_type=prop.",
         "Do not output visual_contract_candidates with entity_type=player_character, npc, scene, or location. For NPC portraits use render_intent.primary=character_portrait and actor_role=npc; never use npc_portrait.",
@@ -4211,15 +4324,17 @@ def normalize_campaign_taxonomy(value: Any | None = None) -> dict[str, Any]:
 
 
 def normalize_campaign_gallery_categories(value: Any, *, fail_on_too_many: bool = False) -> list[dict[str, Any]]:
-    rows = normalize_taxonomy_rows(value, limit=MAX_CAMPAIGN_GALLERY_CATEGORIES + 1)
+    rows: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        row = normalize_campaign_category_row(item, "campaign_taxonomy")
+        if row:
+            rows.append(row)
     filtered: list[dict[str, Any]] = []
     for row in rows:
         category_id = str(row.get("id") or "")
-        normalized = normalize_campaign_category_row({"id": category_id, "label": row.get("label", "")}, "campaign_taxonomy")
-        category_id = str(normalized.get("id") or category_id)
-        if not category_id or category_id in CORE_GALLERY_CATEGORY_IDS:
+        if not category_id or category_id.casefold() in CORE_GALLERY_CATEGORY_IDS:
             continue
-        filtered.append({**row, "id": category_id, "label": row.get("label") or category_id})
+        filtered.append({"id": category_id, "label": row.get("label") or category_id, "source": "campaign"})
     if len(filtered) > MAX_CAMPAIGN_GALLERY_CATEGORIES:
         if fail_on_too_many:
             raise RuntimeError("campaign_categories must contain 0-3 custom gallery folders")
@@ -5000,6 +5115,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     initial_cg = initial_assets.get("initial_cg", {}) if isinstance(initial_assets.get("initial_cg"), dict) else {}
     gallery_raw = sanitize_setup_gallery_raw(v4_setup.get("gallery_raw"))
     campaign_taxonomy = normalize_campaign_taxonomy(v4_setup.get("campaign_taxonomy") if isinstance(v4_setup, dict) else {})
+    custom_gallery_categories, custom_gallery_warnings = validate_custom_gallery_categories(campaign_taxonomy.get("campaign_categories", []))
     mode = next((row for row in ai_mode_options() if row["id"] == model_config.get("model_mode")), ai_mode_options()[0])
     profile.update({
         "title": config.get("name", profile.get("title", "")),
@@ -5083,6 +5199,7 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     direction["initial_map_canvas"] = initial_map_canvas
     direction["render_rules"] = render_rules
     direction["campaign_taxonomy"] = campaign_taxonomy
+    direction["asset_presentation"] = {"custom_gallery_categories": custom_gallery_categories}
 
     style.setdefault("prose_style", []).extend(routing.get("actor_rules", []))
     image.setdefault("image_generation_rules", []).append("Generate one 2304x2304 square canvas containing a 16:9 horizontal panel and a 9:16 vertical panel; use only original descriptive style from campaign_taxonomy.")
@@ -5253,6 +5370,10 @@ def apply_smart_campaign_config(root: Path, config: dict[str, Any]) -> None:
     write_json(companion_path, companions)
     write_json(player_path, player)
     write_json(root / "equipment_history.json", equipment)
+    asset_presentation = {"custom_gallery_categories": custom_gallery_categories}
+    if custom_gallery_warnings:
+        asset_presentation["warnings"] = custom_gallery_warnings
+    write_json(root / "asset_presentation.json", asset_presentation)
     write_json(blueprint_path, blueprint)
     write_json(progress_path, progress)
 
@@ -6052,11 +6173,11 @@ def frontend_pipeline_status(campaign_id: str, output: dict[str, Any], job: dict
     if parsed_blocks and output.get("stage") == "parsed" and (not baseline or (fresh(blocks_mtime) and fresh(writeback_mtime))):
         return {"stage": "synced", "percent": 100, "label": "已同步到页面"}
     if fresh(pressure_mtime) and audit_mtime >= pressure_mtime:
-        return {"stage": "audited", "percent": 80, "label": "审核层完成"}
+        return {"stage": "audited", "percent": 92, "label": "状态审核完成，正在热更新"}
     if fresh(pressure_mtime) and blocks_mtime >= pressure_mtime and writeback_mtime >= pressure_mtime:
-        return {"stage": "actor_parsed", "percent": 70, "label": "GPT 层完成"}
+        return {"stage": "actor_parsed", "percent": 80, "label": "演员层完成，正在解析输出"}
     if fresh(pressure_mtime):
-        return {"stage": "director_ready", "percent": 30, "label": "V4 层完成"}
+        return {"stage": "director_ready", "percent": 100 if job.get("stage") == "director_ready" else 30, "label": "导演层完成"}
     return {"stage": "idle", "percent": 0, "label": "待机"}
 
 

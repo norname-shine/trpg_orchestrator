@@ -122,6 +122,21 @@ def test_custom_gallery_categories_are_limited_and_do_not_map_or_shadow_core() -
     assert any("at most 3" in warning for warning in warnings)
 
 
+def test_custom_gallery_categories_preserve_initialization_ids() -> None:
+    rows, warnings = validate_custom_gallery_categories([
+        {"id": "线索档案", "label": "线索档案", "source": "campaign"},
+        {"id": "势力档案", "label": "势力档案", "source": "campaign"},
+        {"id": "异常记录", "label": "异常记录", "source": "campaign"},
+    ])
+
+    assert warnings == []
+    assert rows == [
+        {"id": "线索档案", "label": "线索档案", "source": "campaign"},
+        {"id": "势力档案", "label": "势力档案", "source": "campaign"},
+        {"id": "异常记录", "label": "异常记录", "source": "campaign"},
+    ]
+
+
 def test_normalizer_success_path_for_character_portrait(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path)
 
@@ -143,6 +158,29 @@ def test_normalizer_success_path_for_character_portrait(tmp_path: Path, monkeypa
     assert normalized["asset_use"] == "portrait"
     assert normalized["gallery_category"] == "character"
     assert normalized["actor_role"] == "npc"
+
+
+def test_normalizer_allows_hidden_player_and_companion_portraits(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path)
+
+    for role in ("player", "companion"):
+        result = normalize_regular_asset({
+            "kind": f"{role}_portrait",
+            "id": f"{role}_avatar",
+            "title": role,
+            "gallery_category": "hidden",
+            "asset_use": "portrait",
+            "actor_role": role,
+            "certainty": "confirmed",
+            "display_zone": "hidden",
+            "cache_policy": "stable",
+        }, "campaign_test")
+
+        assert result["ok"] is True
+        normalized = result["normalized"]
+        assert normalized["gallery_category"] == "hidden"
+        assert normalized["display_zone"] == "hidden"
+        assert normalized["actor_role"] == role
 
 
 def test_custom_gallery_category_must_be_registered_before_use(tmp_path: Path, monkeypatch) -> None:
@@ -174,6 +212,34 @@ def test_custom_gallery_category_must_be_registered_before_use(tmp_path: Path, m
     succeeded = normalize_regular_asset(payload, "campaign_test")
     assert succeeded["ok"] is True
     assert succeeded["normalized"]["gallery_category"] == "monster"
+
+
+def test_unicode_custom_gallery_category_must_be_registered_before_use(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path)
+    payload = {
+        "kind": "clue_archive",
+        "id": "moon_tree_mark",
+        "title": "月树刻痕",
+        "gallery_category": "线索档案",
+        "asset_use": "prop",
+        "certainty": "confirmed",
+        "display_zone": "gallery",
+        "cache_policy": "stable",
+    }
+
+    failed = normalize_regular_asset(payload, "campaign_test")
+    assert failed["ok"] is False
+
+    root = tmp_path / "campaign_test"
+    root.mkdir(parents=True, exist_ok=True)
+    write_json(root / "asset_presentation.json", {
+        "custom_gallery_categories": [
+            {"id": "线索档案", "label": "线索档案", "source": "campaign"},
+        ],
+    })
+    succeeded = normalize_regular_asset(payload, "campaign_test")
+    assert succeeded["ok"] is True
+    assert succeeded["normalized"]["gallery_category"] == "线索档案"
 
 
 def test_invalid_gallery_category_scene_is_invalid_not_missing(tmp_path: Path, monkeypatch) -> None:

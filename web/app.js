@@ -75,6 +75,8 @@ const state = {
     publicThink: [],
     publicNote: "",
     stage: "",
+    phase: "",
+    phaseStartedAt: 0,
     needsHumanVerification: false,
     completing: false,
     pendingStoryOutput: null,
@@ -206,8 +208,9 @@ function currentStoryState() {
 const $ = (id) => document.getElementById(id);
 const ASSET_GENERATOR_VERSION = 19;
 const PORTRAIT_SPEC_VERSION = "story_linked_canvas_portrait.v1";
-const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v18";
-const PREVIOUS_DRAG_PANEL_STORAGE_KEYS = ["trpg.dragPanels.layout2.v17"];
+const GALLERY_SCENE_CANVAS_RENDERER_VERSION = "gallery_scene_canvas.v2";
+const DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels.layout2.v19";
+const PREVIOUS_DRAG_PANEL_STORAGE_KEYS = ["trpg.dragPanels.layout2.v18", "trpg.dragPanels.layout2.v17"];
 const LEGACY_DRAG_PANEL_STORAGE_KEY = "trpg.dragPanels";
 const FALLBACK_ASSET_CONTRACT = {
   core_gallery_categories: [
@@ -382,12 +385,12 @@ function initDraggablePanels() {
   [
     { id: "task", selector: ".taskPanel", handle: ".panelTitle", label: "任务物品卡" },
     { id: "memory", selector: ".memoryPanel", handle: ".panelTitle", label: "近期记忆卡" },
-    { id: "gallery", selector: ".galleryPanel", handle: ".panelTitle", label: "资产夹资料卡" },
+    { id: "gallery", selector: ".galleryPanel", handle: ".panelTitle", label: "资产夹资料卡", restoreOnLoad: false },
   ].forEach((config) => setupDraggablePanel(config));
   window.addEventListener("resize", clampFloatingPanels);
 }
 
-function setupDraggablePanel({ id, selector, handle, label }) {
+function setupDraggablePanel({ id, selector, handle, label, restoreOnLoad = true }) {
   const panel = document.querySelector(selector);
   const dragHandle = panel?.querySelector(handle);
   if (!panel || !dragHandle) return;
@@ -397,6 +400,7 @@ function setupDraggablePanel({ id, selector, handle, label }) {
   dragHandle.title = `${label}：拖动标题可移动，双击恢复位置`;
   dragHandle.addEventListener("pointerdown", (event) => beginPanelDrag(event, id, panel));
   dragHandle.addEventListener("dblclick", () => resetDragPanel(id, panel));
+  if (!restoreOnLoad) delete state.ui.dragPanels[id];
   applyDragPanelState(id, panel);
 }
 
@@ -1032,14 +1036,56 @@ function isValidCachedMapAsset(asset = {}) {
 function isRawMapAsset(asset = {}) {
   const type = String(asset?.type || "").trim().toLowerCase();
   const zone = String(asset?.display_zone || "").trim().toLowerCase();
-  return zone === "map" || type === "map";
+  const category = String(asset?.gallery_category || "").trim().toLowerCase();
+  return category === "map" || zone === "map" || type === "map";
 }
 
 function rawGalleryAssetMediaUrl(asset = {}) {
+  if (isRawMapAsset(asset) && state.map.currentMapAsset?.cachedUrl) {
+    return state.map.currentMapAsset.cachedUrl;
+  }
   const media = asset.media && typeof asset.media === "object" ? asset.media : {};
   const payload = asset.payload && typeof asset.payload === "object" ? asset.payload : {};
   const payloadMedia = payload.media && typeof payload.media === "object" ? payload.media : {};
-  return asset.url || asset.image || asset.image_url || media.url || media.image || payload.url || payload.image || payload.image_url || payloadMedia.url || payloadMedia.image || "";
+  const explicitUrl = asset.url || asset.image || asset.image_url || media.url || media.image || payload.url || payload.image || payload.image_url || payloadMedia.url || payloadMedia.image || "";
+  if (explicitUrl) return explicitUrl;
+  const assetId = String(asset.id || asset.key || "").trim();
+  if (!assetId) return "";
+  const subjectKey = `gallery:${assetId}`;
+  const safeSubjectKey = `gallery:${slugify(assetId)}`;
+  const desiredRenderer = desiredGalleryRendererVersion(asset);
+  const cached = (state.assets.cachedAssets || [])
+    .filter((row) => {
+    if (!isAssetForCurrentCampaign(row) || row?.exists === false || !row?.url) return false;
+    const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata : {};
+    const rowSubject = String(row.subject_key || metadata.subject_key || "").trim();
+    return rowSubject === subjectKey || rowSubject === safeSubjectKey;
+    })
+    .sort((a, b) => galleryCachedAssetRank(b, desiredRenderer) - galleryCachedAssetRank(a, desiredRenderer))[0];
+  return cached?.url ? versionedAssetUrl(cached.url, cached.key || cached.created_at || cached.renderer_version) : "";
+}
+
+function desiredGalleryRendererVersion(asset = {}) {
+  const spec = asset.canvas_spec || asset.canvasSpec || asset.raw_asset?.canvas_spec || {};
+  const schema = String(spec?.schema || "").toLowerCase();
+  if (schema === "scene_canvas_spec.v1") return GALLERY_SCENE_CANVAS_RENDERER_VERSION;
+  return "";
+}
+
+function galleryCachedAssetRank(row = {}, desiredRenderer = "") {
+  const renderer = String(row.renderer_version || row.metadata?.renderer_version || "").trim();
+  let score = 0;
+  if (desiredRenderer && renderer === desiredRenderer) score += 1000;
+  else if (desiredRenderer && renderer) score += 100;
+  if (String(row.display_zone || "").toLowerCase() === "gallery") score += 20;
+  if (row.created_at) score += Math.min(Date.parse(row.created_at) || 0, 9999999999999) / 9999999999999;
+  return score;
+}
+
+function versionedAssetUrl(url = "", version = "") {
+  const source = String(url || "");
+  if (!source || !version) return source;
+  return `${source}${source.includes("?") ? "&" : "?"}asset_v=${encodeURIComponent(String(version))}`;
 }
 
 function bestRawMapAsset() {
@@ -1058,9 +1104,28 @@ function mapAssetPriority(asset = {}) {
 }
 
 function bestCurrentMapAsset() {
-  const rawMap = bestRawMapAsset();
-  if (rawMap) return protocolRawGalleryAsset(rawMap);
-  return null;
+  return bestCachedCurrentMapAsset();
+}
+
+function bestCachedCurrentMapAsset() {
+  const cached = (state.assets.cachedAssets || [])
+    .filter((asset) => isValidCachedMapAsset(asset))
+    .filter((asset) => !String(asset.source_gallery_asset_id || asset.metadata?.source_gallery_asset_id || "").trim())
+    .sort((a, b) => mapAssetPriority(b) - mapAssetPriority(a))[0];
+  if (!cached) return null;
+  return {
+    kind: "map",
+    key: cached.key || "",
+    title: cached.title || cached.display_name || "当前区域地图",
+    meta: "当前地图",
+    detail: cached.detail || "",
+    seed: scopedSeed(cached.key || cached.title || "map"),
+    cachedUrl: versionedAssetUrl(cached.url || "", cached.key || cached.created_at || ""),
+    gallery_category: "map",
+    display_zone: cached.display_zone || "map",
+    asset_use: cached.asset_use || "map",
+    url: cached.url || "",
+  };
 }
 
 function renderCachedMap(scene, mapPanel = {}) {
@@ -1088,14 +1153,29 @@ function renderCachedMap(scene, mapPanel = {}) {
     showMapImage(url, modulePayload.asset_key || cached?.key || "");
     return;
   }
-  if (!isValidMapRoute(route)) {
-    console.warn("skip map redraw: empty route payload", mapPanel);
+  const hasCanvas = hasSemanticMapCanvas(mapCanvas);
+  if (!isValidMapRoute(route) && !hasCanvas) {
+    console.warn("skip map redraw: empty route and canvas payload", mapPanel);
     showMapEmptyState();
     return;
   }
   const objectId = slugify(`${scene.location || "current_map"}:${routeKey || "base"}`);
   const mapKey = makeScopedAssetKey("map", objectId, "route");
   const mapScene = { ...scene, map_route: route, map_canvas: mapCanvas };
+  const metadata = {
+    title: route.title || scene.location || "当前区域地图",
+    detail: routeKey || scene.immediate_pressure || "",
+    meta: "地图 / 结构化路线",
+    source: "map_route",
+    object_id: objectId,
+    map_route: route,
+    map_canvas: mapCanvas,
+    visual_assets: modulePayload.visual_assets || [],
+    status: "current",
+    visual_contract_key: visualContract.entity_key || modulePayload.visual_contract_key || "",
+    visual_contract_hash: visualContract.visual_contract_hash || modulePayload.visual_contract_hash || "",
+    visual_contract: visualContract,
+  };
   state.map.currentMapAsset = {
     kind: "map",
     key: mapKey,
@@ -1115,24 +1195,25 @@ function renderCachedMap(scene, mapPanel = {}) {
     mapWrap.setAttribute("role", "button");
     mapWrap.setAttribute("aria-label", "打开完整区域地图");
   }
+  if (hasMapAssetProtocolSpec(mapCanvas)) {
+    const canvas = $("mapCanvas");
+    if (!canvas) return;
+    cacheCanvasAsset({
+      canvas,
+      kind: "map",
+      subdir: "maps",
+      objectId,
+      seedText: scopedSeed(`${state.campaign.activeCampaign}:${objectId}:${stableJson(mapCanvas)}`),
+      metadata,
+      draw: () => drawMapAssetProtocol(canvas, mapCanvas),
+    });
+    return;
+  }
   drawPixelMap(seed, {
     cache: true,
     objectId,
     scene: mapScene,
-    metadata: {
-      title: route.title || scene.location || "当前区域地图",
-      detail: routeKey || scene.immediate_pressure || "",
-      meta: "地图 / 结构化路线",
-      source: "map_route",
-      object_id: objectId,
-      map_route: route,
-      map_canvas: mapCanvas,
-      visual_assets: modulePayload.visual_assets || [],
-      status: "current",
-      visual_contract_key: visualContract.entity_key || modulePayload.visual_contract_key || "",
-      visual_contract_hash: visualContract.visual_contract_hash || modulePayload.visual_contract_hash || "",
-      visual_contract: visualContract,
-    },
+    metadata,
     force: true,
   });
 }
@@ -1160,14 +1241,249 @@ function mapCanvasFromDrawInstructions(draw = {}) {
   const routes = Array.isArray(draw.routes) ? draw.routes : [];
   const hazards = Array.isArray(draw.hazards) ? draw.hazards : [];
   const legend = Array.isArray(draw.legend) ? draw.legend : [];
+  const ascii = Array.isArray(draw.ascii) ? draw.ascii : [];
   return {
+    canvas: draw.canvas && typeof draw.canvas === "object" ? draw.canvas : {},
     style: draw.style || "",
     background: draw.background || "",
+    ascii,
     points: nodes,
     routes,
     hazards,
     legend,
+    labels: Array.isArray(draw.labels) ? draw.labels : [],
   };
+}
+
+function mapCanvasFromGalleryCanvasSpec(spec = {}) {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return {};
+  if (hasSemanticMapCanvas(spec)) return spec;
+  const rawPoints = [
+    ...(Array.isArray(spec.points) ? spec.points : []),
+    ...(Array.isArray(spec.nodes) ? spec.nodes : []),
+    ...(Array.isArray(spec.subjects) ? spec.subjects : []),
+    ...(Array.isArray(spec.markers) ? spec.markers : []),
+  ];
+  const points = rawPoints.map((point, index) => {
+    if (point && typeof point === "object") {
+      return { id: point.id || point.key || `p${index}`, label: point.label || point.name || point.title || point.text || `P${index + 1}` };
+    }
+    return { id: `p${index}`, label: String(point || `P${index + 1}`) };
+  });
+  const routes = Array.isArray(spec.routes) ? spec.routes : Array.isArray(spec.paths) ? spec.paths : [];
+  const hazards = Array.isArray(spec.hazards) ? spec.hazards : Array.isArray(spec.threats) ? spec.threats : [];
+  const legend = Array.isArray(spec.legend) ? spec.legend : Array.isArray(spec.marks) ? spec.marks : [];
+  return {
+    canvas: spec.canvas && typeof spec.canvas === "object" ? spec.canvas : {},
+    style: spec.style || spec.render_style || "",
+    background: spec.background || spec.scene || spec.biome || spec.area || "",
+    ascii: Array.isArray(spec.ascii) ? spec.ascii : [],
+    points,
+    routes,
+    hazards,
+    legend,
+    labels: Array.isArray(spec.labels) ? spec.labels : [],
+  };
+}
+
+function hasCustomSceneCanvasSpec(spec = {}) {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return false;
+  const schema = String(spec.schema || "").toLowerCase();
+  return Boolean(
+    schema.includes("scene_canvas_spec")
+    || spec.scene
+    || spec.area
+    || spec.biome
+    || spec.lighting
+    || spec.mood
+    || spec.atmosphere
+    || (Array.isArray(spec.subjects) && spec.subjects.length)
+    || (Array.isArray(spec.surroundings) && spec.surroundings.length)
+  );
+}
+
+function drawCustomSceneCanvas(canvas, seedText, spec = {}, options = {}) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const seed = hashSeed(`${seedText}:${stableJson(spec || {})}`);
+  const subjects = Array.isArray(spec.subjects) ? spec.subjects : [];
+  const surroundings = Array.isArray(spec.surroundings) ? spec.surroundings : [];
+  const subjectText = `${spec.scene || ""} ${spec.area || ""} ${spec.biome || ""} ${spec.mood || ""} ${spec.atmosphere || ""} ${subjects.join(" ")} ${surroundings.join(" ")}`.toLowerCase();
+  const palette = sceneSpecPalette(spec, seed);
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, w, h);
+  drawSceneSpecBackground(ctx, w, h, seed, spec, palette);
+  drawSceneSpecGround(ctx, w, h, seed, subjectText, palette);
+  surroundings.forEach((item, index) => drawSceneSpecSubject(ctx, w, h, item, index, surroundings.length || 1, palette, seed, "surrounding"));
+  subjects.forEach((item, index) => drawSceneSpecSubject(ctx, w, h, item, index, subjects.length || 1, palette, seed, "subject"));
+  if (/path|trail|route|小径|道路/i.test(subjectText)) drawSceneSpecPath(ctx, w, h, seed, palette);
+  if (/particle|light|glow|magic|rune|符文|发光|光点/i.test(subjectText)) drawSceneSpecLights(ctx, w, h, seed, palette);
+  ctx.save();
+  ctx.strokeStyle = hexToRgba(palette.line, options.compact ? 0.45 : 0.6);
+  ctx.lineWidth = Math.max(2, w * 0.012);
+  ctx.strokeRect(w * 0.035, h * 0.04, w * 0.93, h * 0.9);
+  ctx.restore();
+}
+
+function sceneSpecPalette(spec = {}, seed = 1) {
+  const text = `${spec.biome || ""} ${spec.scene || ""} ${spec.area || ""} ${spec.style || ""} ${spec.mood || ""}`.toLowerCase();
+  if (/ruin|stone|arch|temple|ancient|遗迹|石/.test(text)) {
+    return { skyA: "#c9c3ac", skyB: "#7d8474", ground: "#77715f", floor: "#9a8d72", line: "#4f4739", accent: "#c0a15c", leaf: "#5f7f55", trunk: "#5b4a35" };
+  }
+  if (/forest|wood|moss|fern|clearing|森林|林|苔/.test(text)) {
+    return { skyA: "#c9d3a6", skyB: "#667a54", ground: "#5f7349", floor: "#8aa66d", line: "#3f4b34", accent: "#d5c074", leaf: "#5f8a57", trunk: "#6a4d31" };
+  }
+  if (/night|shadow|dark|dim|暗/.test(text)) {
+    return { skyA: "#3b4351", skyB: "#171d27", ground: "#303a32", floor: "#556152", line: "#98a09a", accent: "#8dc6d8", leaf: "#3e604f", trunk: "#2c241f" };
+  }
+  const shift = seed % 24;
+  return { skyA: shift % 2 ? "#d7c79d" : "#c8d2c0", skyB: "#76684f", ground: "#6d714f", floor: "#a28d63", line: "#4e4232", accent: "#c59d4e", leaf: "#667b4e", trunk: "#674b32" };
+}
+
+function drawSceneSpecBackground(ctx, w, h, seed, spec = {}, palette = {}) {
+  const sky = ctx.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, palette.skyA);
+  sky.addColorStop(0.58, palette.skyB);
+  sky.addColorStop(1, palette.ground);
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, h);
+  const lighting = `${spec.lighting || ""} ${spec.mood || ""}`.toLowerCase();
+  if (/morning|sun|soft|filtered|晨|阳光/.test(lighting)) {
+    ctx.save();
+    ctx.globalAlpha = 0.42;
+    ctx.fillStyle = "#f6df9b";
+    for (let i = 0; i < 4; i += 1) {
+      ctx.beginPath();
+      ctx.moveTo(w * (0.12 + i * 0.12), 0);
+      ctx.lineTo(w * (0.28 + i * 0.12), 0);
+      ctx.lineTo(w * (0.45 + i * 0.08), h);
+      ctx.lineTo(w * (0.31 + i * 0.07), h);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function drawSceneSpecGround(ctx, w, h, seed, text = "", palette = {}) {
+  ctx.fillStyle = palette.floor;
+  ctx.beginPath();
+  ctx.ellipse(w * 0.5, h * 0.78, w * 0.43, h * 0.18, 0, 0, Math.PI * 2);
+  ctx.fill();
+  if (/moss|fern|forest|clearing|苔|蕨|森林/.test(text)) {
+    ctx.fillStyle = hexToRgba(palette.leaf, 0.56);
+    for (let i = 0; i < 14; i += 1) {
+      const x = ((seed + i * 31) % 100) / 100 * w;
+      const y = h * (0.62 + (((seed >> (i % 8)) + i * 7) % 30) / 100);
+      ctx.fillRect(x, y, w * 0.045, h * 0.018);
+    }
+  }
+}
+
+function drawSceneSpecSubject(ctx, w, h, subject, index, total, palette, seed, layer = "subject") {
+  const text = String(subject || "").toLowerCase();
+  const t = total <= 1 ? 0.5 : (index + 1) / (total + 1);
+  const x = w * (0.16 + t * 0.68);
+  const y = layer === "surrounding" ? h * (0.44 + (index % 2) * 0.08) : h * (0.66 + (index % 2) * 0.08);
+  if (/tree|forest|wood|trunk|old_tree|giant|树|森林|古木/.test(text)) {
+    drawSceneTree(ctx, x, y, w, h, palette, index);
+    return;
+  }
+  if (/stone|ruin|arch|door|gate|temple|遗迹|石门|拱门/.test(text)) {
+    drawSceneRuin(ctx, x, y, w, h, palette);
+    return;
+  }
+  if (/staff|wooden_staff|杖|木杖/.test(text)) {
+    ctx.save();
+    ctx.strokeStyle = shadeColor(palette.trunk, -15);
+    ctx.lineWidth = Math.max(3, w * 0.018);
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.025, y + h * 0.08);
+    ctx.lineTo(x + w * 0.035, y - h * 0.11);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  if (/vine|fern|bush|moss|藤|灌木|蕨/.test(text)) {
+    drawSceneFoliage(ctx, x, y, w, h, palette, seed + index);
+    return;
+  }
+  drawSceneMarker(ctx, x, y, w, h, palette, index);
+}
+
+function drawSceneTree(ctx, x, y, w, h, palette, index = 0) {
+  ctx.fillStyle = palette.trunk;
+  roundRectPath(ctx, x - w * 0.018, y - h * 0.19, w * 0.036, h * 0.24, w * 0.012);
+  ctx.fill();
+  ctx.fillStyle = hexToRgba(palette.leaf, 0.92);
+  ctx.beginPath();
+  ctx.ellipse(x, y - h * 0.22, w * (0.09 + (index % 2) * 0.02), h * 0.115, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = hexToRgba(shadeColor(palette.leaf, 16), 0.75);
+  ctx.beginPath();
+  ctx.ellipse(x - w * 0.035, y - h * 0.25, w * 0.055, h * 0.07, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawSceneRuin(ctx, x, y, w, h, palette) {
+  ctx.fillStyle = "#8c8270";
+  ctx.fillRect(x - w * 0.07, y - h * 0.18, w * 0.035, h * 0.2);
+  ctx.fillRect(x + w * 0.035, y - h * 0.18, w * 0.035, h * 0.2);
+  ctx.strokeStyle = "#b6a47d";
+  ctx.lineWidth = Math.max(3, w * 0.018);
+  ctx.beginPath();
+  ctx.arc(x, y - h * 0.18, w * 0.07, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillStyle = hexToRgba(palette.accent, 0.62);
+  ctx.fillRect(x - w * 0.052, y - h * 0.09, w * 0.104, h * 0.014);
+}
+
+function drawSceneFoliage(ctx, x, y, w, h, palette, seed) {
+  ctx.fillStyle = hexToRgba(palette.leaf, 0.8);
+  for (let i = 0; i < 5; i += 1) {
+    ctx.beginPath();
+    ctx.ellipse(x + w * (i - 2) * 0.018, y + h * (((seed + i * 3) % 5) * 0.008), w * 0.035, h * 0.028, i * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawSceneMarker(ctx, x, y, w, h, palette, index = 0) {
+  ctx.fillStyle = hexToRgba(palette.accent, 0.78);
+  ctx.beginPath();
+  ctx.arc(x, y, w * (0.022 + (index % 2) * 0.006), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = palette.line;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawSceneSpecPath(ctx, w, h, seed, palette = {}) {
+  ctx.save();
+  ctx.strokeStyle = hexToRgba("#d1b37a", 0.72);
+  ctx.lineWidth = Math.max(10, w * 0.06);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(w * 0.18, h * 0.92);
+  ctx.bezierCurveTo(w * 0.34, h * 0.68, w * 0.62, h * 0.66, w * 0.78, h * 0.43);
+  ctx.stroke();
+  ctx.strokeStyle = hexToRgba(palette.line, 0.3);
+  ctx.lineWidth = Math.max(2, w * 0.012);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawSceneSpecLights(ctx, w, h, seed, palette = {}) {
+  ctx.save();
+  ctx.fillStyle = hexToRgba(palette.accent, 0.86);
+  for (let i = 0; i < 10; i += 1) {
+    const x = w * (0.16 + (((seed >> (i % 10)) + i * 13) % 68) / 100);
+    const y = h * (0.18 + (((seed >> ((i + 3) % 10)) + i * 9) % 48) / 100);
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(1.5, w * 0.008), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function renderCampaignState(campaignState) {
@@ -1445,7 +1761,58 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
       console.warn("skip invalid canvas job", job);
       return;
     }
+    if (job.source === "gallery_raw" && !isProtocolCanvasGalleryKind(job.kind)) {
+      console.warn("skip gallery_raw canvas job outside map/item/prop protocol", job);
+      return;
+    }
     if (job.kind === "map") {
+      if (job.source === "gallery_raw") {
+        const canvas = createAssetCanvas(192, 128);
+        const canvasSpec = job.canvas_spec || job.visual_prompt?.canvas_spec || {};
+        const mapCanvas = job.map_canvas || mapCanvasFromGalleryCanvasSpec(canvasSpec);
+        const scene = {
+          map_canvas: mapCanvas,
+          map_route: job.map_route || {},
+          location: job.title || job.asset_key || "",
+        };
+        const subjectKey = job.subject_key || `gallery:${job.asset_id || job.asset_key}`;
+        cacheCanvasAsset({
+          canvas,
+          kind: "map",
+          subdir: "maps",
+          objectId: slugify(job.asset_key || job.job_id || job.title || "gallery_map"),
+          seedText: scopedSeed(`${state.campaign.activeCampaign}:${job.asset_key}:${job.title}:${stableJson(canvasSpec)}`),
+          metadata: {
+            title: job.title || job.asset_key,
+            display_name: job.title || job.asset_key,
+            detail: job.detail || "",
+            role: "map",
+            runtime_role: "map",
+            entity_key: makeEntityKey("map", job.title || job.asset_key),
+            subject_key: subjectKey,
+            gallery_category: job.gallery_category || "map",
+            display_zone: "gallery",
+            source: "gallery_raw",
+            source_gallery_asset_id: job.asset_id || "",
+            renderer_version: job.renderer_version || "",
+            variant: job.renderer_version || undefined,
+            canvas_spec: canvasSpec,
+            map_canvas: mapCanvas,
+          },
+          draw: () => {
+            if (hasMapAssetProtocolSpec(canvasSpec)) {
+              drawMapAssetProtocol(canvas, canvasSpec);
+              return;
+            }
+            if (hasCustomSceneCanvasSpec(canvasSpec)) {
+              drawCustomSceneCanvas(canvas, job.title || job.asset_key || job.job_id, canvasSpec, { compact: true });
+              return;
+            }
+            drawPixelMap(job.title || job.asset_key || job.job_id, { cache: false, canvas, scene, compact: true });
+          },
+        });
+        return;
+      }
       const mapModule = frontendState.modules?.map_panel || {};
       const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : visualContractFor(job.visual_contract_key || "", "map", job.title || mapModule.payload?.title || "");
       const payload = { ...(mapModule.payload || {}) };
@@ -1510,21 +1877,28 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
       const name = job.display_name || job.title || job.asset_key || "character";
       const actorRole = job.kind === "monster_portrait" ? "monster" : "npc";
       const visualContract = hasVisualContract(job.visual_contract) ? job.visual_contract : visualContractFor(job.visual_contract_key || "", actorRole, name);
+      const actorCanvasSpec = job.canvas_spec || job.visual_prompt?.canvas_spec || {};
       drawPixelActorPortrait(name, {
         cache: true,
         objectId: slugify(job.asset_key || name),
         role: actorRole,
         kind: "npc_portrait",
+        canvasSpec: actorCanvasSpec,
         metadata: {
           title: name,
           display_name: name,
           role: actorRole,
           runtime_role: actorRole,
+          actor_role: actorRole,
           entity_key: makeEntityKey(actorRole, name),
+          subject_key: job.subject_key || `gallery:${job.asset_id || job.asset_key}`,
           portrait_asset_kind: "npc_portrait",
-          gallery_category: "character",
+          gallery_category: job.gallery_category || "character",
           visible_in_gallery: true,
-          source: "director_canvas_job",
+          source: job.source || "director_canvas_job",
+          source_gallery_asset_id: job.asset_id || "",
+          canvas_spec: Object.keys(actorCanvasSpec || {}).length ? actorCanvasSpec : undefined,
+          visual_prompt: job.visual_prompt || undefined,
           visual_contract_key: visualContract.entity_key || job.visual_contract_key || "",
           visual_contract_hash: visualContract.visual_contract_hash || job.visual_contract_hash || "",
           visual_contract: visualContract,
@@ -1544,6 +1918,7 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           kind: job.kind,
           detail: job.detail || job.input_ref,
           visualPrompt: Object.keys(visualPrompt || {}).length ? visualPrompt : job.canvas_style || {},
+          canvas_spec: job.canvas_spec || visualPrompt?.canvas_spec || {},
           visual_contract: visualContract,
         },
         metadata: {
@@ -1552,9 +1927,13 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           role: job.kind,
           runtime_role: job.kind,
           entity_key: makeEntityKey(job.kind, job.title || job.asset_key),
-          gallery_category: job.kind,
-          source: "director_canvas_job",
+          subject_key: job.subject_key || `gallery:${job.asset_id || job.asset_key}`,
+          gallery_category: job.gallery_category || job.kind,
+          display_zone: "gallery",
+          source: job.source || "director_canvas_job",
+          source_gallery_asset_id: job.asset_id || "",
           initial_asset_id: job.initial_asset_id || "",
+          canvas_spec: job.canvas_spec || visualPrompt?.canvas_spec || {},
           canvas_style: job.canvas_style || {},
           visual_prompt: Object.keys(visualPrompt || {}).length ? visualPrompt : undefined,
           visual_contract_key: visualContract.entity_key || job.visual_contract_key || "",
@@ -1589,8 +1968,11 @@ function processCanvasJobs(moduleState = {}, frontendState = {}, campaignState =
           role: "cg",
           runtime_role: "cg",
           entity_key: visualContract.entity_key || makeEntityKey("cg", job.title || job.asset_key || "opening_cg"),
-          gallery_category: "cg",
-          source: "director_canvas_job",
+          subject_key: job.subject_key || `gallery:${job.asset_id || job.asset_key}`,
+          gallery_category: job.gallery_category || "cg",
+          display_zone: "gallery",
+          source: job.source || "director_canvas_job",
+          source_gallery_asset_id: job.asset_id || "",
           generation_instruction: job.generation_instruction || "",
           cg_prompt: prompt,
           image_prompt: prompt,
@@ -3308,7 +3690,7 @@ function protocolRawInventoryItem(item = {}) {
     id: itemId,
     item_id: itemId,
     title,
-    detail: detailParts.join(" | "),
+    detail: detailParts.join("\n"),
     tag: sourceItemId ? "derived" : "item",
     state: rawState,
     payload: rawPayload,
@@ -3317,10 +3699,124 @@ function protocolRawInventoryItem(item = {}) {
   };
 }
 
+function inventoryItemForGalleryAsset(asset = {}) {
+  if (!asset || asset.gallery_category !== "item") return null;
+  const payload = asset.payload && typeof asset.payload === "object" ? asset.payload : {};
+  const candidates = [
+    payload.item_id,
+    payload.inventory_item_id,
+    asset.item_id,
+    asset.subject_key,
+    asset.id,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const rows = protocolInventoryRows();
+  return rows.find((item) => candidates.includes(item.item_id) || item.title === asset.title) || null;
+}
+
+function inventoryStatusText(item = null) {
+  if (!item) return "";
+  return inventoryStatusRows(item)
+    .map((row) => `${row.label}：${row.value}`)
+    .join("\n");
+}
+
+function inventoryStatusRows(item = null) {
+  if (!item) return [];
+  const rows = [];
+  rows.push(...inventoryLabeledRows(item.state));
+  rows.push(...inventoryLabeledRows(item.payload));
+  if (item.source_item_id) rows.push({ label: "来源物品", value: item.source_item_id });
+  return rows.filter((row) => row.label && row.value);
+}
+
+function renderInventoryStatusRows(item = null) {
+  const rows = inventoryStatusRows(item);
+  if (!rows.length) return "";
+  return rows.map((row) => (
+    `<div class="inventoryStatusRow"><span>${escapeHtml(row.label)}</span><p>${escapeHtml(row.value)}</p></div>`
+  )).join("");
+}
+
+function galleryStatusRows(asset = null) {
+  if (!asset) return [];
+  const rows = [];
+  rows.push(...inventoryStatusRows(inventoryItemForGalleryAsset(asset)));
+  const raw = asset.raw_asset && typeof asset.raw_asset === "object" ? asset.raw_asset : asset;
+  rows.push(...galleryStatusFieldRows(raw));
+  if (raw.state && typeof raw.state === "object") rows.push(...galleryStatusFieldRows(raw.state));
+  if (raw.payload && typeof raw.payload === "object") rows.push(...galleryStatusFieldRows(raw.payload));
+  const seen = new Set();
+  return rows.filter((row) => {
+    if (!row.label || !row.value) return false;
+    const signature = `${row.label}\n${row.value}`;
+    if (seen.has(signature)) return false;
+    seen.add(signature);
+    return true;
+  });
+}
+
+function renderGalleryStatusRows(asset = null) {
+  const rows = galleryStatusRows(asset);
+  if (!rows.length) return "";
+  return rows.map((row) => (
+    `<div class="inventoryStatusRow"><span>${escapeHtml(row.label)}</span><p>${escapeHtml(row.value)}</p></div>`
+  )).join("");
+}
+
+function galleryStatusFieldRows(value = {}) {
+  const allowed = new Set([
+    "status",
+    "visible_description",
+    "unknowns",
+    "condition",
+    "effect",
+    "effects",
+    "known_effect",
+    "known_effects",
+    "state_note",
+    "update_note",
+    "last_update",
+  ]);
+  return Object.entries(value || {})
+    .filter(([key]) => allowed.has(String(key || "").trim().toLowerCase()))
+    .map(([key, row]) => ({ label: inventoryFieldLabel(key), value: inventoryDisplayValue(row) }));
+}
+
 function inventoryKeyValueRows(value = {}) {
+  return inventoryLabeledRows(value).map((row) => `${row.label}：${row.value}`);
+}
+
+function inventoryLabeledRows(value = {}) {
   return Object.entries(value || {})
     .filter(([key]) => String(key || "").trim())
-    .map(([key, row]) => `${key}: ${inventoryDisplayValue(row)}`);
+    .map(([key, row]) => ({ label: inventoryFieldLabel(key), value: inventoryDisplayValue(row) }));
+}
+
+function inventoryFieldLabel(key = "") {
+  const normalized = String(key || "").trim().toLowerCase();
+  return {
+    status: "当前状态",
+    visible_description: "可见描述",
+    description: "描述",
+    unknowns: "未知信息",
+    owner: "持有者",
+    owner_ref: "持有来源",
+    quantity: "数量",
+    count: "数量",
+    condition: "状态细节",
+    effect: "已知效果",
+    effects: "已知效果",
+    known_effect: "已知效果",
+    known_effects: "已知效果",
+    state_note: "状态备注",
+    update_note: "更新记录",
+    last_update: "最近更新",
+    use: "用途",
+    usage: "用途",
+    source: "来源",
+    note: "备注",
+    notes: "备注",
+  }[normalized] || String(key || "").trim();
 }
 
 function inventoryDisplayValue(value) {
@@ -4044,6 +4540,7 @@ function setGalleryFilter(filter) {
   document.querySelectorAll("#galleryGrid article").forEach((card) => {
     const visible = galleryAssetMatchesFilter({
       gallery_category: card.dataset.galleryCategory,
+      gallery_categories: (card.dataset.galleryCategories || "").split(/\s+/).filter(Boolean),
       display_zone: card.dataset.displayZone,
     }, state.gallery.galleryFilter);
     card.classList.toggle("hidden", !visible);
@@ -4197,6 +4694,7 @@ function renderGallery(campaignState, galleryState = {}, moduleState = null) {
     card.dataset.kind = asset.gallery_category;
     card.dataset.key = asset.key;
     card.dataset.galleryCategory = asset.gallery_category || "";
+    card.dataset.galleryCategories = (asset.gallery_categories || []).join(" ");
     card.dataset.displayZone = asset.display_zone || "";
     card.tabIndex = 0;
     card.setAttribute("role", "button");
@@ -4264,23 +4762,11 @@ function galleryFiltersFromAssetContract(contract = {}) {
 }
 
 function rawGalleryFilters() {
-  const rows = [{ id: "all", label: "All", source: "raw_gallery" }];
-  const seen = new Set(["all"]);
-  (state.gallery.rawAssets || []).forEach((asset) => {
-    const normalized = protocolRawGalleryAsset(asset);
-    if (!normalized) return;
-    [normalized.gallery_category, normalized.kind].forEach((value) => {
-      const id = String(value || "").trim().toLowerCase();
-      if (!id || id === "hidden" || seen.has(id)) return;
-      seen.add(id);
-      rows.push({ id, label: galleryKindLabel(id), source: "raw_gallery" });
-    });
-  });
-  return rows;
+  return galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT);
 }
 
 function registeredGalleryCategoryIds() {
-  return new Set(rawGalleryFilters()
+  return new Set(galleryFiltersFromAssetContract(state.assets.assetContract || FALLBACK_ASSET_CONTRACT)
     .map((row) => row.id)
     .filter((id) => id && id !== "all"));
 }
@@ -4299,9 +4785,14 @@ function protocolRawGalleryAsset(asset) {
   const type = String(asset.type || "").trim().toLowerCase();
   const title = String(asset.title || "").trim();
   if (!id || !type || !title) return null;
-  const galleryCategory = String(asset.category || asset.type || "").trim().toLowerCase();
+  const galleryCategory = String(asset.gallery_category || "").trim().toLowerCase();
+  const galleryCategories = normalizeGalleryCategories(asset.gallery_categories, galleryCategory);
   const displayZone = String(asset.display_zone || "").trim().toLowerCase();
   const detail = asset.detail || "";
+  if (!galleryCategory) {
+    console.warn("raw gallery asset missing gallery_category; hidden from gallery", asset);
+    return null;
+  }
   return {
     ...asset,
     kind: type,
@@ -4316,6 +4807,7 @@ function protocolRawGalleryAsset(asset) {
     createdAt: asset.created_at || asset.createdAt || "",
     campaign_id: asset.campaign_id || state.campaign.activeCampaign,
     gallery_category: galleryCategory,
+    gallery_categories: galleryCategories,
     display_zone: displayZone,
     raw_asset: asset,
     exists: asset.exists !== false,
@@ -4324,6 +4816,7 @@ function protocolRawGalleryAsset(asset) {
 
 function legacyProtocolGalleryAsset(asset) {
   const galleryCategory = String(asset.gallery_category || "").trim().toLowerCase();
+  const galleryCategories = normalizeGalleryCategories(asset.gallery_categories, galleryCategory);
   const displayZone = String(asset.display_zone || "").trim().toLowerCase();
   if (!galleryCategory) {
     console.warn("asset missing gallery_category; hidden from gallery", asset);
@@ -4352,6 +4845,7 @@ function legacyProtocolGalleryAsset(asset) {
     asset_seed: asset.asset_seed || state.campaign.assetSeed,
     actor_role: asset.actor_role || "unknown",
     gallery_category: galleryCategory,
+    gallery_categories: galleryCategories,
     asset_use: asset.asset_use || "",
     display_zone: displayZone,
     asset_kind: asset.asset_kind || "",
@@ -4368,6 +4862,10 @@ function legacyProtocolGalleryAsset(asset) {
 function openAssetFromGallery(asset) {
   if (asset?.gallery_category === "cg" || asset?.asset_use === "cg") {
     openCgOverlay(asset.cachedUrl, asset.detail || galleryDetail(asset));
+    return;
+  }
+  if (isRawMapAsset(asset) && state.map.currentMapAsset) {
+    openCurrentMapOverlay();
     return;
   }
   openGalleryOverlay(asset.key);
@@ -4424,15 +4922,29 @@ function filteredGalleryAssets() {
 function galleryAssetMatchesFilter(asset, filter) {
   const value = filter || "all";
   const category = String(asset?.gallery_category || "").trim().toLowerCase();
+  const categories = normalizeGalleryCategories(asset?.gallery_categories, category);
   const zone = String(asset?.display_zone || "").trim().toLowerCase();
   if (!category) {
     console.warn("raw gallery asset missing category/type; hidden from gallery", asset);
     return false;
   }
-  if (!registeredGalleryCategoryIds().has(category)) return false;
+  const registered = registeredGalleryCategoryIds();
+  const validCategories = categories.filter((item) => registered.has(item));
+  if (!validCategories.length) return false;
   if (["hidden", "portrait", "review"].includes(zone)) return false;
   if (value === "all") return true;
-  return category === value;
+  return validCategories.includes(String(value || "").trim().toLowerCase());
+}
+
+function normalizeGalleryCategories(value, primary = "") {
+  const out = [];
+  const add = (item) => {
+    const text = String(item || "").trim().toLowerCase();
+    if (text && !out.includes(text)) out.push(text);
+  };
+  add(primary);
+  (Array.isArray(value) ? value : []).forEach(add);
+  return out;
 }
 
 function renderGalleryDialog() {
@@ -4471,6 +4983,8 @@ function renderGalleryInspector(asset) {
   const detail = $("galleryInspectorDetail");
   const meta = $("galleryInspectorMeta");
   const useButton = $("useGalleryAssetBtn");
+  const inventoryBox = $("galleryInspectorInventory");
+  const inventoryText = $("galleryInspectorInventoryText");
   const inspector = $("galleryInspector");
   if (inspector) inspector.dataset.kind = asset?.gallery_category || "";
   if (!asset) {
@@ -4479,12 +4993,17 @@ function renderGalleryInspector(asset) {
     setText("galleryInspectorDetail", "当前筛选下没有可查看的资料。");
     setText("galleryInspectorMeta", "资料");
     if (useButton) useButton.disabled = true;
+    if (inventoryBox) inventoryBox.hidden = true;
+    if (inventoryText) inventoryText.innerHTML = "";
     return;
   }
   if (image) drawGalleryAsset(image, asset);
   if (title) title.textContent = asset.title;
   if (detail) detail.textContent = galleryDetail(asset);
   if (meta) meta.textContent = assetStatusLabel(asset);
+  const statusRows = galleryStatusRows(asset);
+  if (inventoryBox) inventoryBox.hidden = !statusRows.length;
+  if (inventoryText) inventoryText.innerHTML = renderGalleryStatusRows(asset);
   if (useButton) {
     useButton.disabled = !canUseGalleryAsset(asset);
     useButton.textContent = canUseGalleryAsset(asset) ? "引用到行动输入" : "仅供查看";
@@ -5235,7 +5754,16 @@ function drawGalleryAsset(targetImage, asset) {
     targetImage.dataset.fallbackSeed = asset.key || asset.title || "";
   }
   const rawCanvas = createAssetCanvas(128, 128);
-  if (asset.kind === "map") drawPixelMap(asset.seed, { cache: false, canvas: rawCanvas, scene: asset.scene || {}, compact: true });
+  const scene = asset.scene || {
+    map_canvas: asset.map_canvas || asset.raw_asset?.map_canvas || asset.payload?.map_canvas || {},
+    map_route: asset.map_route || asset.raw_asset?.map_route || asset.payload?.map_route || {},
+    location: asset.title || "",
+  };
+  if ((asset.gallery_category === "map" || asset.gallery_category === "item" || asset.gallery_category === "prop") && drawProtocolCanvasAsset(rawCanvas, asset)) {
+    if (targetImage) setAssetImage(targetImage, rawCanvas.toDataURL("image/png"));
+    return;
+  }
+  if (asset.gallery_category === "map" || asset.kind === "map") drawPixelMap(asset.seed, { cache: false, canvas: rawCanvas, scene, compact: true });
   else drawPixelItemIcon(asset.seed || asset.title, { cache: false, canvas: rawCanvas, targetImage: null, asset });
   if (targetImage) setAssetImage(targetImage, rawCanvas.toDataURL("image/png"));
   return;
@@ -5348,6 +5876,8 @@ function beginRunProgress() {
   state.job.runProgress.publicThink = [];
   state.job.runProgress.publicNote = "";
   state.job.runProgress.stage = "";
+  state.job.runProgress.phase = "";
+  state.job.runProgress.phaseStartedAt = Date.now();
   state.job.runProgress.needsHumanVerification = false;
   state.job.runProgress.pendingStoryOutput = null;
   const panel = $("runProgress");
@@ -5368,6 +5898,7 @@ function startRunProgressTween() {
       state.job.runProgress.percent += diff * 0.14;
     }
     paintRunProgress(state.job.runProgress.percent);
+    renderRunStreamText();
   }, 80);
 }
 
@@ -5405,6 +5936,10 @@ async function pollRunStream() {
     state.job.runProgress.stage = data.stage || state.job.runProgress.stage || "";
     state.job.runProgress.needsHumanVerification = Boolean(data.needs_human_verification);
     state.job.runProgress.streamError = data.error_tail || "";
+    applyRunProgressStage(state.job.runProgress.stage);
+    if (data.percent) {
+      setRunProgress(data.percent, runProgressStatusLabel(data.stage, data.label));
+    }
     renderInlineRunProgress();
     if (!data.running) stopRunStreamPolling();
   } catch (err) {
@@ -5417,12 +5952,13 @@ async function pollRunStream() {
 function updateRunProgressFromPipeline(pipeline, job, output) {
   if (!state.job.runProgress.active && !job.running) return;
   const stage = pipeline.stage || output.stage || "";
+  applyRunProgressStage(stage);
   const labels = {
     director_ready: "导演层完成",
-    actor_parsed: "演员层完成",
-    audited: "审核层完成",
+    actor_parsed: "演员层完成，正在解析输出",
+    audited: "状态审核完成，正在热更新",
     synced: "已同步到页面",
-    pending_parse: "等待解析层",
+    pending_parse: "后台正在分析轻指令结果",
   };
   if (pipeline.percent) {
     const target = pipeline.percent >= 100 && !state.job.runProgress.completing ? 96 : pipeline.percent;
@@ -5448,6 +5984,39 @@ function updateRunProgressFromPipeline(pipeline, job, output) {
       scrollStoryToBottom(true);
     });
   }
+}
+
+function runProgressPhaseForStage(stage) {
+  if (["actor_waiting", "parsing", "writeback", "actor_parsed", "audited", "synced"].includes(stage)) return "actor";
+  if (stage === "light_analysis" || stage === "pending_parse") return "light";
+  if (stage === "director_turn" || stage === "director_ready") return "director";
+  return "";
+}
+
+function applyRunProgressStage(stage) {
+  const phase = runProgressPhaseForStage(stage);
+  if (!phase || state.job.runProgress.phase === phase) return;
+  if (state.job.runProgress.phase === "director" && phase === "actor") {
+    state.job.runProgress.percent = 100;
+    state.job.runProgress.target = 100;
+    paintRunProgress(100);
+    state.job.runProgress.percent = 0;
+    state.job.runProgress.target = 0;
+  }
+  state.job.runProgress.phase = phase;
+  state.job.runProgress.phaseStartedAt = Date.now();
+}
+
+function runProgressStatusLabel(stage, fallback) {
+  const labels = {
+    director_turn: "正在执行剧本",
+    director_ready: "导演层完成",
+    actor_waiting: fallback || "演员层正在生成正文",
+    parsing: "演员层完成，正在解析输出",
+    light_analysis: fallback || "后台正在分析轻指令结果",
+    writeback: fallback || "正在热更新本地状态",
+  };
+  return labels[stage] || fallback || "处理中";
 }
 
 async function completeRunProgress() {
@@ -5549,11 +6118,10 @@ function renderRunStreamText() {
     return;
   }
   if (think.length) {
-    stream.innerHTML = think.map((item) => {
-      const stage = escapeHtml(item.stage || "处理进度");
-      const text = escapeHtml(item.text || "");
-      return `<p><b>${stage}</b><span>${text}</span></p>`;
-    }).join("");
+    const rotated = rotatingPublicThink(think);
+    const stage = escapeHtml(rotated.stage || "处理进度");
+    const text = escapeHtml(rotated.text || "");
+    stream.innerHTML = `<p class="isRotating"><b>${stage}</b><span>${text}</span></p>`;
     stream.classList.remove("empty");
     return;
   }
@@ -5564,6 +6132,17 @@ function renderRunStreamText() {
   }
   stream.textContent = error ? `执行日志：${error.slice(-800)}` : "等待公开导演进度...";
   stream.classList.add("empty");
+}
+
+function rotatingPublicThink(think) {
+  const items = (Array.isArray(think) ? think : []).map((item) => {
+    if (typeof item === "string") return { stage: "处理进度", text: item };
+    return { stage: item?.stage || "处理进度", text: item?.text || "" };
+  }).filter((item) => item.text);
+  if (!items.length) return { stage: "处理进度", text: "" };
+  const startedAt = state.job.runProgress.phaseStartedAt || state.job.runProgress.startedAt || Date.now();
+  const index = Math.floor(Math.max(0, Date.now() - startedAt) / 2200) % items.length;
+  return items[index];
 }
 
 function setLog(text) {
@@ -5698,11 +6277,13 @@ function drawBlockAvatar(targetImage, block, role) {
         display_name: resolved.display_name || actorKey,
         role: resolved.role,
         runtime_role: resolved.role,
+        actor_role: resolved.role,
         entity_key: resolved.entity_key,
         avatar_key: resolved.entity_key,
         portrait_asset_kind: kind,
-        gallery_category: resolved.role === "player" ? "hidden" : "npc",
-        not_in_gallery_filters: resolved.role === "player",
+        gallery_category: ["player", "companion"].includes(resolved.role) ? "hidden" : "character",
+        display_zone: ["player", "companion"].includes(resolved.role) ? "hidden" : "gallery",
+        not_in_gallery_filters: ["player", "companion"].includes(resolved.role),
         render_tier: resolved.role === "player" ? "player" : "npc",
         source_size: resolved.role === "player" ? 512 : 256,
         detail_level: resolved.role === "player" ? "high" : "standard",
@@ -5832,6 +6413,7 @@ function drawPixelActorPortrait(seedText, options = {}) {
   const effectiveSeed = options.seedText || scopedSeed(`${state.campaign.activeCampaign}:${seedText}:${role}`);
   const kind = options.kind || assetKindForRole(role);
   const visualProfile = options.visualProfile || {};
+  const canvasSpec = normalizeActorCanvasSpec(options.canvasSpec || options.canvas_spec || visualProfile.canvas_spec || {});
   if (options.cache && state.campaign.activeCampaign) {
     cacheCanvasAsset({
       canvas,
@@ -5845,10 +6427,12 @@ function drawPixelActorPortrait(seedText, options = {}) {
         display_name: String(seedText || role),
         role,
         runtime_role: role,
+        actor_role: role,
         entity_key: makeEntityKey(role, seedText),
         avatar_key: makeEntityKey(role, seedText),
         portrait_asset_kind: kind,
-        gallery_category: role === "player" || role === "companion" ? "hidden" : "npc",
+        gallery_category: role === "player" || role === "companion" ? "hidden" : "character",
+        display_zone: role === "player" || role === "companion" ? "hidden" : "gallery",
         visible_in_gallery: role !== "player" && role !== "companion",
         not_in_gallery_filters: role === "player" || role === "companion",
         display_slot: role === "player" ? "main_character_card" : role === "companion" ? "companion_card" : "dossier_gallery",
@@ -5856,17 +6440,112 @@ function drawPixelActorPortrait(seedText, options = {}) {
         render_tier: role === "player" ? "player" : role === "companion" ? "companion" : "npc",
         source_size: role === "player" || role === "companion" ? 512 : 256,
         detail_level: role === "player" || role === "companion" ? "high" : "standard",
+        canvas_spec: Object.keys(canvasSpec).length ? canvasSpec : undefined,
       },
-      draw: () => drawPixelActorPortrait(effectiveSeed, { cache: false, role, canvas, targetImage: null, visualProfile }),
+      draw: () => drawPixelActorPortrait(effectiveSeed, { cache: false, role, canvas, targetImage: null, visualProfile, canvasSpec }),
     });
     return;
   }
   if (role === "player") {
     drawHighSpecPlayerPortraitToCanvas(canvas, effectiveSeed, visualProfile);
+  } else if (hasCustomActorCanvasSpec(canvasSpec)) {
+    drawCustomActorPortraitToCanvas(canvas, effectiveSeed, role, canvasSpec);
   } else {
     drawPixelPortraitToCanvas(canvas, effectiveSeed, role);
   }
   if (targetImage) setAssetImage(targetImage, canvas.toDataURL("image/png"));
+}
+
+function normalizeActorCanvasSpec(raw = {}) {
+  if (!raw || typeof raw !== "object") return {};
+  const palette = raw.palette && typeof raw.palette === "object" ? raw.palette : {};
+  return {
+    schema: String(raw.schema || "actor_canvas_spec.v1"),
+    archetype: String(raw.archetype || raw.role_archetype || raw.body_type || "").toLowerCase(),
+    silhouette: String(raw.silhouette || raw.shape || "").toLowerCase(),
+    palette: {
+      skin: String(palette.skin || palette.face || ""),
+      hair: String(palette.hair || ""),
+      cloth: String(palette.cloth || palette.base || ""),
+      accent: String(palette.accent || palette.glow || ""),
+      eye: String(palette.eye || palette.eyes || ""),
+    },
+    features: Array.isArray(raw.features) ? raw.features.map((item) => String(item || "").toLowerCase()).filter(Boolean) : [],
+    parts: Array.isArray(raw.parts) ? raw.parts.filter((item) => item && typeof item === "object") : [],
+    marks: Array.isArray(raw.marks) ? raw.marks.map((item) => String(item || "").toLowerCase()).filter(Boolean) : [],
+    state_effects: Array.isArray(raw.state_effects) ? raw.state_effects.filter((item) => item && typeof item === "object") : [],
+  };
+}
+
+function hasCustomActorCanvasSpec(spec = {}) {
+  return Boolean(spec.archetype || spec.silhouette || spec.features?.length || spec.parts?.length || spec.marks?.length || spec.state_effects?.length || Object.values(spec.palette || {}).some(Boolean));
+}
+
+function drawCustomActorPortraitToCanvas(canvas, seedText, role, spec = {}) {
+  const ctx = canvas.getContext("2d");
+  const seed = hashSeed(`actor-custom:${role}:${seedText}:${stableJson(spec)}`);
+  const size = canvas.width;
+  const cell = size / 28;
+  const px = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x * cell), Math.round(y * cell), Math.ceil(w * cell), Math.ceil(h * cell));
+  };
+  const pick = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback;
+  const skin = pick(spec.palette?.skin, ["#d9a36e", "#c58b5c", "#e0b17d", "#b9794f", "#9f6748"][seed % 5]);
+  const hair = pick(spec.palette?.hair, ["#2b241c", "#463423", "#6b4a2e", "#1d2528", "#7a6a48"][(seed >>> 3) % 5]);
+  const cloth = pick(spec.palette?.cloth, ["#465a63", "#7a5c36", "#5c6642", "#6d4b55", "#31515a"][(seed >>> 6) % 5]);
+  const accent = pick(spec.palette?.accent, ["#d6bc75", "#9eb0a2", "#b46d45", "#486d88", "#8d7650"][(seed >>> 11) % 5]);
+  const eye = pick(spec.palette?.eye, "#1e2428");
+  const featureText = [spec.archetype, spec.silhouette, ...(spec.features || []), ...(spec.marks || []), ...(spec.parts || []).map((part) => part.kind)].join(" ");
+  drawIconBase(ctx, size, size, "#e3d6bd", accent);
+  px(9, 8, 10, 2, hair);
+  px(8, 10, 12, 8, skin);
+  px(10, 13, 2, 1, eye);
+  px(16, 13, 2, 1, eye);
+  px(12, 17, 4, 1, "#7b4d3a");
+  if (/hood|cloak|兜帽|斗篷/.test(featureText)) {
+    px(6, 7, 16, 4, cloth);
+    px(5, 10, 4, 9, cloth);
+    px(19, 10, 4, 9, cloth);
+    px(8, 8, 12, 2, accent);
+  }
+  if (/mask|面具/.test(featureText)) {
+    px(9, 12, 10, 4, "#eee2c2");
+    px(10, 13, 2, 1, eye);
+    px(16, 13, 2, 1, eye);
+  }
+  if (/armor|甲|armored/.test(featureText)) {
+    px(7, 18, 14, 6, "#6e6a60");
+    px(8, 19, 12, 1, accent);
+    px(9, 21, 3, 2, "#948f84");
+    px(16, 21, 3, 2, "#948f84");
+  } else {
+    px(7, 18, 14, 6, cloth);
+    px(10, 18, 8, 2, accent);
+  }
+  if (/scholar|scribe|学者|档案|书/.test(featureText)) {
+    px(6, 6, 16, 2, "#4f4034");
+    px(7, 7, 14, 1, accent);
+    px(20, 18, 3, 4, "#f2dfb3");
+  }
+  if (/beast|monster|兽|怪物|horn/.test(featureText)) {
+    px(7, 6, 3, 4, accent);
+    px(18, 6, 3, 4, accent);
+    px(7, 14, 2, 1, "#fff1b8");
+    px(19, 14, 2, 1, "#fff1b8");
+  }
+  if (/scar|伤疤/.test(featureText)) {
+    px(15, 11, 1, 5, "#8f3f36");
+  }
+  if (/glow|发光|rune|符文|magic|魔法/.test(featureText) || spec.state_effects?.length) {
+    px(5, 5, 2, 2, accent);
+    px(21, 6, 1, 3, accent);
+    px(4, 20, 2, 1, accent);
+    ctx.strokeStyle = hexToRgba(accent, .48);
+    ctx.lineWidth = Math.max(2, cell * .8);
+    ctx.strokeRect(Math.round(4 * cell), Math.round(4 * cell), Math.round(20 * cell), Math.round(20 * cell));
+  }
+  px(6, 24, 16, 2, "#7f7464");
 }
 
 function drawPixelCompanionPortrait(seedText, options = {}) {
@@ -5891,6 +6570,7 @@ function drawPixelItemIcon(seedText, options = {}) {
         role: "",
         entity_key: `item:${slugify(asset.title || seedText)}`,
         visible_in_gallery: true,
+        canvas_spec: asset.canvas_spec || asset.canvasSpec || asset.visualPrompt?.canvas_spec || asset.visual_prompt?.canvas_spec || undefined,
         visual_prompt: asset.visualPrompt || asset.visual_prompt || normalizeDirectorItemVisualPrompt(asset),
       },
       draw: () => drawCanvasItem(canvas, asset),
@@ -6361,6 +7041,275 @@ function drawCompanionProfileMarks(px, visualProfile = {}, p) {
   px(4, 28, 24, 2, "rgba(0,0,0,.22)");
 }
 
+function isProtocolCanvasGalleryKind(kind = "") {
+  return ["map", "item", "prop"].includes(String(kind || "").trim().toLowerCase());
+}
+
+function hasMapAssetProtocolSpec(spec = {}) {
+  return Boolean(spec && typeof spec === "object" && spec.schema === "trpg.map_asset_protocol.v1" && Array.isArray(spec.layers));
+}
+
+function drawProtocolCanvasAsset(canvas, asset = {}) {
+  const category = String(asset.gallery_category || asset.kind || "").trim().toLowerCase();
+  const spec = asset.canvas_spec || asset.canvasSpec || asset.raw_asset?.canvas_spec || asset.metadata?.canvas_spec || {};
+  if (asset.gallery_category === "map" || category === "map") {
+    if (!hasMapAssetProtocolSpec(spec)) return false;
+    drawMapAssetProtocol(canvas, spec);
+    return true;
+  }
+  if (asset.gallery_category === "item" || asset.gallery_category === "prop" || category === "item" || category === "prop") {
+    if (!spec || typeof spec !== "object" || !Object.keys(spec).length) return false;
+    drawCanvasItem(canvas, { ...asset, canvas_spec: spec });
+    return true;
+  }
+  return false;
+}
+
+function mapProtocolPoint(point, w, h) {
+  const x = Array.isArray(point) ? Number(point[0]) : 0.5;
+  const y = Array.isArray(point) ? Number(point[1]) : 0.5;
+  return {
+    x: Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0.5)) * w,
+    y: Math.max(0, Math.min(1, Number.isFinite(y) ? y : 0.5)) * h,
+  };
+}
+
+function mapProtocolSize(feature = {}, w, h) {
+  const size = Array.isArray(feature.size) ? feature.size : [0.18, 0.12];
+  return {
+    w: Math.max(0.02, Math.min(1, Number(size[0]) || 0.18)) * w,
+    h: Math.max(0.02, Math.min(1, Number(size[1]) || 0.12)) * h,
+  };
+}
+
+function mapProtocolCenter(feature = {}, w, h) {
+  return mapProtocolPoint(feature.center || [0.5, 0.5], w, h);
+}
+
+function mapProtocolAreaStyle(palette = {}, style = "") {
+  const rows = {
+    land: [palette.land || "#9fae78", palette.ink || "#2e261b", 0.62],
+    ridge: [palette.land || "#9fae78", palette.ink || "#2e261b", 0.46],
+    water: [palette.water || "#6699aa", "#2e5b66", 0.66],
+    danger: [palette.danger || "#a84d3f", "#57231f", 0.52],
+    ruin: ["#958875", palette.ink || "#2e261b", 0.54],
+    metal: [palette.land || "#8b969c", palette.ink || "#1b2228", 0.5],
+    energy: [palette.glow || "#77d8ff", "#2e6d7d", 0.36],
+    void: ["#2f3338", palette.ink || "#111", 0.48],
+    settlement: ["#b69468", palette.ink || "#2e261b", 0.58],
+  };
+  return rows[String(style || "").toLowerCase()] || rows.land;
+}
+
+function drawMapAssetProtocol(canvas, spec = {}) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const palette = spec.palette || {};
+  const seed = hashSeed(`${spec.id || spec.title || "map"}:${stableJson(spec.layers || [])}`);
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, palette.paper || "#ead9b6");
+  bg.addColorStop(0.58, "#f7efd9");
+  bg.addColorStop(1, palette.land || "#9eaa74");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  ctx.globalAlpha = 0.14;
+  for (let i = 0; i < 120; i += 1) {
+    ctx.fillStyle = i % 2 ? palette.ink || "#4e4233" : palette.route || "#806540";
+    ctx.fillRect((seed + i * 73) % w, ((seed >>> 2) + i * 41) % h, 2, 2);
+  }
+  ctx.restore();
+
+  const layers = Array.isArray(spec.layers) ? spec.layers : [];
+  const sites = new Map();
+  layers.forEach((layer) => {
+    if (layer.type === "site") {
+      (Array.isArray(layer.features) ? layer.features : []).forEach((feature) => sites.set(String(feature.id || ""), feature));
+    }
+  });
+  layers.filter((layer) => layer.type === "area").forEach((layer) => {
+    (Array.isArray(layer.features) ? layer.features : []).forEach((feature) => drawMapProtocolAreaFeature(ctx, feature, w, h, palette));
+  });
+  layers.filter((layer) => layer.type === "route").forEach((layer) => {
+    (Array.isArray(layer.features) ? layer.features : []).forEach((feature) => drawMapProtocolRouteFeature(ctx, feature, w, h, palette));
+  });
+  layers.filter((layer) => layer.type === "site").forEach((layer) => {
+    (Array.isArray(layer.features) ? layer.features : []).forEach((feature) => drawMapProtocolSiteFeature(ctx, feature, w, h, palette));
+  });
+  layers.filter((layer) => layer.type === "overlay").forEach((layer) => {
+    (Array.isArray(layer.features) ? layer.features : []).forEach((feature) => drawMapProtocolOverlayFeature(ctx, feature, w, h, palette, sites));
+  });
+  ctx.strokeStyle = "rgba(44,36,24,.42)";
+  ctx.lineWidth = Math.max(2, w * 0.01);
+  ctx.strokeRect(w * 0.04, h * 0.06, w * 0.92, h * 0.86);
+}
+
+function drawMapProtocolAreaFeature(ctx, feature = {}, w, h, palette = {}) {
+  const [fill, stroke, alpha] = mapProtocolAreaStyle(palette, feature.style);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = Math.max(2, w * 0.01);
+  ctx.beginPath();
+  if (feature.shape === "polygon" && Array.isArray(feature.points) && feature.points.length >= 3) {
+    feature.points.map((point) => mapProtocolPoint(point, w, h)).forEach((point, index) => {
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+  } else if (feature.shape === "band" && Array.isArray(feature.points) && feature.points.length >= 2) {
+    const points = feature.points.map((point) => mapProtocolPoint(point, w, h));
+    ctx.lineWidth = Math.max(10, h * 0.05);
+    ctx.lineCap = "round";
+    ctx.moveTo(points[0].x, points[0].y);
+    points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+    ctx.stroke();
+    ctx.restore();
+    return;
+  } else if (feature.shape === "ellipse") {
+    const center = mapProtocolCenter(feature, w, h);
+    const size = mapProtocolSize(feature, w, h);
+    ctx.ellipse(center.x, center.y, size.w / 2, size.h / 2, 0, 0, Math.PI * 2);
+  } else {
+    const center = mapProtocolCenter(feature, w, h);
+    const size = mapProtocolSize(feature, w, h);
+    for (let i = 0; i < 10; i += 1) {
+      const angle = Math.PI * 2 * i / 10;
+      const wobble = 0.78 + ((i * 37 + w + h) % 23) / 100;
+      const x = center.x + Math.cos(angle) * size.w * 0.5 * wobble;
+      const y = center.y + Math.sin(angle) * size.h * 0.5 * wobble;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMapProtocolRouteFeature(ctx, feature = {}, w, h, palette = {}) {
+  if (!Array.isArray(feature.points) || feature.points.length < 2) return;
+  const style = String(feature.style || "main").toLowerCase();
+  const points = feature.points.map((point) => mapProtocolPoint(point, w, h));
+  ctx.save();
+  ctx.strokeStyle = style === "energy" ? palette.glow || "#7fd7ff" : style === "danger" || style === "broken" ? palette.danger || "#a84d3f" : palette.route || "#6d5434";
+  ctx.lineWidth = style === "main" ? Math.max(5, w * 0.018) : Math.max(3, w * 0.012);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  if (style === "secret" || style === "broken") ctx.setLineDash([10, 7]);
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  points.slice(1).forEach((point, index) => {
+    const prev = points[index];
+    const midX = (prev.x + point.x) / 2;
+    const midY = (prev.y + point.y) / 2 - h * 0.025;
+    ctx.quadraticCurveTo(midX, midY, point.x, point.y);
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMapProtocolSiteFeature(ctx, feature = {}, w, h, palette = {}) {
+  const center = mapProtocolCenter(feature, w, h);
+  const kind = String(feature.kind || "clue").toLowerCase();
+  const fills = {
+    current: "#f0c54f",
+    safe: "#75a86d",
+    hazard: palette.danger || "#a84d3f",
+    objective: palette.glow || "#7fd7ff",
+    clue: "#8d73bf",
+    gate: "#b99353",
+    resource: "#68a57c",
+    boss: "#77518f",
+    camp: "#cc9b54",
+  };
+  const radius = Math.max(9, Math.min(w, h) * (0.035 + 0.006 * Number(feature.importance || 1)));
+  ctx.save();
+  ctx.fillStyle = fills[kind] || fills.clue;
+  ctx.strokeStyle = palette.ink || "#2e261b";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = palette.ink || "#2e261b";
+  ctx.font = `700 ${Math.max(10, radius)}px Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(kind === "current" ? "*" : kind === "hazard" ? "!" : kind === "objective" ? "D" : kind === "boss" ? "X" : "+", center.x, center.y + 1);
+  if (feature.label) {
+    ctx.font = "700 11px Arial";
+    ctx.textBaseline = "top";
+    ctx.fillText(String(feature.label), center.x, center.y + radius + 4, 90);
+  }
+  ctx.restore();
+}
+
+function drawMapProtocolOverlayFeature(ctx, feature = {}, w, h, palette = {}, sites) {
+  sites = sites || new Map();
+  const intensity = Math.max(0, Math.min(1, Number(feature.intensity ?? 0.4)));
+  let center = feature.target_site && sites.has(String(feature.target_site))
+    ? mapProtocolCenter(sites.get(String(feature.target_site)), w, h)
+    : mapProtocolCenter(feature, w, h);
+  if (feature.shape === "border") {
+    ctx.save();
+    ctx.strokeStyle = palette.ink || "#2e261b";
+    ctx.globalAlpha = 0.22 + intensity * 0.35;
+    ctx.lineWidth = Math.max(2, w * 0.012);
+    ctx.strokeRect(w * 0.055, h * 0.075, w * 0.89, h * 0.83);
+    ctx.restore();
+    return;
+  }
+  if (feature.shape === "scanline") {
+    ctx.save();
+    ctx.strokeStyle = palette.ink || "#2e261b";
+    ctx.globalAlpha = 0.12 + intensity * 0.22;
+    ctx.lineWidth = 1;
+    for (let y = 0; y < h; y += 7) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y + 1);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  if (feature.shape === "vignette") {
+    ctx.save();
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.max(w, h) * 0.72);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, `rgba(20,14,10,${0.42 * intensity})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+    return;
+  }
+  if (feature.shape === "wind" || feature.shape === "mist") {
+    const size = mapProtocolSize(feature, w, h);
+    ctx.save();
+    ctx.strokeStyle = feature.shape === "wind" ? "rgba(245,255,255,.48)" : "rgba(255,255,255,.34)";
+    ctx.lineWidth = Math.max(2, h * 0.008);
+    for (let i = 0; i < 7; i += 1) {
+      const y = center.y - size.h / 2 + (size.h * i) / 6;
+      ctx.beginPath();
+      ctx.moveTo(center.x - size.w / 2, y);
+      ctx.quadraticCurveTo(center.x, y - h * 0.06, center.x + size.w / 2, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  const radius = Math.max(0.02, Math.min(0.4, Number(feature.radius || 0))) * Math.min(w, h)
+    || Math.max(mapProtocolSize(feature, w, h).w, mapProtocolSize(feature, w, h).h);
+  const g = ctx.createRadialGradient(center.x, center.y, 2, center.x, center.y, radius);
+  g.addColorStop(0, hexToRgba(palette.glow || "#f1c86f", 0.22 + intensity * 0.42));
+  g.addColorStop(1, hexToRgba(palette.glow || "#f1c86f", 0));
+  ctx.fillStyle = g;
+  ctx.fillRect(center.x - radius, center.y - radius, radius * 2, radius * 2);
+}
+
 function drawPixelMap(seedText, options = {}) {
   const canvas = options.canvas || $("mapCanvas");
   if (!canvas) return;
@@ -6395,12 +7344,20 @@ function drawPixelMap(seedText, options = {}) {
 }
 
 function hasSemanticMapCanvas(mapCanvas = {}) {
-  return Array.isArray(mapCanvas.ascii) && mapCanvas.ascii.length || Array.isArray(mapCanvas.points) && mapCanvas.points.length;
+  return Boolean(hasMapAssetProtocolSpec(mapCanvas) || Array.isArray(mapCanvas.ascii) && mapCanvas.ascii.length || Array.isArray(mapCanvas.points) && mapCanvas.points.length);
 }
 
 function drawSemanticSceneMap(ctx, w, h, seed, scene = {}) {
   const mapCanvas = scene.map_canvas || {};
+  if (hasMapAssetProtocolSpec(mapCanvas)) {
+    drawMapAssetProtocol(ctx.canvas, mapCanvas);
+    return;
+  }
   const palette = mapWorldPalette(scene);
+  if (Array.isArray(mapCanvas.ascii) && mapCanvas.ascii.length) {
+    drawAsciiDrivenMap(ctx, w, h, seed, mapCanvas, palette);
+    return;
+  }
   const layout = buildSemanticSceneLayout(mapCanvas, w, h);
   drawSceneMapBackground(ctx, w, h, palette, seed);
   drawSceneRoom(ctx, layout.mainRoom, palette.mainFloor, palette.wall, palette.wallEdge, "main");
@@ -6412,6 +7369,214 @@ function drawSemanticSceneMap(ctx, w, h, seed, scene = {}) {
   drawSpecialAreas(ctx, layout, mapCanvas, palette, seed);
   drawSemanticRoutes(ctx, layout, mapCanvas, palette);
   drawSemanticMapMarkers(ctx, layout, mapCanvas, palette);
+}
+
+function drawAsciiDrivenMap(ctx, w, h, seed, mapCanvas = {}, palette = null) {
+  palette = palette || mapWorldPalette({});
+  const rows = normalizeMapAsciiRows(mapCanvas.ascii);
+  const cols = Math.max(...rows.map((row) => row.length), 1);
+  const gridRows = rows.length || 1;
+  const margin = Math.max(28, Math.min(w, h) * 0.055);
+  const panel = rect(margin, margin, w - margin * 2, h - margin * 2);
+  const cellW = panel.w / cols;
+  const cellH = panel.h / gridRows;
+  drawSceneMapBackground(ctx, w, h, palette, seed);
+  ctx.save();
+  ctx.fillStyle = hexToRgba(palette.mainFloor, 0.82);
+  roundRectPath(ctx, panel.x, panel.y, panel.w, panel.h, 18); ctx.fill();
+  ctx.strokeStyle = hexToRgba(palette.wallEdge, 0.5); ctx.lineWidth = 4; ctx.stroke();
+  drawAsciiMapRegions(ctx, rows, panel, cellW, cellH, palette);
+  drawAsciiMapRoutes(ctx, rows, panel, cellW, cellH, palette);
+  drawAsciiMapMarkers(ctx, rows, panel, cellW, cellH, mapCanvas, palette);
+  ctx.restore();
+}
+
+function normalizeMapAsciiRows(ascii = []) {
+  const rows = (Array.isArray(ascii) ? ascii : []).map((row) => String(row || ""));
+  const cols = Math.max(...rows.map((row) => row.length), 1);
+  return rows.map((row) => row.padEnd(cols, "."));
+}
+
+function drawAsciiMapRegions(ctx, rows, panel, cellW, cellH, palette) {
+  const regions = connectedAsciiRegions(rows);
+  const order = [".", "~", "#", "!", "?"];
+  order.forEach((symbol) => {
+    regions.filter((region) => region.symbol === symbol).forEach((region) => {
+      const style = asciiRegionStyle(symbol, palette);
+      if (!style) return;
+      drawAsciiRegion(ctx, region, panel, cellW, cellH, style);
+    });
+  });
+}
+
+function connectedAsciiRegions(rows) {
+  const seen = new Set();
+  const regions = [];
+  const height = rows.length;
+  const width = Math.max(...rows.map((row) => row.length), 1);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const symbol = rows[y]?.[x] || ".";
+      const key = `${x},${y}`;
+      if (seen.has(key)) continue;
+      const cells = [];
+      const stack = [[x, y]];
+      seen.add(key);
+      while (stack.length) {
+        const [cx, cy] = stack.pop();
+        cells.push([cx, cy]);
+        [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          const nextKey = `${nx},${ny}`;
+          if (nx < 0 || ny < 0 || ny >= height || nx >= width || seen.has(nextKey)) return;
+          if ((rows[ny]?.[nx] || ".") !== symbol) return;
+          seen.add(nextKey);
+          stack.push([nx, ny]);
+        });
+      }
+      regions.push({ symbol, cells });
+    }
+  }
+  return regions;
+}
+
+function asciiRegionStyle(symbol, palette) {
+  return {
+    ".": { fill: hexToRgba(palette.mainFloor, 0.64), stroke: "rgba(70,54,38,.08)", radius: 2 },
+    "#": { fill: palette.wall, stroke: palette.wallEdge, radius: 7 },
+    "~": { fill: hexToRgba(palette.water, 0.88), stroke: hexToRgba(palette.waterHi, 0.55), radius: 13 },
+    "!": { fill: hexToRgba(palette.danger, 0.22), stroke: hexToRgba(palette.danger, 0.62), radius: 10 },
+    "?": { fill: hexToRgba(palette.unknown, 0.18), stroke: hexToRgba(palette.unknown, 0.5), radius: 10 },
+  }[symbol] || null;
+}
+
+function drawAsciiRegion(ctx, region, panel, cellW, cellH, style) {
+  if (region.symbol === "#") {
+    drawAsciiWallCells(ctx, region, panel, cellW, cellH, style);
+    return;
+  }
+  const xs = region.cells.map(([x]) => x);
+  const ys = region.cells.map(([, y]) => y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const x = panel.x + minX * cellW;
+  const y = panel.y + minY * cellH;
+  const w = (maxX - minX + 1) * cellW;
+  const h = (maxY - minY + 1) * cellH;
+  ctx.save();
+  ctx.fillStyle = style.fill;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = Math.max(1, Math.min(cellW, cellH) * 0.12);
+  roundRectPath(ctx, x + 1, y + 1, Math.max(2, w - 2), Math.max(2, h - 2), style.radius);
+  ctx.fill();
+  if (region.symbol !== ".") ctx.stroke();
+  if (region.symbol === "~") drawAsciiWaterRipples(ctx, x, y, w, h, style);
+  ctx.restore();
+}
+
+function drawAsciiWallCells(ctx, region, panel, cellW, cellH, style) {
+  ctx.save();
+  ctx.fillStyle = style.fill;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = Math.max(1, Math.min(cellW, cellH) * 0.08);
+  region.cells.forEach(([cx, cy]) => {
+    const x = panel.x + cx * cellW;
+    const y = panel.y + cy * cellH;
+    roundRectPath(ctx, x + 0.5, y + 0.5, Math.max(2, cellW - 1), Math.max(2, cellH - 1), Math.min(6, Math.min(cellW, cellH) * 0.2));
+    ctx.fill();
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawAsciiWaterRipples(ctx, x, y, w, h, style) {
+  ctx.save();
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i += 1) {
+    ctx.beginPath();
+    ctx.ellipse(x + w * (0.25 + i * 0.22), y + h * 0.5, Math.max(8, w * 0.12), Math.max(4, h * 0.12), 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawAsciiMapRoutes(ctx, rows, panel, cellW, cellH, palette) {
+  const markers = asciiMarkerCells(rows).filter((cell) => /[@N+?]/.test(cell.symbol));
+  if (markers.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = hexToRgba(palette.route, 0.44);
+  ctx.lineWidth = Math.max(4, Math.min(cellW, cellH) * 0.18);
+  ctx.setLineDash([Math.max(8, cellW * 0.35), Math.max(6, cellW * 0.24)]);
+  ctx.beginPath();
+  markers.forEach((cell, index) => {
+    const x = panel.x + (cell.x + 0.5) * cellW;
+    const y = panel.y + (cell.y + 0.5) * cellH;
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function asciiMarkerCells(rows) {
+  const result = [];
+  rows.forEach((row, y) => {
+    String(row).split("").forEach((symbol, x) => {
+      if (!/[+!?@NPM]/.test(symbol)) return;
+      result.push({ symbol, x, y });
+    });
+  });
+  return result;
+}
+
+function drawAsciiMapMarkers(ctx, rows, panel, cellW, cellH, mapCanvas, palette) {
+  const labels = asciiLabelLookup(mapCanvas);
+  const used = [];
+  asciiMarkerCells(rows).forEach((cell, index) => {
+    const x = panel.x + (cell.x + 0.5) * cellW;
+    const y = panel.y + (cell.y + 0.5) * cellH;
+    const kind = asciiMarkerKind(cell.symbol);
+    const fallback = labels.get(cell.symbol) || mapCanvas.legend?.[cell.symbol] || cell.symbol;
+    const label = labels.get(`${cell.x},${cell.y}`) || fallback;
+    const shifted = avoidLabelCollision({ x, y, side: index % 2 ? "left" : "right" }, used);
+    used.push(shifted.labelBox);
+    drawSemanticIconLabel(ctx, shifted.x, shifted.y, String(label || cell.symbol), kind, palette, shifted.side);
+  });
+}
+
+function asciiLabelLookup(mapCanvas = {}) {
+  const lookup = new Map();
+  if (mapCanvas.legend && typeof mapCanvas.legend === "object" && !Array.isArray(mapCanvas.legend)) {
+    Object.entries(mapCanvas.legend).forEach(([symbol, text]) => lookup.set(String(symbol), String(text || symbol)));
+  }
+  (Array.isArray(mapCanvas.legend) ? mapCanvas.legend : []).forEach((row) => {
+    if (!row || typeof row !== "object") return;
+    const symbol = row.symbol || row.key || row.id;
+    const text = row.text || row.label || row.title || row.value || "";
+    if (symbol && text) lookup.set(String(symbol), text);
+  });
+  (Array.isArray(mapCanvas.labels) ? mapCanvas.labels : []).forEach((row) => {
+    if (!row || typeof row !== "object") return;
+    const text = row.text || row.label || row.title || "";
+    if (!text) return;
+    if (row.x !== undefined && row.y !== undefined) lookup.set(`${row.x},${row.y}`, text);
+    if (row.symbol) lookup.set(String(row.symbol), text);
+  });
+  return lookup;
+}
+
+function asciiMarkerKind(symbol) {
+  return {
+    "+": "interact",
+    "!": "danger",
+    "?": "unknown",
+    "@": "person",
+    N: "person",
+    P: "person",
+    M: "personDanger",
+  }[symbol] || "object";
 }
 
 function mapWorldPalette(scene = {}) {
@@ -7156,8 +8321,13 @@ function strokeCurve(ctx, points, color, width) {
 function drawCanvasItem(canvas, asset) {
   const ctx = canvas.getContext("2d");
   const seed = hashSeed(asset.seed || asset.title);
-  drawIconBase(ctx, canvas.width, canvas.height, "#cfb88d", "#7f603d");
   const prompt = asset.visual_hint || asset.visualHint || asset.visualPrompt || asset.visual_prompt || asset.metadata?.visual_prompt || {};
+  const spec = normalizeItemCanvasSpec(asset, prompt);
+  if (hasCustomItemCanvasSpec(spec)) {
+    drawCustomItemCanvas(ctx, canvas.width, canvas.height, seed, spec);
+    return;
+  }
+  drawIconBase(ctx, canvas.width, canvas.height, "#cfb88d", "#7f603d");
   const canvasStyle = prompt.canvas_style || asset.canvas_style || asset.canvasStyle || asset.metadata?.canvas_style || {};
   const archetype = String(prompt.archetype || prompt.type || "").toLowerCase();
   const shape = String(canvasStyle.shape || archetype || "").toLowerCase();
@@ -7173,6 +8343,250 @@ function drawCanvasItem(canvas, asset) {
   if (/fragment|scale|material|碎片|鳞|素材/.test(drawingText)) return drawScaleIcon(ctx, canvas.width, canvas.height, seed);
   if (/box|case|chest|盒|匣/.test(drawingText)) return drawRelicBoxIcon(ctx, canvas.width, canvas.height, seed);
   return drawSatchelIcon(ctx, canvas.width, canvas.height, seed);
+}
+
+function normalizeItemCanvasSpec(asset = {}, prompt = {}) {
+  const raw = asset.canvas_spec || asset.canvasSpec || prompt.canvas_spec || asset.metadata?.canvas_spec || {};
+  const style = prompt.canvas_style || asset.canvas_style || asset.canvasStyle || asset.metadata?.canvas_style || {};
+  const title = asset.title || asset.display_name || asset.key || "";
+  const detail = asset.detail || asset.description || prompt.source_text || "";
+  const inferred = inferItemVisualPrompt(title, detail, asset.kind || "");
+  const source = raw && typeof raw === "object" ? raw : {};
+  const palette = source.palette && typeof source.palette === "object" ? source.palette : {};
+  const materials = Array.isArray(source.materials) ? source.materials : [source.material, prompt.material, inferred.material].filter(Boolean);
+  const parts = Array.isArray(source.parts) ? source.parts : [];
+  const keyParts = Array.isArray(style.key_parts) ? style.key_parts : [];
+  keyParts.forEach((part) => parts.push({ kind: part }));
+  const stateEffects = Array.isArray(source.state_effects) ? source.state_effects : [];
+  const stateTags = Array.isArray(source.state_tags) ? source.state_tags : [];
+  const statusText = stableJson(asset.state || asset.payload || asset.metadata || {});
+  if (/发光|微光|glow|pulse|脉动|warm|暖流/i.test(statusText)) stateEffects.push({ kind: "glow", target: "accent", intensity: 0.55 });
+  return {
+    archetype: source.archetype || prompt.archetype || prompt.type || inferred.archetype,
+    silhouette: source.silhouette || style.shape || prompt.silhouette || inferred.silhouette || source.archetype || inferred.archetype,
+    materials,
+    palette: {
+      base: palette.base || materialColor(materials, "base"),
+      metal: palette.metal || materialColor(materials, "metal"),
+      accent: palette.accent || materialColor(materials, "accent"),
+      glow: palette.glow || palette.accent || materialColor(materials, "glow"),
+      stroke: palette.stroke || "#4f3825",
+      backgroundA: palette.backgroundA || "#d1bc8d",
+      backgroundB: palette.backgroundB || "#725638",
+    },
+    parts,
+    state_effects: stateEffects,
+    state_tags: stateTags,
+    marks: Array.isArray(source.marks) ? source.marks : [],
+    source_text: source.source_text || prompt.source_text || `${title} ${detail}`,
+  };
+}
+
+function hasCustomItemCanvasSpec(spec = {}) {
+  return Boolean(
+    spec.archetype
+    || spec.silhouette
+    || (Array.isArray(spec.parts) && spec.parts.length)
+    || (Array.isArray(spec.materials) && spec.materials.length)
+    || (Array.isArray(spec.state_effects) && spec.state_effects.length)
+  );
+}
+
+function materialColor(materials = [], role = "base") {
+  const text = (Array.isArray(materials) ? materials : [materials]).join(" ").toLowerCase();
+  if (role === "accent" || role === "glow") {
+    if (/purple|violet|crystal|紫|水晶/.test(text)) return role === "glow" ? "#b892ff" : "#8d61d3";
+    if (/red|ruby|blood|红/.test(text)) return role === "glow" ? "#ff8a72" : "#b3483f";
+    if (/green|jade|emerald|绿/.test(text)) return role === "glow" ? "#9bd68f" : "#5f8f67";
+    if (/blue|water|黑水|水/.test(text)) return role === "glow" ? "#87d7e6" : "#4f9ca8";
+    return role === "glow" ? "#f1c86f" : "#b98734";
+  }
+  if (/silver|steel|metal|银|钢|铁/.test(text)) return role === "metal" ? "#c9c4ba" : "#b8afa2";
+  if (/bone|ivory|骨/.test(text)) return "#d8c99a";
+  if (/wood|leather|木|皮革/.test(text)) return "#8f6842";
+  if (/mud|clay|泥/.test(text)) return "#8c6a42";
+  if (/paper|纸/.test(text)) return "#e2d3ad";
+  return role === "metal" ? "#b88734" : "#cfb88d";
+}
+
+function drawCustomItemCanvas(ctx, w, h, seed, spec = {}) {
+  const p = spec.palette || {};
+  drawIconBase(ctx, w, h, p.backgroundA || "#d1bc8d", p.backgroundB || "#725638");
+  drawItemStateGlow(ctx, w, h, spec, "background");
+  const text = `${spec.archetype || ""} ${spec.silhouette || ""} ${spec.source_text || ""}`.toLowerCase();
+  if (/pendant|amulet|吊坠|护符|relic/.test(text)) drawCustomPendant(ctx, w, h, seed, spec);
+  else if (/box|case|chest|匣|盒/.test(text)) drawCustomRelicBox(ctx, w, h, seed, spec);
+  else if (/phone|device|screen|手机|终端/.test(text)) drawCustomDevice(ctx, w, h, seed, spec);
+  else if (/paper|document|book|letter|纸|书|文档/.test(text)) drawCustomDocument(ctx, w, h, seed, spec);
+  else if (/fragment|scale|material|碎片|鳞|素材|mud/.test(text)) drawCustomFragment(ctx, w, h, seed, spec);
+  else if (/sword|dagger|axe|weapon|剑|刀|斧|武器/.test(text)) drawCustomWeapon(ctx, w, h, seed, spec);
+  else drawCustomBundle(ctx, w, h, seed, spec);
+  drawItemMarks(ctx, w, h, spec);
+  drawItemStateGlow(ctx, w, h, spec, "foreground");
+}
+
+function drawItemStateGlow(ctx, w, h, spec = {}, layer = "foreground") {
+  const effects = Array.isArray(spec.state_effects) ? spec.state_effects : [];
+  if (!effects.some((effect) => /glow|pulse|aura|light/.test(String(effect.kind || effect)))) return;
+  const color = spec.palette?.glow || spec.palette?.accent || "#f1c86f";
+  ctx.save();
+  const alpha = layer === "background" ? 0.18 : 0.32;
+  const g = ctx.createRadialGradient(w * 0.5, h * 0.52, 2, w * 0.5, h * 0.52, w * 0.46);
+  g.addColorStop(0, hexToRgba(color, alpha + 0.18));
+  g.addColorStop(1, hexToRgba(color, 0));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+function hexToRgba(hex, alpha = 1) {
+  const value = String(hex || "").replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(value)) return `rgba(241,200,111,${alpha})`;
+  const num = parseInt(value, 16);
+  return `rgba(${(num >> 16) & 255},${(num >> 8) & 255},${num & 255},${alpha})`;
+}
+
+function itemHasPart(spec = {}, pattern) {
+  const text = `${stableJson(spec.parts || [])} ${stableJson(spec.marks || [])} ${stableJson(spec.state_tags || [])}`.toLowerCase();
+  return pattern.test(text);
+}
+
+function drawCustomPendant(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  const cx = w * 0.5;
+  const triangular = /tri|三角|triangle/.test(`${spec.silhouette} ${stableJson(spec.parts)}`.toLowerCase());
+  ctx.save();
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.035;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.32, h * 0.17);
+  ctx.quadraticCurveTo(cx, h * 0.34, w * 0.68, h * 0.17);
+  ctx.stroke();
+  ctx.fillStyle = p.metal || p.base;
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.035;
+  ctx.beginPath();
+  if (triangular) {
+    ctx.moveTo(cx, h * 0.31); ctx.lineTo(w * 0.73, h * 0.72); ctx.lineTo(w * 0.27, h * 0.72);
+  } else {
+    ctx.ellipse(cx, h * 0.55, w * 0.22, h * 0.25, 0, 0, Math.PI * 2);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  const gemRadius = itemHasPart(spec, /large|major|大/) ? w * 0.105 : w * 0.075;
+  ctx.fillStyle = p.accent;
+  ctx.beginPath();
+  ctx.arc(cx, h * 0.56, gemRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = hexToRgba(p.glow, 0.8); ctx.lineWidth = w * 0.018; ctx.stroke();
+  if (itemHasPart(spec, /rune|符文|engraving/)) {
+    ctx.strokeStyle = hexToRgba(p.glow, 0.78);
+    ctx.lineWidth = w * 0.015;
+    for (let i = 0; i < 5; i += 1) {
+      const x = w * (0.36 + i * 0.07);
+      const y = h * (0.66 - (i % 2) * 0.05);
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w * 0.035, y - h * 0.045); ctx.lineTo(x + w * 0.06, y); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawCustomRelicBox(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  ctx.save();
+  const x = w * 0.24, y = h * 0.3, bw = w * 0.52, bh = h * 0.42;
+  ctx.fillStyle = p.metal || p.base;
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.035;
+  roundRectPath(ctx, x, y, bw, bh, w * 0.05); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = hexToRgba(p.accent, 0.52);
+  ctx.fillRect(x + bw * 0.12, y + bh * 0.18, bw * 0.76, bh * 0.15);
+  ctx.fillStyle = p.accent;
+  ctx.beginPath(); ctx.arc(x + bw * 0.5, y + bh * 0.58, w * 0.07, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawCustomDevice(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  ctx.save();
+  const x = w * 0.31, y = h * 0.16, bw = w * 0.38, bh = h * 0.68;
+  ctx.fillStyle = "#25282b"; roundRectPath(ctx, x, y, bw, bh, w * 0.055); ctx.fill();
+  ctx.fillStyle = hexToRgba(p.accent, 0.46); roundRectPath(ctx, x + w * 0.035, y + h * 0.08, bw - w * 0.07, bh - h * 0.18, w * 0.025); ctx.fill();
+  ctx.strokeStyle = hexToRgba(p.glow, 0.8); ctx.lineWidth = w * 0.018;
+  ctx.beginPath(); ctx.moveTo(x + bw * 0.32, y + bh * 0.4); ctx.lineTo(x + bw * 0.5, y + bh * 0.25); ctx.lineTo(x + bw * 0.68, y + bh * 0.4); ctx.stroke();
+  ctx.restore();
+}
+
+function drawCustomDocument(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  ctx.save();
+  ctx.fillStyle = p.base || "#e2d3ad";
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.025;
+  const x = w * 0.25, y = h * 0.18, bw = w * 0.5, bh = h * 0.64;
+  roundRectPath(ctx, x, y, bw, bh, w * 0.03); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = hexToRgba(p.accent, 0.75);
+  for (let i = 0; i < 5; i += 1) {
+    ctx.beginPath(); ctx.moveTo(x + bw * 0.18, y + bh * (0.25 + i * 0.1)); ctx.lineTo(x + bw * 0.78, y + bh * (0.25 + i * 0.1)); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCustomFragment(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  ctx.save();
+  ctx.fillStyle = p.base;
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.03;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.28, h * 0.62);
+  ctx.quadraticCurveTo(w * 0.38, h * 0.2, w * 0.72, h * 0.38);
+  ctx.lineTo(w * 0.62, h * 0.74);
+  ctx.lineTo(w * 0.38, h * 0.78);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = hexToRgba(p.accent, 0.7);
+  for (let i = 0; i < 4; i += 1) {
+    ctx.beginPath(); ctx.moveTo(w * (0.38 + i * 0.07), h * (0.58 - i * 0.05)); ctx.lineTo(w * (0.48 + i * 0.06), h * (0.68 - i * 0.02)); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCustomWeapon(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  ctx.save();
+  ctx.translate(w * 0.5, h * 0.52);
+  ctx.rotate(-0.72);
+  ctx.fillStyle = p.metal || "#d9e1dc";
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.026;
+  ctx.beginPath(); ctx.moveTo(0, -h * 0.36); ctx.lineTo(w * 0.09, h * 0.05); ctx.lineTo(0, h * 0.16); ctx.lineTo(-w * 0.09, h * 0.05); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = p.accent; ctx.fillRect(-w * 0.2, h * 0.14, w * 0.4, h * 0.055);
+  ctx.fillStyle = p.stroke; ctx.fillRect(-w * 0.04, h * 0.16, w * 0.08, h * 0.22);
+  ctx.restore();
+}
+
+function drawCustomBundle(ctx, w, h, seed, spec) {
+  const p = spec.palette;
+  ctx.save();
+  ctx.fillStyle = p.base;
+  ctx.strokeStyle = p.stroke;
+  ctx.lineWidth = w * 0.03;
+  roundRectPath(ctx, w * 0.24, h * 0.28, w * 0.52, h * 0.42, w * 0.08); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = p.accent;
+  ctx.fillRect(w * 0.35, h * 0.44, w * 0.3, h * 0.07);
+  ctx.restore();
+}
+
+function drawItemMarks(ctx, w, h, spec = {}) {
+  if (!itemHasPart(spec, /seal|mark|符|rune|铭|刻/)) return;
+  ctx.save();
+  ctx.strokeStyle = hexToRgba(spec.palette?.glow || spec.palette?.accent, 0.7);
+  ctx.lineWidth = w * 0.012;
+  for (let i = 0; i < 4; i += 1) {
+    const x = w * (0.34 + i * 0.09);
+    const y = h * 0.78;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w * 0.025, y - h * 0.035); ctx.lineTo(x + w * 0.05, y); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function inferItemVisualPrompt(title = "", detail = "", kind = "") {
@@ -7780,15 +9194,16 @@ function showMapImage(url, assetKey = "") {
   const img = $("mapImage");
   const empty = $("mapEmptyState");
   if (!img || !url) return showMapEmptyState();
+  img.dataset.assetKey = assetKey;
+  img.dataset.campaignId = state.campaign.activeCampaign || "";
+  setAssetImage(img, url);
   img.onload = () => {
     img.classList.remove("hidden");
     img.classList.remove("is-empty");
     if (empty) empty.classList.add("hidden");
   };
   img.onerror = () => showMapEmptyState("地图加载失败");
-  img.dataset.assetKey = assetKey;
-  img.dataset.campaignId = state.campaign.activeCampaign || "";
-  setAssetImage(img, url);
+  if (img.complete && img.naturalWidth > 0) img.onload();
 }
 
 function clearMapPlaceholder() {
@@ -7809,7 +9224,7 @@ function assetUseForCanvasKind(kind, metadata = {}) {
 
 function galleryCategoryForAssetUse(assetUse, metadata = {}) {
   const explicit = String(metadata.gallery_category || "").trim();
-  if (explicit && explicit !== "hidden") return explicit;
+  if (explicit) return explicit;
   return {
     portrait: "character",
     item: "item",
@@ -7819,8 +9234,19 @@ function galleryCategoryForAssetUse(assetUse, metadata = {}) {
   }[assetUse] || "";
 }
 
+function roleForCanvasAssetContract(kind = "", metadata = {}) {
+  const raw = metadata.actor_role || metadata.runtime_role || metadata.role || roleFromEntityKey(metadata.entity_key || metadata.subject_key || "");
+  const role = normalizeRuntimeRole(raw);
+  const text = `${kind || ""} ${metadata.portrait_asset_kind || ""} ${metadata.entity_key || ""} ${metadata.subject_key || ""}`.toLowerCase();
+  if (text.includes("companion")) return "companion";
+  if (text.includes("player")) return "player";
+  return role;
+}
+
 function assetContractPayload({ key, kind, safeId, metadata = {}, dataUrl }) {
   const assetUse = assetUseForCanvasKind(kind, metadata);
+  const actorRole = assetUse === "portrait" ? roleForCanvasAssetContract(kind, metadata) : (metadata.actor_role || "unknown");
+  const hiddenPortrait = assetUse === "portrait" && ["player", "companion"].includes(actorRole);
   return {
     campaign_id: state.campaign.activeCampaign,
     key,
@@ -7828,19 +9254,24 @@ function assetContractPayload({ key, kind, safeId, metadata = {}, dataUrl }) {
     id: String(metadata.id || metadata.object_id || safeId || key),
     title: String(metadata.title || metadata.display_name || safeId || key),
     detail: metadata.detail || "",
-    gallery_category: galleryCategoryForAssetUse(assetUse, metadata),
+    gallery_category: hiddenPortrait ? "hidden" : galleryCategoryForAssetUse(assetUse, metadata),
     asset_use: assetUse,
-    actor_role: metadata.actor_role || "unknown",
+    actor_role: actorRole,
     certainty: metadata.certainty || "confirmed",
-    display_zone: metadata.display_zone || (assetUse === "map" ? "map" : "gallery"),
+    display_zone: hiddenPortrait ? "hidden" : (metadata.display_zone || (assetUse === "map" ? "map" : "gallery")),
     cache_policy: metadata.cache_policy || "stable",
     asset_subtype: metadata.asset_subtype || metadata.kind || "",
     asset_tags: Array.isArray(metadata.asset_tags) ? metadata.asset_tags.filter((item) => typeof item === "string" && item.trim()) : [],
     subject_key: metadata.subject_key || metadata.entity_key || "",
+    renderer_version: metadata.renderer_version || "",
+    source_gallery_asset_id: metadata.source_gallery_asset_id || "",
     display_name: metadata.display_name || metadata.title || "",
     source_type: metadata.source_type || (assetUse === "map" ? "server_canvas" : "image_api"),
     visual_contract_key: metadata.visual_contract_key || "",
     visual_contract_hash: metadata.visual_contract_hash || metadata.visual_profile_hash || "",
+    canvas_spec: metadata.canvas_spec || undefined,
+    visual_prompt: metadata.visual_prompt || undefined,
+    map_canvas: metadata.map_canvas || undefined,
     filename: `${String(kind || assetUse || "asset")}_${slugify(state.campaign.assetSeed || state.campaign.activeCampaign || "seed").slice(0, 24)}_${safeId}_v${ASSET_GENERATOR_VERSION}`,
     asset_seed: state.campaign.assetSeed || undefined,
     data_url: dataUrl,
@@ -7941,6 +9372,9 @@ function isPlaceholderAssetRequest({ key = "", kind = "", metadata = {}, seedTex
 function assetMetadataReusable(requested, existing) {
   if (!requested) return true;
   if (!existing) return false;
+  if (requested.canvas_spec && Object.keys(requested.canvas_spec).length) {
+    return stableJson(requested.canvas_spec) === stableJson(existing.canvas_spec || {});
+  }
   if (requested.visual_contract_hash || requested.visual_contract_key) {
     if (requested.visual_contract_key !== existing.visual_contract_key
       || requested.visual_contract_hash !== existing.visual_contract_hash) return false;

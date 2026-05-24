@@ -15,6 +15,11 @@
   --radius: 18px;
   --page-margin: 8px;
   --topbar-height: 68px;
+  --workspace-gap: 18px;
+  --workspace-left-width: calc(31% - 11.16px);
+  --workspace-center-width: calc(47% - 16.92px);
+  --workspace-right-width: calc(22% - 7.92px);
+  --workspace-columns: minmax(320px, var(--workspace-left-width)) minmax(520px, var(--workspace-center-width)) minmax(260px, var(--workspace-right-width));
 }
 
 * { box-sizing: border-box; }
@@ -353,8 +358,8 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(320px, 31vw) minmax(520px, 1fr) minmax(260px, 22vw);
-  gap: 18px;
+  grid-template-columns: var(--workspace-columns);
+  gap: var(--workspace-gap);
   align-items: stretch;
 }
 #closeStoryPicker,
@@ -2352,6 +2357,10 @@ textarea:focus {
 @media (max-height: 900px) and (min-width: 901px) {
   :root {
     --topbar-height: 58px;
+    --workspace-gap: 12px;
+    --workspace-left-width: calc(31% - 7.44px);
+    --workspace-center-width: calc(47% - 11.28px);
+    --workspace-right-width: calc(22% - 5.28px);
   }
   .appShell {
     gap: 8px;
@@ -2367,8 +2376,7 @@ textarea:focus {
     font-size: 22px;
   }
   .workspace {
-    gap: 12px;
-    grid-template-columns: minmax(330px, 32vw) minmax(480px, 1fr) minmax(250px, 21vw);
+    grid-template-columns: minmax(330px, var(--workspace-left-width)) minmax(480px, var(--workspace-center-width)) minmax(250px, var(--workspace-right-width));
   }
   .leftColumn,
   .rightColumn {
@@ -2543,6 +2551,49 @@ textarea:focus {
 }
 .galleryInspector b {
   font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.galleryInspectorInventory {
+  min-width: 0;
+  border: 1px solid rgba(126,95,58,.22);
+  border-radius: 8px;
+  background: rgba(255,251,241,.62);
+  padding: 8px;
+}
+.galleryInspectorInventory summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 13px;
+}
+.inventoryStatusRows {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.inventoryStatusRow {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid rgba(126,95,58,.16);
+  border-radius: 8px;
+  background: rgba(255,255,255,.58);
+}
+.inventoryStatusRow span {
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(71,125,184,.14);
+  color: #2d5d83;
+  font-size: 12px;
+  font-weight: 700;
+}
+.inventoryStatusRow p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 .rulesDialog {

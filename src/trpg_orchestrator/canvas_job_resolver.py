@@ -44,6 +44,37 @@ def canvas_jobs_from_payloads(pressure_pack: dict[str, Any], campaign_id: str, a
     if resolved:
         return resolved
     if canvas_request.get("mode") == "create" or map_request.get("mode") == "update_canvas":
+        map_canvas = payloads.get("map_canvas") if isinstance(payloads.get("map_canvas"), dict) else {}
+        if is_map_asset_protocol(map_canvas):
+            job = {
+                "job_id": "map_current_area",
+                "kind": "map",
+                "renderer": "map_asset_protocol",
+                "trigger": "director_triggered",
+                "input_ref": "payloads.map_canvas",
+                "asset_key": "map:current_area",
+                "cache_policy": "stable",
+                "campaign_id": campaign_id,
+                "asset_seed": asset_seed,
+            }
+            validate_canvas_job(job)
+            return [job]
+        if map_canvas.get("render_token") == "map_canvas.v1" and (
+            map_canvas.get("ascii") or map_canvas.get("points") or map_canvas.get("routes") or map_canvas.get("legend")
+        ):
+            job = {
+                "job_id": "map_current_area",
+                "kind": "map",
+                "renderer": "pixel_map",
+                "trigger": "director_triggered",
+                "input_ref": "payloads.map_canvas",
+                "asset_key": "map:current_area",
+                "cache_policy": "stable",
+                "campaign_id": campaign_id,
+                "asset_seed": asset_seed,
+            }
+            validate_canvas_job(job)
+            return [job]
         route = payloads.get("map_route") if isinstance(payloads.get("map_route"), dict) else {}
         if route.get("nodes"):
             job = {
@@ -60,6 +91,10 @@ def canvas_jobs_from_payloads(pressure_pack: dict[str, Any], campaign_id: str, a
             validate_canvas_job(job)
             return [job]
     return []
+
+
+def is_map_asset_protocol(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("schema") == "trpg.map_asset_protocol.v1" and isinstance(value.get("layers"), list)
 
 
 def validate_canvas_job(job: dict[str, Any]) -> None:

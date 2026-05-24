@@ -1,6 +1,6 @@
 import pytest
 
-from trpg_orchestrator.schema_validator import SchemaValidationError, validate_actor_output, validate_chatgpt_blocks, validate_pressure_pack, validate_writeback
+from trpg_orchestrator.schema_validator import SchemaValidationError, normalize_pressure_pack_compat, validate_actor_output, validate_chatgpt_blocks, validate_pressure_pack, validate_writeback
 
 
 def minimal_pressure_pack():
@@ -119,6 +119,259 @@ def test_removed_nonempty_output_request_modules_fail():
         validate_pressure_pack(data)
 
 
+def test_canvas_job_allows_declarative_canvas_spec():
+    data = minimal_pressure_pack()
+    data["output_requests"]["canvas_jobs"] = {"mode": "create", "trigger": "director_triggered", "reason": "new item"}
+    data["payloads"] = {
+        "canvas_jobs": [
+            {
+                "job_id": "rune_pendant_canvas",
+                "kind": "item",
+                "renderer": "pixel_item",
+                "trigger": "director_triggered",
+                "input_ref": "state_writeback.inventory_items.rune_pendant",
+                "asset_key": "item:rune_pendant",
+                "cache_policy": "stable",
+                "canvas_spec": {
+                    "schema": "item_canvas_spec.v1",
+                    "archetype": "pendant",
+                    "silhouette": "triangle",
+                    "materials": ["silver", "purple_crystal"],
+                    "palette": {"accent": "#8c62d6"},
+                    "parts": [{"kind": "gem"}, {"kind": "runes"}],
+                    "state_effects": [{"kind": "glow", "target": "gem"}],
+                },
+            }
+        ]
+    }
+
+    validate_pressure_pack(data)
+
+
+def test_compat_normalizes_route_shaped_map_canvas_and_visual_asset_wrapper():
+    data = minimal_pressure_pack()
+    data["output_requests"]["map"] = {"mode": "update_canvas", "trigger": "user_requested", "reason": "opening map"}
+    data["output_requests"]["visual_assets"] = {"mode": "create", "trigger": "user_requested", "reason": "opening cg"}
+    data["payloads"] = {
+        "map_canvas": {
+            "nodes": [{"id": "glade", "label": "林间空地"}],
+            "edges": [],
+            "visible_nodes": ["glade"],
+        },
+        "visual_assets": {
+            "assets": [
+                {
+                    "id": "opening_cg",
+                    "title": "苏醒",
+                        "kind": "cg",
+                        "gallery_category": "cg",
+                        "display_zone": "gallery",
+                        "detail": "林间空地苏醒的开场画面。",
+                        "canvas_spec": {
+                    "schema": "scene_canvas_spec.v1",
+                    "archetype": "forest_awakening",
+                    "scene": "forest_clearing",
+                    "area": "clearing",
+                    "biome": "temperate_forest",
+                    "lighting": "sunbeams",
+                    "mood": "mysterious_serene",
+                    "subjects": [{"type": "prop", "description": "发光符文吊坠"}],
+                    "elements": ["trees", "moss"],
+                    "surroundings": ["forest_edge", "bushes"],
+                    "markers": [{"label": "苏醒点", "x": 1, "y": 2}],
+                    "style": "watercolor",
+                    "atmosphere": "quiet",
+                    "materials": ["forest", "mist"],
+                    "palette": {"accent": "#6fa06d"},
+                },
+                }
+            ],
+        },
+    }
+
+    normalized = normalize_pressure_pack_compat(data)
+
+    assert "map_canvas" not in normalized["payloads"]
+    assert normalized["payloads"]["map_route"]["nodes"][0]["id"] == "glade"
+    assert isinstance(normalized["payloads"]["visual_assets"], list)
+    validate_pressure_pack(normalized)
+
+
+def test_visual_assets_payload_requires_gallery_category_and_canvas_spec():
+    data = minimal_pressure_pack()
+    data["output_requests"]["visual_assets"] = {"mode": "create", "trigger": "user_requested", "reason": "asset folder"}
+    data["payloads"] = {
+        "visual_assets": [
+            {
+                "id": "rune_pendant",
+                "title": "符文吊坠",
+                "kind": "prop",
+                "gallery_category": "prop",
+                "display_zone": "gallery",
+                "detail": "银质吊坠中央嵌有紫色水晶，表面刻有古老符文。",
+                "canvas_spec": {
+                    "schema": "item_canvas_spec.v1",
+                    "archetype": "pendant",
+                    "materials": ["silver", "purple_crystal"],
+                },
+            }
+        ]
+    }
+
+    validate_pressure_pack(data)
+
+    data["payloads"]["visual_assets"][0].pop("canvas_spec")
+    with pytest.raises(SchemaValidationError, match=r"payloads\.visual_assets\[1\]\.canvas_spec"):
+        validate_pressure_pack(data)
+
+
+def test_visual_assets_payload_validates_multi_gallery_categories():
+    data = minimal_pressure_pack()
+    data["output_requests"]["visual_assets"] = {"mode": "create", "trigger": "user_requested", "reason": "asset folder"}
+    data["payloads"] = {
+        "visual_assets": [
+            {
+                "id": "rune_pendant",
+                "title": "符文吊坠",
+                "kind": "prop",
+                "gallery_category": "prop",
+                "gallery_categories": ["prop", "item"],
+                "display_zone": "gallery",
+                "detail": "银质吊坠中央嵌有紫色水晶，表面刻有古老符文。",
+                "canvas_spec": {"schema": "item_canvas_spec.v1", "archetype": "pendant"},
+            }
+        ]
+    }
+
+    validate_pressure_pack(data)
+
+    data["payloads"]["visual_assets"][0]["gallery_categories"] = ["item"]
+    with pytest.raises(SchemaValidationError, match="gallery_categories must include gallery_category"):
+        validate_pressure_pack(data)
+
+    data["payloads"]["visual_assets"][0]["gallery_categories"] = ["prop", "unknown_filter"]
+    with pytest.raises(SchemaValidationError, match="unregistered campaign filter id"):
+        validate_pressure_pack(data)
+
+
+def test_update_canvas_requires_render_token_and_drawing_data():
+    data = minimal_pressure_pack()
+    data["output_requests"]["map"] = {"mode": "update_canvas", "trigger": "user_requested", "reason": "opening map"}
+    data["payloads"] = {
+        "map_canvas": {
+            "render_token": "map_canvas.v1",
+            "ascii": ["@..", ".#.", "..?"],
+            "legend": {"@": "当前位置", "#": "阻隔", "?": "未知"},
+        }
+    }
+
+    validate_pressure_pack(data)
+
+    data["payloads"]["map_canvas"].pop("render_token")
+    with pytest.raises(SchemaValidationError, match="render_token must be map_canvas.v1"):
+        validate_pressure_pack(data)
+
+    data["payloads"]["map_canvas"] = {"render_token": "map_canvas.v1"}
+    with pytest.raises(SchemaValidationError, match="ascii, points, routes, or legend"):
+        validate_pressure_pack(data)
+
+
+def test_update_canvas_accepts_map_asset_protocol():
+    data = minimal_pressure_pack()
+    data["output_requests"]["map"] = {"mode": "update_canvas", "trigger": "user_requested", "reason": "opening map"}
+    data["payloads"] = {
+        "map_canvas": {
+            "schema": "trpg.map_asset_protocol.v1",
+            "id": "facility_map",
+            "title": "Facility Map",
+            "scale": "facility",
+            "palette": {"paper": "#eee", "land": "#999", "water": "#59a", "danger": "#c44", "route": "#333", "ink": "#111", "glow": "#6ef"},
+            "layers": [
+                {"id": "terrain", "type": "area", "features": [{"id": "deck", "shape": "ellipse", "center": [0.5, 0.5], "size": [0.6, 0.4], "style": "metal"}]},
+                {"id": "routes", "type": "route", "features": [{"id": "corridor", "points": [[0.2, 0.8], [0.8, 0.2]], "style": "main"}]},
+                {"id": "sites", "type": "site", "features": [{"id": "core", "center": [0.5, 0.5], "kind": "objective", "label": "Core"}]},
+                {"id": "state", "type": "overlay", "features": [{"id": "glow", "shape": "pulse", "target_site": "core", "radius": 0.1, "intensity": 0.5}]},
+            ],
+        }
+    }
+
+    validate_pressure_pack(data)
+
+
+def test_update_canvas_rejects_non_structured_drawing_fields():
+    data = minimal_pressure_pack()
+    data["output_requests"]["map"] = {"mode": "update_canvas", "trigger": "user_requested", "reason": "opening map"}
+    data["payloads"] = {
+        "map_canvas": {
+            "render_token": "map_canvas.v1",
+            "ascii": "[@]",
+            "points": {"nodes": []},
+            "legend": [],
+        }
+    }
+
+    with pytest.raises(SchemaValidationError, match="ascii must be a list of strings"):
+        validate_pressure_pack(data)
+
+    data["payloads"]["map_canvas"]["ascii"] = ["@.."]
+    with pytest.raises(SchemaValidationError, match="points must be a list"):
+        validate_pressure_pack(data)
+
+    data["payloads"]["map_canvas"]["points"] = []
+    with pytest.raises(SchemaValidationError, match="legend must be an object"):
+        validate_pressure_pack(data)
+
+
+def test_canvas_job_allows_actor_canvas_spec():
+    data = minimal_pressure_pack()
+    data["output_requests"]["canvas_jobs"] = {"mode": "create", "trigger": "director_triggered", "reason": "new npc"}
+    data["payloads"] = {
+        "canvas_jobs": [
+            {
+                "job_id": "guide_portrait_canvas",
+                "kind": "npc_portrait",
+                "renderer": "pixel_actor",
+                "trigger": "director_triggered",
+                "input_ref": "scene.active_npcs.guide",
+                "asset_key": "npc:guide",
+                "cache_policy": "stable",
+                "canvas_spec": {
+                    "schema": "actor_canvas_spec.v1",
+                    "role_archetype": "guide",
+                    "silhouette": "hooded",
+                    "palette": {"cloth": "#465a63", "accent": "#d6bc75"},
+                    "features": ["masked", "scarred"],
+                    "state_effects": [{"kind": "glow", "target": "mark"}],
+                },
+            }
+        ]
+    }
+
+    validate_pressure_pack(data)
+
+
+def test_canvas_job_rejects_executable_canvas_spec():
+    data = minimal_pressure_pack()
+    data["output_requests"]["canvas_jobs"] = {"mode": "create", "trigger": "director_triggered", "reason": "new item"}
+    data["payloads"] = {
+        "canvas_jobs": [
+            {
+                "job_id": "bad_canvas",
+                "kind": "item",
+                "renderer": "pixel_item",
+                "trigger": "director_triggered",
+                "input_ref": "payloads.canvas_jobs.0",
+                "asset_key": "item:bad",
+                "cache_policy": "stable",
+                "canvas_spec": {"javascript": "ctx.fillRect(0,0,1,1)"},
+            }
+        ]
+    }
+
+    with pytest.raises(SchemaValidationError, match="forbidden executable fields"):
+        validate_pressure_pack(data)
+
+
 def test_removed_empty_payload_keys_are_compat_only():
     data = minimal_pressure_pack()
     data["payloads"]["inventory_updates"] = []
@@ -160,7 +413,7 @@ def test_writeback_accepts_gallery_assets_and_inventory_items():
         "long_term_memory": {},
         "new_open_threads": [],
         "closed_threads": [],
-        "gallery_assets": [{"id": "letter_art", "type": "item", "title": "Damp Letter", "asset_tags": ["clue"]}],
+        "gallery_assets": [{"id": "letter_art", "type": "item", "title": "Damp Letter", "gallery_category": "item", "asset_tags": ["clue"]}],
         "inventory_items": [{"item_id": "letter_001", "title": "Damp Letter"}],
     })
 
@@ -217,6 +470,16 @@ def test_writeback_rejects_invalid_global_gallery_and_inventory_shapes():
                 {"item_id": "rune_pendant", "title": "Rune Pendant"},
                 {"item_id": "rune_pendant", "title": "Rune Pendant"},
             ],
+        })
+
+    with pytest.raises(SchemaValidationError, match="must not be item_record"):
+        validate_writeback({
+            "short_term_state": {},
+            "long_term_memory": {},
+            "new_open_threads": [],
+            "closed_threads": [],
+            "gallery_assets": [{"id": "staff", "type": "item_record", "title": "Staff", "gallery_category": "item"}],
+            "inventory_items": [],
         })
 
 
@@ -334,7 +597,7 @@ def test_actor_output_clue_uses_gallery_assets():
             "long_term_memory": {},
             "new_open_threads": [],
             "closed_threads": [],
-            "gallery_assets": [{"id": "fog_trace", "type": "clue", "title": "Broken twig near the fog"}],
+            "gallery_assets": [{"id": "fog_trace", "type": "clue", "title": "Broken twig near the fog", "gallery_category": "prop"}],
             "inventory_items": [],
         },
     })
@@ -357,7 +620,7 @@ def test_gallery_asset_tags_must_be_strings():
             "long_term_memory": {},
             "new_open_threads": [],
             "closed_threads": [],
-            "gallery_assets": [{"id": "letter_art", "type": "item", "title": "Damp Letter", "asset_tags": [{"label": "clue"}]}],
+            "gallery_assets": [{"id": "letter_art", "type": "item", "title": "Damp Letter", "gallery_category": "item", "asset_tags": [{"label": "clue"}]}],
         })
 
 

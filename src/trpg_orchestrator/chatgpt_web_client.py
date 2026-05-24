@@ -124,6 +124,9 @@ class ChatGPTWebClient:
         if mode == "playwright":
             self._send_with_playwright(chatgpt_input_path, output_path)
             return
+        if mode in {"browser_harness", "bh"}:
+            self._send_with_browser_harness(chatgpt_input_path, output_path)
+            return
         raise RuntimeError(
             "Manual ChatGPT send mode. Paste outbox/chatgpt_input.md into the configured fixed "
             "conversation, save the latest reply to outbox/chatgpt_raw_output.md, then run trpg ingest. "
@@ -136,16 +139,84 @@ class ChatGPTWebClient:
         if not input_path.exists():
             raise FileNotFoundError(f"missing ChatGPT input file: {input_path}")
         automation_mode = os.getenv("TRPG_CHATGPT_AUTOMATION", "manual").lower()
-        if automation_mode != "playwright":
-            raise RuntimeError("send_file_and_capture requires TRPG_CHATGPT_AUTOMATION=playwright.")
-        self._send_with_playwright(input_path, output_path, mode=mode)
+        if automation_mode == "playwright":
+            self._send_with_playwright(input_path, output_path, mode=mode)
+            return
+        if automation_mode in {"browser_harness", "bh"}:
+            self._send_with_browser_harness(input_path, output_path, mode=mode)
+            return
+        raise RuntimeError("send_file_and_capture requires TRPG_CHATGPT_AUTOMATION=playwright or browser_harness.")
 
     def capture_latest(self, output_path: Path) -> None:
         self.validate_binding()
         mode = os.getenv("TRPG_CHATGPT_AUTOMATION", "manual").lower()
-        if mode != "playwright":
-            raise RuntimeError("capture requires TRPG_CHATGPT_AUTOMATION=playwright.")
-        self._send_with_playwright(Path("__capture_only__"), output_path, capture_only=True)
+        if mode == "playwright":
+            self._send_with_playwright(Path("__capture_only__"), output_path, capture_only=True)
+            return
+        if mode in {"browser_harness", "bh"}:
+            self._send_with_browser_harness(Path("__capture_only__"), output_path, capture_only=True)
+            return
+        raise RuntimeError("capture requires TRPG_CHATGPT_AUTOMATION=playwright or browser_harness.")
+
+    def _send_with_browser_harness(self, chatgpt_input_path: Path, output_path: Path, capture_only: bool = False, mode: str = "text") -> None:
+        user_data_dir = os.getenv("TRPG_BROWSER_USER_DATA_DIR")
+        if not user_data_dir:
+            raise RuntimeError("TRPG_BROWSER_USER_DATA_DIR is required when TRPG_CHATGPT_AUTOMATION=browser_harness.")
+        campaign_id = str(self.campaign_profile.get("campaign_id") or "")
+        evidence_mode = "capture_only" if capture_only else mode
+        input_hash = "" if capture_only else sha256_file(chatgpt_input_path)
+        script = SCRIPTS_DIR / "chatgpt_browser_harness_send.py"
+        command = [
+            sys.executable,
+            str(script),
+            "--input",
+            str(chatgpt_input_path),
+            "--output",
+            str(output_path),
+            "--project",
+            self.project_name,
+            "--conversation",
+            self.conversation_name,
+            "--mode",
+            mode,
+        ]
+        if capture_only:
+            command.extend(["--capture-only", "true"])
+        completed = subprocess.run(
+            command,
+            cwd=str(SCRIPTS_DIR.parent),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            write_browser_evidence(output_path, build_browser_evidence(
+                ok=False,
+                mode=evidence_mode,
+                campaign_id=campaign_id,
+                input_hash=input_hash,
+                output_hash=sha256_file(output_path),
+                markers_ok=False,
+                blocked_reason=browser_safety_stop_reason(read_runtime_text(output_path)) if output_path.exists() else "browser_automation_error",
+                error=detail or f"ChatGPT browser-harness automation stopped with exit code {completed.returncode}",
+            ))
+            if detail:
+                raise RuntimeError(f"ChatGPT browser-harness automation stopped: {detail}")
+            raise RuntimeError(f"ChatGPT browser-harness automation stopped with exit code {completed.returncode}")
+        ok, markers_ok, blocked_reason, error = evaluate_browser_output(output_path, mode)
+        write_browser_evidence(output_path, build_browser_evidence(
+            ok=ok,
+            mode=evidence_mode,
+            campaign_id=campaign_id,
+            input_hash=input_hash,
+            output_hash=sha256_file(output_path),
+            markers_ok=markers_ok,
+            blocked_reason=blocked_reason,
+            error=error,
+        ))
+        if not ok:
+            raise RuntimeError(error or blocked_reason or "ChatGPT browser-harness evidence failed.")
 
     def _send_with_playwright(self, chatgpt_input_path: Path, output_path: Path, capture_only: bool = False, mode: str = "text") -> None:
         user_data_dir = os.getenv("TRPG_BROWSER_USER_DATA_DIR")

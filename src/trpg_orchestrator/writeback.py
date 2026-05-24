@@ -49,6 +49,8 @@ def apply_approved_writeback(
     prose_chars_delta: int | None = None,
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {}
+    if isinstance(pressure_pack, dict):
+        apply_director_gallery_payloads(memory, pressure_pack)
     long_term = approved_writeback.get("long_term_memory", approved_writeback)
     short_term = approved_writeback.get("short_term_state", {})
 
@@ -133,7 +135,7 @@ def apply_approved_writeback(
         protocol_warnings.extend(updated_progress.get("protocol_warnings", []))
 
     gallery_assets = approved_writeback.get("gallery_assets")
-    if gallery_assets not in (None, "", [], {}):
+    if gallery_assets not in (None, "", [], {}) and not isinstance(pressure_pack, dict):
         campaign_id = _writeback_campaign_id(memory, approved_writeback)
         apply_gallery_assets(campaign_id, gallery_assets)
     inventory_items = approved_writeback.get("inventory_items")
@@ -161,6 +163,38 @@ def apply_approved_writeback(
     remember_applied_writeback_hashes(updates, memory, approved_writeback, extra_hashes)
     stamp_updates(updates, memory)
     return updates
+
+
+def apply_director_gallery_payloads(memory: dict[str, Any], pressure_pack: dict[str, Any]) -> None:
+    payloads = pressure_pack.get("payloads") if isinstance(pressure_pack.get("payloads"), dict) else {}
+    visual_assets = payloads.get("visual_assets") if isinstance(payloads.get("visual_assets"), list) else []
+    if not visual_assets:
+        return
+    campaign_id = _writeback_campaign_id(memory, {})
+    gallery_assets: list[dict[str, Any]] = []
+    for item in visual_assets:
+        asset = director_visual_asset_to_gallery_asset(item)
+        if asset:
+            gallery_assets.append(asset)
+    if gallery_assets:
+        apply_gallery_assets(campaign_id, gallery_assets)
+
+
+def director_visual_asset_to_gallery_asset(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+    asset = deepcopy(item)
+    asset_type = str(asset.get("type") or asset.get("kind") or "").strip()
+    for key in ("id", "title", "gallery_category", "detail"):
+        if not str(asset.get(key) or "").strip():
+            return {}
+    if not asset_type:
+        return {}
+    asset["type"] = asset_type
+    asset.pop("kind", None)
+    if "gallery_categories" in asset and not isinstance(asset.get("gallery_categories"), list):
+        return {}
+    return asset
 
 
 def _writeback_prose_chars(writeback: dict[str, Any]) -> int:

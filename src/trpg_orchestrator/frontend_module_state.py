@@ -67,7 +67,9 @@ def _removed_module(module: str) -> dict[str, Any]:
 
 def _map_module(request: dict[str, Any], payloads: dict[str, Any], assets: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
     mode = str(request.get("mode") or "keep_previous")
-    latest = next((item for item in assets if item.get("kind") in {"map", "map_image"} or str(item.get("kind", "")).startswith("gallery_map")), {})
+    latest = next((item for item in assets if _is_current_map_asset(item)), {})
+    if not latest:
+        latest = next((item for item in assets if _is_cached_map_asset(item)), {})
     if mode in {"none", "no_update"}:
         return {"mode": "no_update", "state": "idle", "update_requested": False, "payload": {}, "payload_ref": "", "reason": request.get("reason", "")}
     if mode == "keep_previous":
@@ -92,6 +94,27 @@ def _map_module(request: dict[str, Any], payloads: dict[str, Any], assets: list[
         "reason": request.get("reason", ""),
         "warnings": warnings,
     }
+
+
+def _is_cached_map_asset(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict) or not item.get("url") or item.get("exists") is False:
+        return False
+    kind = str(item.get("kind") or "").lower()
+    return (
+        kind in {"map", "map_image"}
+        or kind.startswith("gallery_map")
+        or str(item.get("asset_use") or "").lower() == "map"
+        or str(item.get("asset_kind") or "").lower() == "map_image"
+        or str(item.get("display_zone") or "").lower() == "map"
+    )
+
+
+def _is_current_map_asset(item: dict[str, Any]) -> bool:
+    if not _is_cached_map_asset(item):
+        return False
+    if str(item.get("source_gallery_asset_id") or "").strip():
+        return False
+    return str(item.get("display_zone") or "").lower() == "map"
 
 
 def _payload_module(

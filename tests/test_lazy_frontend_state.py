@@ -88,3 +88,53 @@ def test_map_module_keeps_cached_map_image_asset():
 
     assert modules["map_panel"]["state"] == "cached"
     assert modules["map_panel"]["payload_ref"].endswith("opening.png")
+
+
+def test_map_module_keeps_cached_frontend_map_asset_view():
+    modules = build_frontend_modules(
+        "demo",
+        {"asset_seed": "seed", "module_refs": {}},
+        {"output_requests": {"map": {"mode": "keep_previous", "trigger": "none", "reason": ""}}},
+        [{
+            "key": "demo:seed:map:current:route:v19",
+            "asset_kind": "map_image",
+            "asset_use": "map",
+            "display_zone": "map",
+            "gallery_category": "map",
+            "url": "/campaign-assets/demo/maps/current.png",
+        }],
+        {},
+    )
+
+    assert modules["map_panel"]["state"] == "cached"
+    assert modules["map_panel"]["payload_ref"].endswith("current.png")
+
+
+def test_map_module_prefers_current_map_over_gallery_map_archive():
+    modules = build_frontend_modules(
+        "demo",
+        {"asset_seed": "seed", "module_refs": {}},
+        {"output_requests": {"map": {"mode": "keep_previous", "trigger": "none", "reason": ""}}},
+        [
+            {
+                "key": "demo:seed:map:gallery_old:gallery_scene_canvas.v2:v19",
+                "asset_kind": "map_image",
+                "asset_use": "map",
+                "display_zone": "gallery",
+                "gallery_category": "古老遗迹",
+                "source_gallery_asset_id": "old_ruins",
+                "url": "/campaign-assets/demo/maps/gallery_old.png",
+            },
+            {
+                "key": "demo:seed:map:current:route:v19",
+                "asset_kind": "map_image",
+                "asset_use": "map",
+                "display_zone": "map",
+                "gallery_category": "map",
+                "url": "/campaign-assets/demo/maps/current.png",
+            },
+        ],
+        {},
+    )
+
+    assert modules["map_panel"]["payload_ref"].endswith("current.png")

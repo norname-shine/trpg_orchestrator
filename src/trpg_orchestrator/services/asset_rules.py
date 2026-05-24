@@ -69,14 +69,12 @@ def validate_custom_gallery_categories(rows: Any) -> tuple[list[dict[str, str]],
         if "maps_to" in row:
             warnings.append("custom_gallery_categories must not use maps_to")
             continue
-        category_id = safe_segment(str(row.get("id") or "").lower())
-        if not category_id or category_id in blocked or category_id in seen:
+        category_id = safe_segment(str(row.get("id") or ""))
+        category_key = category_id.casefold()
+        if not category_id or category_key in blocked or category_key in seen:
             warnings.append(f"invalid custom gallery category id: {category_id or '<empty>'}")
             continue
-        if not re.fullmatch(r"[a-z0-9_.-]+", category_id):
-            warnings.append(f"invalid custom gallery category id: {category_id}")
-            continue
-        seen.add(category_id)
+        seen.add(category_key)
         normalized.append({
             "id": category_id,
             "label": str(row.get("label") or category_id).strip() or category_id,

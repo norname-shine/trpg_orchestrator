@@ -12,7 +12,7 @@ DEFAULT_CAPABILITIES = ["base_director", "base_actor", "story_progress", "recent
 
 KEYWORDS = {
     "map": ["地图", "更新地图", "点阵地图", "路线", "区域图", "map", "route"],
-    "image": ["生图", "生成图", "画图", "图片", "立绘", "头像", "场景图", "怪物图", "image", "generate image", "portrait"],
+    "image": ["生图", "生成图", "画图", "图片", "立绘", "头像", "场景图", "怪物图", "cg", "CG", "资产", "资产夹", "image", "generate image", "portrait"],
     "dossier": ["资料", "资料夹", "档案", "dossier", "archive"],
     "inventory": ["物品", "背包", "装备", "道具", "检查物品", "使用", "获得", "丢失", "inventory", "item", "equipment"],
     "character_card": ["角色卡", "状态", "属性", "受伤", "成长", "经验", "character", "status", "injury", "growth"],

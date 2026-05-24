@@ -216,6 +216,11 @@ def _manifest_entry(key: str, rel_path: Path, normalized: dict[str, Any]) -> dic
         "detail": normalized.get("detail", ""),
         "visual_contract_key": normalized.get("visual_contract_key", ""),
         "visual_contract_hash": normalized.get("visual_contract_hash", ""),
+        "canvas_spec": normalized.get("canvas_spec", {}),
+        "visual_prompt": normalized.get("visual_prompt", {}),
+        "map_canvas": normalized.get("map_canvas", {}),
+        "renderer_version": normalized.get("renderer_version", ""),
+        "source_gallery_asset_id": normalized.get("source_gallery_asset_id", ""),
     }
     entry = {
         "key": key,
@@ -335,7 +340,7 @@ def register_canvas_map_asset(payload: dict[str, Any], asset_seed: str = "") -> 
     return register_regular_asset(payload, asset_seed)
 
 
-def frontend_asset_view(campaign_id: str, key: str, entry: dict[str, Any]) -> dict[str, Any]:
+def frontend_asset_view(campaign_id: str, key: str, entry: dict[str, Any], asset_seed: str = "") -> dict[str, Any]:
     rel_path = str(entry.get("path") or "")
     url_path = rel_path.replace("\\", "/")
     exists = False
@@ -348,6 +353,8 @@ def frontend_asset_view(campaign_id: str, key: str, entry: dict[str, Any]) -> di
         url_path = url_path[len("assets/"):]
     return {
         "key": key,
+        "campaign_id": campaign_id,
+        "asset_seed": str(entry.get("asset_seed") or asset_seed or campaign_asset_seed(campaign_id)),
         "url": f"/campaign-assets/{safe_segment(campaign_id)}/{url_path}" if rel_path else "",
         "title": entry.get("display_name") or key,
         "asset_kind": entry.get("asset_kind", ""),
@@ -366,6 +373,8 @@ def frontend_asset_view(campaign_id: str, key: str, entry: dict[str, Any]) -> di
         "exists": exists,
         "visual_contract_key": entry.get("visual_contract_key", ""),
         "visual_contract_hash": entry.get("visual_contract_hash", ""),
+        "renderer_version": entry.get("renderer_version", ""),
+        "source_gallery_asset_id": entry.get("source_gallery_asset_id", ""),
     }
 
 
@@ -374,17 +383,19 @@ def asset_lookup(campaign_id: str, key: str, asset_seed: str = "") -> dict[str, 
     entry = manifest.get("assets", {}).get(key)
     if not isinstance(entry, dict):
         return {"ok": True, "exists": False}
-    view = frontend_asset_view(campaign_id, key, entry)
+    resolved_seed = str(manifest.get("asset_seed") or asset_seed or campaign_asset_seed(campaign_id))
+    view = frontend_asset_view(campaign_id, key, entry, resolved_seed)
     return {"ok": True, "exists": bool(view.get("exists")), "key": key, "entry": view, "url": view.get("url", ""), **view}
 
 
 def asset_list(campaign_id: str, scope: str = "", asset_seed: str = "") -> dict[str, Any]:
     manifest = load_asset_manifest(campaign_id, asset_seed)
+    resolved_seed = str(manifest.get("asset_seed") or asset_seed or campaign_asset_seed(campaign_id))
     rows = []
     for key, entry in manifest.get("assets", {}).items():
         if not isinstance(entry, dict):
             continue
-        view = frontend_asset_view(campaign_id, key, entry)
+        view = frontend_asset_view(campaign_id, key, entry, resolved_seed)
         if not view.get("exists"):
             continue
         if scope and scope != "all" and scope not in {

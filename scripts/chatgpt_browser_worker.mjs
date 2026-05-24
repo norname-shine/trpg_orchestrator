@@ -221,7 +221,10 @@ async function openTaskConversation(page, task) {
   const autoCreate = task.auto_create !== false;
   if (projectName) {
     writeTaskStatus(task.id, { state: "running", stage: "project_opening", label: "Opening ChatGPT project", percent: 12, updated_at: Date.now() });
-    await openProject(page, projectName, task.id, autoCreate);
+    const opened = await openProject(page, projectName, task.id, autoCreate);
+    if (!opened) {
+      writeTaskStatus(task.id, { state: "running", stage: "project_unavailable", label: `Project unavailable, using normal ChatGPT chat: ${projectName}`, percent: 14, updated_at: Date.now() });
+    }
   }
   if (conversationName) {
     writeTaskStatus(task.id, { state: "running", stage: "conversation_opening", label: "Opening campaign conversation", percent: 15, updated_at: Date.now() });
@@ -276,19 +279,18 @@ async function openProject(page, name, taskId, allowCreate = false) {
   await ensureSidebarOpen(page);
   if (await clickFirstVisible(projectLinkCandidates(page, name), 1800)) {
     await page.waitForTimeout(1200);
-    return;
+    return true;
   }
   await openProjectsSection(page);
   if (await clickFirstVisible(projectLinkCandidates(page, name), 2500)) {
     await page.waitForTimeout(1200);
-    return;
+    return true;
   }
   if (allowCreate) {
     writeTaskStatus(taskId, { state: "running", stage: "project_creating", label: "Creating ChatGPT project", percent: 13, updated_at: Date.now() });
-    await createProject(page, name, taskId);
-    return;
+    return await createProject(page, name, taskId);
   }
-  fail(`Project not found: ${name}`);
+  return false;
 }
 
 async function openConversation(page, name, taskId, allowCreate = false) {
@@ -325,10 +327,10 @@ async function createProject(page, name, taskId = "") {
       await fillProjectName(page, name);
       await submitProjectCreateDialog(page);
       await waitForProjectAvailable(page, name, taskId);
-      return;
+      return true;
     }
   }
-  fail(`Project not found and automatic project creation control was not found: ${name}`);
+  return false;
 }
 
 async function openProjectsSection(page) {
@@ -516,30 +518,60 @@ async function fillComposer(page, text) {
 
 async function clickSend(page) {
   const selectors = [
+    '[data-testid="composer-submit-button"]',
     '[data-testid="send-button"]',
     '[data-testid*="send" i]',
+    'button[aria-label="Send"]',
     'button[aria-label="Send prompt"]',
     'button[aria-label="Send message"]',
     'button[aria-label*="Send"]',
     'button[aria-label*="Submit"]',
     'button[aria-label*="发送"]',
     'button[aria-label*="提交"]',
-    'button:has(svg)',
   ];
   for (const selector of selectors) {
     const locator = page.locator(selector).last();
     if (await locator.isVisible({ timeout: 2500 }).catch(() => false)) {
       await locator.click({ timeout: 10_000 });
-      return;
+      if (await waitForSendStarted(page)) return;
     }
   }
   await page.keyboard.press("Enter");
+  if (await waitForSendStarted(page)) return;
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter");
+  if (await waitForSendStarted(page)) return;
   await page.waitForTimeout(1200);
   const stopVisible = await page.locator('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="停止"]').first().isVisible({ timeout: 800 }).catch(() => false);
   const assistantStarted = Boolean((await latestAssistantText(page).catch(() => "")).trim());
   if (stopVisible || assistantStarted) return;
   const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
   fail(`Send button not found. page=${page.url()} preview=${bodyText.slice(0, 500)}`);
+}
+
+async function waitForSendStarted(page) {
+  for (let i = 0; i < 10; i += 1) {
+    const stopVisible = await page.locator('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="停止"]').first().isVisible({ timeout: 300 }).catch(() => false);
+    if (stopVisible) return true;
+    const assistantStarted = Boolean((await latestAssistantText(page).catch(() => "")).trim());
+    if (assistantStarted) return true;
+    const composerText = await composerTextValue(page);
+    if (composerText !== null && composerText.trim() === "") return true;
+    await sleep(300);
+  }
+  return false;
+}
+
+async function composerTextValue(page) {
+  const selectors = ['[data-testid="prompt-textarea"]', "textarea", '[contenteditable="true"]', ".ProseMirror"];
+  for (const selector of selectors) {
+    const locator = page.locator(selector).last();
+    if (!(await locator.isVisible({ timeout: 300 }).catch(() => false))) continue;
+    if (selector === "textarea") {
+      return await locator.inputValue({ timeout: 500 }).catch(() => "");
+    }
+    return await locator.innerText({ timeout: 500 }).catch(() => "");
+  }
+  return null;
 }
 
 async function waitForAssistantCompletion(page, taskId) {

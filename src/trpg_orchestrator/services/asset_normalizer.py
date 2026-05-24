@@ -70,14 +70,16 @@ def normalize_regular_asset(payload: dict[str, Any], campaign_id: str) -> dict[s
 
     contract = load_asset_contract()
     allowed_uses = {"portrait", "item", "prop", "map"}
-    allowed_categories = gallery_category_ids(campaign_id)
+    allowed_categories = gallery_category_ids(campaign_id) | {"hidden"}
+    allowed_category_by_key = {category.casefold(): category for category in allowed_categories}
     allowed_certainty = {str(item) for item in contract.get("certainty_values", [])}
     allowed_zones = {str(item) for item in contract.get("display_zones", [])}
     allowed_policies = {str(item) for item in contract.get("cache_policies", [])}
     allowed_roles = {str(item) for item in contract.get("actor_roles", [])}
     allowed_sources = {str(item) for item in contract.get("source_types", [])}
 
-    gallery_category = str(payload.get("gallery_category") or "").strip().lower()
+    raw_gallery_category = str(payload.get("gallery_category") or "").strip()
+    gallery_category = allowed_category_by_key.get(raw_gallery_category.casefold(), raw_gallery_category)
     certainty = str(payload.get("certainty") or "").strip().lower()
     display_zone = str(payload.get("display_zone") or "").strip().lower()
     cache_policy = str(payload.get("cache_policy") or "").strip().lower()
@@ -127,5 +129,10 @@ def normalize_regular_asset(payload: dict[str, Any], campaign_id: str) -> dict[s
             "detail": str(payload.get("detail") or "").strip(),
             "visual_contract_key": str(payload.get("visual_contract_key") or "").strip(),
             "visual_contract_hash": str(payload.get("visual_contract_hash") or "").strip(),
+            "canvas_spec": payload.get("canvas_spec") if isinstance(payload.get("canvas_spec"), dict) else {},
+            "visual_prompt": payload.get("visual_prompt") if isinstance(payload.get("visual_prompt"), dict) else {},
+            "map_canvas": payload.get("map_canvas") if isinstance(payload.get("map_canvas"), dict) else {},
+            "renderer_version": str(payload.get("renderer_version") or "").strip(),
+            "source_gallery_asset_id": str(payload.get("source_gallery_asset_id") or "").strip(),
         },
     }

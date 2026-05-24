@@ -7,6 +7,7 @@ from trpg_orchestrator import memory_store
 from trpg_orchestrator import web_server
 from trpg_orchestrator.encoding_utils import looks_mojibake
 from trpg_orchestrator.memory_store import default_memory
+from trpg_orchestrator.services import asset_rules
 from trpg_orchestrator.services import raw_gallery_store
 from trpg_orchestrator.visual_contracts import build_initial_visual_contract_candidates, merge_visual_contracts
 from trpg_orchestrator.web_server import campaign_initialization_frontend_payload, validate_v4_campaign_setup
@@ -150,6 +151,7 @@ def setup_payload(custom_categories=None):
                     "id": "opening_map",
                     "type": "map",
                     "title": "Opening Route",
+                    "gallery_category": "map",
                     "detail": "Director-authored map card",
                     "display_zone": "gallery",
                     "payload": {"media": {"image": "assets/map/opening.png"}},
@@ -158,6 +160,7 @@ def setup_payload(custom_categories=None):
                     "id": "kit",
                     "type": "item",
                     "title": "Hunter kit",
+                    "gallery_category": "item",
                 },
             ],
         },
@@ -243,6 +246,12 @@ def test_character_card_badges_must_be_string_array():
 
 def test_frontend_tags_keep_strings_and_drop_objects():
     assert web_server.normalize_frontend_tags(["失忆", {"label": "不应显示"}], ["备用"]) == ["失忆"]
+
+
+def test_frontend_tags_do_not_infer_legacy_object_strings():
+    legacy = "{'id': 'memory_loss', 'label': '失忆', 'icon': 'brain'}"
+
+    assert web_server.normalize_frontend_tags([legacy], ["备用"]) == [legacy]
 
 
 def test_fixed_asset_categories_do_not_count_against_campaign_categories():
@@ -351,6 +360,24 @@ def test_campaign_setup_gallery_raw_example_does_not_show_empty_assets():
 
     assert hint["gallery_raw"]["assets"]
     assert '"assets": []' not in web_server.json.dumps(hint, ensure_ascii=False)
+
+
+def test_campaign_setup_prompt_defines_custom_gallery_semantics():
+    prompt = web_server.build_campaign_director_setup_prompt(smart_create_payload())
+
+    assert "少量、跨回合复用" in prompt
+    assert "本团专属资料维度" in prompt
+    assert "不是地点、章节、角色、物品、道具、地图或CG的同义词" in prompt
+    assert "没有强需求就返回 []" in prompt
+    assert "不得把地图区域、地点名称、章节阶段或场景名作为自定义资料夹筛选" in prompt
+    assert "不得输出等同于固定筛选的分类" in prompt
+
+
+def test_campaign_setup_prompt_defines_item_and_prop_boundary():
+    prompt = web_server.build_campaign_director_setup_prompt(smart_create_payload())
+
+    assert "`item` 是玩家持有、可装备、可消耗或可纳入物品栏追踪的物" in prompt
+    assert "`prop` 是场景线索、机关器物、环境物、不可携带物或尚未归属给玩家的物" in prompt
 
 
 @pytest.mark.parametrize("forbidden", ["gallery_updates", "inventory_updates"])
@@ -669,6 +696,123 @@ def test_initialization_payload_materializes_map_and_item_jobs_without_cg_canvas
     assert result["cg_contract"]["cg_prompt"]["positive"] == "hunter camp at dusk"
 
 
+def test_frontend_map_panel_accepts_map_asset_protocol_without_legacy_points():
+    output = {
+        "pressure_pack": {
+            "output_requests": {
+                "map": {"mode": "update_canvas", "reason": "protocol map update"},
+            },
+            "payloads": {
+                "map_canvas": {
+                    "schema": "trpg.map_asset_protocol.v1",
+                    "title": "Protocol Map",
+                    "layers": [
+                        {"id": "terrain", "type": "area", "features": [{"id": "clearing", "title": "Clearing"}]},
+                    ],
+                },
+            },
+        },
+    }
+
+    result = web_server.frontend_map_panel("campaign_test", {"location": "Clearing"}, output, [])
+
+    assert result["mode"] == "update"
+    assert result["update_requested"] is True
+    assert result["payload"]["map_canvas"]["schema"] == "trpg.map_asset_protocol.v1"
+
+
+def test_initialization_payload_materializes_gallery_raw_canvas_jobs(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(asset_rules, "CAMPAIGNS_DIR", tmp_path)
+    campaign_id = "campaign_test"
+    root = tmp_path / campaign_id
+    root.mkdir(parents=True)
+    profile = {
+        "campaign_id": campaign_id,
+        "title": "Canvas Gallery Test",
+        "asset_seed": "seed123",
+        "initial_assets": validate_v4_campaign_setup(setup_payload())["initial_assets"],
+    }
+    (root / "campaign_profile.json").write_text(web_server.json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    (root / "asset_presentation.json").write_text(web_server.json.dumps({
+        "custom_gallery_categories": [{"id": "clue_archive", "label": "Clue Archive", "source": "campaign"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    raw_gallery_store.save_gallery_raw(campaign_id, {
+        "schema": raw_gallery_store.RAW_GALLERY_SCHEMA,
+        "campaign_id": campaign_id,
+        "updated_turn": 1,
+        "assets": [
+            {
+                "id": "moon_tree_mark",
+                "type": "prop",
+                "title": "Moon Tree Mark",
+                "gallery_category": "clue_archive",
+                "detail": "A reusable clue dimension entry.",
+                "display_zone": "gallery",
+                "canvas_spec": {
+                    "schema": "item_canvas_spec.v1",
+                    "archetype": "carved bark clue",
+                    "materials": ["bark", "moon-silver pigment"],
+                    "marks": ["crescent rune"],
+                },
+            }
+        ],
+    })
+
+    result = campaign_initialization_frontend_payload(campaign_id, {"title": "Canvas Gallery Test"}, [])
+
+    job = next(job for job in result["canvas_jobs"] if job["job_id"] == "gallery_moon_tree_mark")
+    assert job["source"] == "gallery_raw"
+    assert job["kind"] == "prop"
+    assert job["gallery_category"] == "clue_archive"
+    assert job["canvas_spec"]["archetype"] == "carved bark clue"
+    assert job["subject_key"] == "gallery:moon_tree_mark"
+
+
+def test_initialization_payload_rebuilds_legacy_gallery_scene_canvas_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(asset_rules, "CAMPAIGNS_DIR", tmp_path)
+    campaign_id = "campaign_test"
+    root = tmp_path / campaign_id
+    root.mkdir(parents=True)
+    profile = {
+        "campaign_id": campaign_id,
+        "title": "Canvas Gallery Test",
+        "asset_seed": "seed123",
+        "initial_assets": validate_v4_campaign_setup(setup_payload())["initial_assets"],
+    }
+    (root / "campaign_profile.json").write_text(web_server.json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    raw_gallery_store.save_gallery_raw(campaign_id, {
+        "schema": raw_gallery_store.RAW_GALLERY_SCHEMA,
+        "campaign_id": campaign_id,
+        "updated_turn": 1,
+        "assets": [
+            {
+                "id": "old_woods",
+                "type": "location_record",
+                "title": "Old Woods",
+                "gallery_category": "map",
+                "detail": "Scene spec must rebuild old cached output.",
+                "display_zone": "gallery",
+                "canvas_spec": {"schema": "scene_canvas_spec.v1", "scene": "old_forest", "subjects": ["giant_trees"]},
+            }
+        ],
+    })
+    legacy_cached_assets = [{
+        "url": "/campaign-assets/campaign_test/map/old.png",
+        "exists": True,
+        "subject_key": "gallery:old_woods",
+        "gallery_category": "map",
+    }]
+
+    result = campaign_initialization_frontend_payload(campaign_id, {"title": "Canvas Gallery Test"}, legacy_cached_assets)
+
+    job = next(job for job in result["canvas_jobs"] if job["job_id"] == "gallery_old_woods")
+    assert job["renderer_version"] == web_server.GALLERY_RAW_SCENE_RENDERER_VERSION
+
+
 def test_asset_list_keeps_valid_cached_map_after_payload_url_materialized(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
     monkeypatch.setattr("trpg_orchestrator.services.assets.CAMPAIGNS_DIR", tmp_path)
@@ -704,6 +848,8 @@ def test_asset_list_keeps_valid_cached_map_after_payload_url_materialized(tmp_pa
 
     assert len(result["assets"]) == 1
     assert result["assets"][0]["asset_kind"] == "map_image"
+    assert result["assets"][0]["campaign_id"] == campaign_id
+    assert result["assets"][0]["asset_seed"] == "seed123"
     assert result["assets"][0]["url"].endswith("/maps/opening_map.png")
 
 
@@ -776,6 +922,28 @@ def test_apply_smart_config_persists_gallery_raw_without_mutation(tmp_path, monk
     assert setup["gallery_raw"]["campaign_id"] == ""
     assert stored_index["by_id"] == {"opening_map": 0, "kit": 1}
     assert stored_index["by_type"] == {"map": ["opening_map"], "item": ["kit"]}
+
+
+def test_apply_smart_config_persists_semantic_custom_gallery_filters(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_server, "CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", tmp_path)
+    campaign_id = "campaign_test"
+    root = tmp_path / campaign_id
+    write_default_campaign(root, campaign_id)
+    setup = validate_v4_campaign_setup(setup_payload([
+        {"id": "线索档案", "label": "线索档案"},
+        {"id": "势力档案", "label": "势力档案"},
+        {"id": "异常记录", "label": "异常记录"},
+    ]))
+
+    web_server.apply_smart_campaign_config(root, smart_campaign_config(setup))
+
+    presentation = web_server.read_json(root / "asset_presentation.json")
+    assert presentation["custom_gallery_categories"] == [
+        {"id": "线索档案", "label": "线索档案", "source": "campaign"},
+        {"id": "势力档案", "label": "势力档案", "source": "campaign"},
+        {"id": "异常记录", "label": "异常记录", "source": "campaign"},
+    ]
 
 
 def test_create_campaign_smart_payload_persists_gallery_raw(tmp_path, monkeypatch):

@@ -44,6 +44,19 @@ def test_parse_structured_json_output():
     assert parsed.writeback["short_term_state"] == {}
 
 
+def test_parse_structured_json_defaults_player_action_identity():
+    import json
+
+    payload = valid_json_output()
+    payload["blocks"][0].pop("actor_id")
+    payload["blocks"][0].pop("avatar_key")
+
+    parsed = parse_chatgpt_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.blocks[0]["actor_id"] == "player"
+    assert parsed.blocks[0]["avatar_key"] == "player"
+
+
 def test_parse_structured_json_missing_state_writeback_fails():
     import json
 

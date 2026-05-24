@@ -56,6 +56,13 @@ TRPG_BROWSER_USER_DATA_DIR=H:\COdex\trpg_orchestrator\.browser-profile
 TRPG_BROWSER_CHANNEL=chrome
 ```
 
+如果想改用 browser-harness 的截图/坐标点击链路，可把自动化模式改成：
+
+```text
+TRPG_CHATGPT_AUTOMATION=browser_harness
+TRPG_BROWSER_USER_DATA_DIR=H:\COdex\trpg_orchestrator\.browser-profile
+```
+
 ## CLI 用法
 
 ```powershell

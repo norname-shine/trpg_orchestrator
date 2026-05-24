@@ -26,6 +26,15 @@ def test_legacy_keyword_requests_still_trigger_capabilities():
     assert "dice_check_requested" in _capabilities("投骰进行检定")
 
 
+def test_start_game_asset_request_triggers_map_and_visual_assets():
+    plan = build_capability_plan("demo", "开始游戏，请为我返回地图/CG/和所有资产夹内容都返回一组新数据", _memory())
+
+    assert "map" in plan["loaded_capabilities"]
+    assert "visual_assets" in plan["loaded_capabilities"]
+    assert plan["output_contract"]["allow_map_payload"] is True
+    assert plan["output_contract"]["allow_visual_assets"] is True
+
+
 def test_image_negated_does_not_trigger_visual_assets():
     plan = build_capability_plan("demo", "不要生图，只继续剧情", _memory())
 

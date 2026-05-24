@@ -29,6 +29,7 @@ from .rewrite_manager import build_chatgpt_rewrite_input, build_v4_rewrite_user_
 from .runtime_hygiene import pre_upload_clean
 from .schema_validator import normalize_pressure_pack_compat, validate_audit_result, validate_chatgpt_blocks, validate_payload_patch, validate_pressure_pack, validate_writeback
 from .scene_action_guard import scene_action_warning_from_pressure_pack
+from .services.inventory_state_store import load_inventory_state
 from .story_progress import build_backend_progress_control, validate_story_blueprint
 from .quality_gate import quality_gate, is_quality_pass
 from .writeback import apply_approved_writeback, migrate_legacy_facts, writeback_hash, has_applied_writeback
@@ -238,6 +239,23 @@ def preserve_submitted_player_action(parsed: Any, player_action: str) -> Any:
     blocks = [dict(block) if isinstance(block, dict) else block for block in (getattr(parsed, "blocks", []) or [])]
     if blocks and isinstance(blocks[0], dict) and blocks[0].get("type") == "player_action":
         blocks[0]["body"] = action
+        blocks[0]["actor_kind"] = "player"
+        blocks[0]["actor_id"] = str(blocks[0].get("actor_id") or "player")
+        blocks[0]["avatar_key"] = str(blocks[0].get("avatar_key") or "player")
+    else:
+        blocks.insert(0, {
+            "id": "block_player_action",
+            "type": "player_action",
+            "speaker": "玩家",
+            "body": action,
+            "time": "",
+            "avatar_key": "player",
+            "actor_id": "player",
+            "actor_kind": "player",
+            "check": {},
+            "choices": [],
+            "tags": [],
+        })
     return parsed.__class__(
         body=getattr(parsed, "body", ""),
         choices=getattr(parsed, "choices", ""),
@@ -304,7 +322,7 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
     write_json(outbox_dir / "capability_plan.json", capability_plan)
     director_user_prompt = build_director_user_prompt(resolved, action, memory, capability_plan)
     write_text_utf8(outbox_dir / "v4_director_input.md", director_user_prompt)
-    emit_public_job_status("director_turn", "导演层正在判断本回合局势", 18)
+    emit_public_job_status("director_turn", "正在执行剧本", 18)
     if offline_pressure_pack:
         core_pressure_pack = _offline_pressure_pack(resolved, action, memory)
     else:
@@ -314,9 +332,9 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
             director_user_prompt,
         ))
     emit_public_job_status(
-        "director_turn",
+        "director_ready",
         str(core_pressure_pack.get("human_readable_note") or "导演层已生成本回合压力包"),
-        30,
+        100,
         core_pressure_pack.get("public_think") if isinstance(core_pressure_pack.get("public_think"), list) else None,
     )
     core_pressure_pack = normalize_pressure_pack_compat(core_pressure_pack)
@@ -363,18 +381,178 @@ def cmd_prepare(action: str, campaign_id: str | None, offline_pressure_pack: boo
         outbox_dir / "chatgpt_input.md",
         build_chatgpt_input(resolved, action, memory, pressure_pack, capability_plan),
     )
-    emit_public_job_status("actor_waiting", "演员层正在生成正文", 42)
+    emit_public_job_status("actor_waiting", "演员层正在生成正文", 12)
     mirror_to_global_outbox(outbox_dir, ["last_player_action.txt", "capability_plan.json", "selected_prompt_modules.json", "selected_director_memory.json", "selected_actor_memory.json", "v4_director_input.md", "pressure_pack_core.json", "missing_capabilities.json", "payload_fulfillment_input.md", "payload_patch.json", "pressure_pack.json", "pressure_pack_normalized.json", "chatgpt_input.md"])
     print(f"wrote {outbox_dir / 'pressure_pack.json'} and {outbox_dir / 'chatgpt_input.md'}")
     return 0
 
 
-LIGHT_DIRECTOR_ACTIONS = {"观察周围", "与npc对话", "检查物品"}
+LIGHT_DIRECTOR_ACTIONS = {"观察周围", "与npc对话", "检查物品", "复盘", "回顾"}
+LIGHT_DIRECTOR_PATTERNS = [
+    re.compile(r"^(?:查看|检查|观察)资料《[^》]+》(?::|：)?.*$"),
+    re.compile(r"^(?:查看|检查)(?:物品|道具|背包|装备)(?::|：)?.*$"),
+    re.compile(r"^(?:与|和|跟).{0,24}(?:npc|NPC|角色|人物|同伴|伙伴|林)?(?:对话|交谈|说话|聊聊)(?::|：)?.*$", re.I),
+    re.compile(r"^(?:观察|查看|检查)(?:周围|四周|附近|环境|现场)(?::|：)?.*$"),
+    re.compile(r"^(?:复盘|回顾|总结)(?::|：)?.*$"),
+]
 
 
 def is_light_director_action(action: str) -> bool:
     normalized = re.sub(r"\s+", "", str(action or "")).lower()
-    return normalized in LIGHT_DIRECTOR_ACTIONS
+    if normalized in LIGHT_DIRECTOR_ACTIONS:
+        return True
+    return any(pattern.match(normalized) for pattern in LIGHT_DIRECTOR_PATTERNS)
+
+
+def is_item_light_action(action: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(action or "")).lower()
+    return (
+        bool(re.match(r"^(?:查看|检查|观察)资料《[^》]+》(?::|：)?.*$", normalized))
+        or bool(re.match(r"^(?:查看|检查)(?:物品|道具|背包|装备)(?::|：)?.*$", normalized))
+    )
+
+
+def is_npc_light_action(action: str) -> bool:
+    normalized = re.sub(r"\s+", "", str(action or "")).lower()
+    return normalized == "与npc对话" or bool(re.match(r"^(?:与|和|跟).{0,24}(?:npc|角色|人物|同伴|伙伴|林)?(?:对话|交谈|说话|聊聊)(?::|：)?.*$", normalized, re.I))
+
+
+def normalize_light_action_blocks(parsed: Any, action: str, writeback: dict[str, Any]) -> Any:
+    blocks = [dict(block) if isinstance(block, dict) else block for block in (getattr(parsed, "blocks", []) or [])]
+    if not blocks:
+        return parsed
+    if is_npc_light_action(action):
+        return normalize_npc_light_action_blocks(parsed, blocks)
+    body = light_action_system_body(action, writeback, blocks)
+    next_blocks: list[dict[str, Any]] = []
+    first = blocks[0] if isinstance(blocks[0], dict) else {}
+    if first.get("type") == "player_action":
+        next_blocks.append(first)
+    next_blocks.append({
+        "id": "block_light_result",
+        "type": "system_check",
+        "speaker": "系统判定",
+        "body": body,
+        "time": "",
+        "avatar_key": "",
+        "actor_id": "",
+        "actor_kind": "system",
+        "check": {},
+        "choices": [],
+        "tags": ["light_action"],
+    })
+    for block in blocks[1:]:
+        if isinstance(block, dict) and block.get("type") == "choice_prompt":
+            next_blocks.append(block)
+            break
+    return parsed.__class__(
+        body=body,
+        choices=getattr(parsed, "choices", ""),
+        summary=getattr(parsed, "summary", ""),
+        writeback=getattr(parsed, "writeback", {}),
+        blocks=next_blocks,
+    )
+
+
+def normalize_npc_light_action_blocks(parsed: Any, blocks: list[Any]) -> Any:
+    next_blocks: list[dict[str, Any]] = []
+    first = blocks[0] if isinstance(blocks[0], dict) else {}
+    if first.get("type") == "player_action":
+        next_blocks.append(first)
+    dialogue_blocks = []
+    for index, block in enumerate(blocks[1:], start=1):
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "choice_prompt":
+            continue
+        body = str(block.get("body") or "").strip()
+        choices = block.get("choices") if isinstance(block.get("choices"), list) else []
+        if not body and not choices:
+            continue
+        dialogue_blocks.append({
+            "id": str(block.get("id") or f"block_npc_dialogue_{index}"),
+            "type": "npc_dialogue",
+            "speaker": str(block.get("speaker") or "NPC").strip() or "NPC",
+            "body": body,
+            "time": str(block.get("time") or ""),
+            "avatar_key": str(block.get("avatar_key") or block.get("actor_id") or "npc"),
+            "actor_id": str(block.get("actor_id") or "npc"),
+            "actor_kind": "npc",
+            "check": block.get("check") if isinstance(block.get("check"), dict) else {},
+            "choices": [],
+            "tags": block.get("tags") if isinstance(block.get("tags"), list) else ["light_action", "npc_dialogue"],
+        })
+    if not dialogue_blocks:
+        dialogue_blocks.append({
+            "id": "block_npc_dialogue_1",
+            "type": "npc_dialogue",
+            "speaker": "NPC",
+            "body": "对方没有立刻回答，只是根据当前局势给出一个谨慎的反应。",
+            "time": "",
+            "avatar_key": "npc",
+            "actor_id": "npc",
+            "actor_kind": "npc",
+            "check": {},
+            "choices": [],
+            "tags": ["light_action", "npc_dialogue"],
+        })
+    next_blocks.extend(dialogue_blocks[:2])
+    for block in blocks[1:]:
+        if isinstance(block, dict) and block.get("type") == "choice_prompt":
+            next_blocks.append(block)
+            break
+    body = "\n\n".join(block["body"] for block in dialogue_blocks if block.get("body"))
+    return parsed.__class__(
+        body=body,
+        choices=getattr(parsed, "choices", ""),
+        summary=getattr(parsed, "summary", ""),
+        writeback=getattr(parsed, "writeback", {}),
+        blocks=next_blocks,
+    )
+
+
+def light_action_system_body(action: str, writeback: dict[str, Any], blocks: list[Any]) -> str:
+    fallback = next(
+        (
+            str(block.get("body") or "").strip()
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") != "player_action" and str(block.get("body") or "").strip()
+        ),
+        "",
+    )
+    if not is_item_light_action(action):
+        return fallback
+    items = writeback.get("inventory_items") if isinstance(writeback, dict) else []
+    item = next((row for row in items if isinstance(row, dict)), None) if isinstance(items, list) else None
+    if not item:
+        return f"资料状态无新增变化：{fallback}" if fallback else "资料状态无新增变化：本地没有记录到新的物品状态字段。"
+    return item_status_update_sentence(item)
+
+
+def item_status_update_sentence(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or item.get("item_id") or "物品").strip()
+    state = item.get("state") if isinstance(item.get("state"), dict) else {}
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    status = str(state.get("status") or payload.get("status") or "").strip()
+    visible = str(state.get("visible_description") or payload.get("visible_description") or state.get("description") or payload.get("description") or "").strip()
+    unknowns = state.get("unknowns") if "unknowns" in state else payload.get("unknowns")
+    parts: list[str] = []
+    if status:
+        if status.startswith(("已", "未")):
+            parts.append(f"这枚{title}{status}。")
+        else:
+            parts.append(f"这枚{title}当前状态为{status}。")
+    else:
+        parts.append(f"这枚{title}的状态已记录。")
+    if visible:
+        parts.append(visible if visible.endswith(("。", "！", "？")) else f"{visible}。")
+    if isinstance(unknowns, list) and unknowns:
+        unknown_text = "、".join(str(row).strip() for row in unknowns if str(row).strip())
+        if unknown_text:
+            parts.append(f"仍未确认：{unknown_text}。")
+    elif isinstance(unknowns, str) and unknowns.strip():
+        parts.append(f"仍未确认：{unknowns.strip()}。")
+    return "资料状态被更新：" + "".join(parts)
 
 
 def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: bool = True) -> int:
@@ -387,17 +565,22 @@ def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: boo
     write_json(outbox_dir / "capability_plan.json", capability_plan)
     user_prompt = build_v4_light_action_user_prompt(resolved, action, memory)
     write_text_utf8(outbox_dir / "v4_director_input.md", user_prompt)
+    emit_public_job_status("director_turn", "正在执行剧本", 18)
     pressure_pack = _light_action_pressure_pack(resolved, action)
     write_json(outbox_dir / "pressure_pack.json", pressure_pack)
     raw_output = DeepSeekClient().complete_json(
         read_prompt("v4_light_action_rules.md"),
         user_prompt,
     )
+    emit_public_job_status("light_analysis", "导演层完成，正在分析轻指令结果", 70)
     write_text_utf8(outbox_dir / "chatgpt_raw_output.md", raw_output)
+    title_lookup = inventory_title_lookup(resolved)
     parsed = parse_chatgpt_output(raw_output)
     parsed = preserve_submitted_player_action(parsed, action)
+    writeback = normalize_light_writeback(parsed.writeback, title_lookup)
+    parsed = normalize_light_action_blocks(parsed, action, writeback)
+    emit_public_job_status("light_analysis", "正在整理轻指令回执", 84)
     validate_chatgpt_blocks(parsed.blocks)
-    writeback = normalize_light_writeback(parsed.writeback)
     validate_writeback(writeback)
     write_text_utf8(outbox_dir / "chatgpt_clean_output.md", public_output(parsed))
     write_json(outbox_dir / "chatgpt_blocks.json", {
@@ -418,7 +601,8 @@ def cmd_v4_light_action(action: str, campaign_id: str | None, skip_v4_audit: boo
     if audit_result.get("decision") in {"accept", "revise"}:
         validate_writeback(audit_result.get("approved_writeback") or writeback)
     write_json(outbox_dir / "v4_audit_result.json", audit_result)
-    approved = audit_result.get("approved_writeback") or parsed.writeback
+    approved = normalize_light_writeback(audit_result.get("approved_writeback") or parsed.writeback, title_lookup)
+    emit_public_job_status("writeback", "正在热更新本地状态", 92)
     raw_digest = writeback_hash(writeback)
     approved_digest = writeback_hash(approved)
     for digest in (raw_digest, approved_digest):
@@ -461,9 +645,9 @@ def cmd_send(campaign_id: str | None) -> int:
     resolved = MemoryStore().resolve_campaign_id(campaign_id)
     outbox_dir = campaign_outbox_dir(resolved)
     ensure_chatgpt_input_current(outbox_dir)
-    emit_public_job_status("actor_waiting", "等待 ChatGPT 常驻浏览器返回", 48)
+    emit_public_job_status("actor_waiting", "等待 ChatGPT 常驻浏览器返回", 35)
     web_client(resolved).send_and_capture(outbox_dir / "chatgpt_input.md", outbox_dir / "chatgpt_raw_output.md")
-    emit_public_job_status("parsing", "正文已返回，正在解析结构化输出", 72)
+    emit_public_job_status("parsing", "演员层完成，正在解析输出", 80)
     mirror_to_global_outbox(outbox_dir, ["chatgpt_input.md", "chatgpt_raw_output.md"])
     print(f"sent {outbox_dir / 'chatgpt_input.md'} and captured {outbox_dir / 'chatgpt_raw_output.md'}")
     return 0
@@ -806,7 +990,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
         raise FileNotFoundError(f"missing {outbox_dir / 'chatgpt_raw_output.md'}")
     verify_browser_evidence_before_ingest(raw_path, resolved)
     raw_output = read_runtime_text(raw_path)
-    emit_public_job_status("parsing", "正在解析正文与状态回写", 76)
+    emit_public_job_status("parsing", "正在解析正文与状态回写", 84)
     try:
         gate = quality_gate(raw_output, memory.get("forbidden_changes.json", {}), outbox_dir)
     except ValueError as exc:
@@ -851,7 +1035,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     if skip_v4_audit:
         audit_result = {"decision": "accept", "reason": "skip-v4-audit enabled", "approved_writeback": parsed.writeback, "memory_files_to_update": [], "warnings": ["audit skipped"]}
     else:
-        emit_public_job_status("writeback", "V4 正在审核状态写回", 84)
+        emit_public_job_status("writeback", "V4 正在审核状态写回", 90)
         audit_result = extract_json_object(DeepSeekClient().complete_json(
             read_prompt("v4_audit_prompt.md"),
             build_audit_user_prompt(resolved, memory, pressure_pack, parsed.writeback, capability_plan),
@@ -865,7 +1049,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     if decision not in {"accept", "revise"}:
         raise RuntimeError(f"invalid director audit decision: {decision}")
 
-    approved = audit_result.get("approved_writeback") or parsed.writeback
+    approved = normalize_light_writeback(audit_result.get("approved_writeback") or parsed.writeback)
     validate_writeback(approved)
     raw_digest = writeback_hash(parsed.writeback)
     approved_digest = writeback_hash(approved)
@@ -888,7 +1072,7 @@ def cmd_ingest(campaign_id: str | None, skip_v4_audit: bool = False) -> int:
     updates["run_records.json"] = run_records
     touched = list(updates.keys())
     if touched:
-        emit_public_job_status("writeback", "正在写回长期记忆", 92)
+        emit_public_job_status("writeback", "正在写回长期记忆", 94)
         store.backup_files(resolved, touched)
         store.write_memory_updates(resolved, updates)
     log_path = store.write_log(resolved, _log_payload(action_text(outbox_dir), pressure_pack, raw_output, flavor_report, audit_result, updates, outbox_dir, story_progress_before, story_progress_after, capability_plan))
@@ -1468,17 +1652,74 @@ def _light_action_pressure_pack(campaign_id: str, action: str) -> dict:
     }
 
 
-def normalize_light_writeback(writeback: dict) -> dict:
+def normalize_light_writeback(writeback: dict, inventory_titles: dict[str, str] | None = None) -> dict:
     data = dict(writeback or {})
     data.setdefault("short_term_state", {})
+    if isinstance(data.get("long_term_memory"), list):
+        data["long_term_memory"] = {
+            "world_state_updates": [
+                str(item.get("content") or item) if isinstance(item, dict) else str(item)
+                for item in data["long_term_memory"]
+                if item not in (None, "", {}, [])
+            ]
+        }
     data.setdefault("long_term_memory", {})
     data.setdefault("new_open_threads", [])
     data.setdefault("closed_threads", [])
     data.setdefault("gallery_assets", [])
-    data.setdefault("inventory_items", [])
+    data["inventory_items"] = normalize_light_inventory_items(data.get("inventory_items"), inventory_titles or {})
     data.setdefault("next_turn_suggestions", "")
     data.setdefault("summary_for_recent_context", "")
     return data
+
+
+def inventory_title_lookup(campaign_id: str) -> dict[str, str]:
+    try:
+        state = load_inventory_state(campaign_id)
+    except Exception:
+        return {}
+    rows = state.get("items") if isinstance(state, dict) else []
+    result: dict[str, str] = {}
+    for item in rows if isinstance(rows, list) else []:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("item_id") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if item_id and title:
+            result[item_id] = title
+    return result
+
+
+def normalize_light_inventory_items(value: Any, inventory_titles: dict[str, str]) -> list[dict[str, Any]]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, list):
+        return [normalize_light_inventory_item(item, inventory_titles) for item in value if item not in (None, "", {}, [])]
+    if isinstance(value, dict) and ("item_id" in value or "title" in value):
+        return [normalize_light_inventory_item(value, inventory_titles)]
+    if isinstance(value, dict):
+        return [
+            normalize_light_inventory_item({"item_id": item_id, **(payload if isinstance(payload, dict) else {"state": payload})}, inventory_titles)
+            for item_id, payload in value.items()
+            if str(item_id or "").strip()
+        ]
+    return []
+
+
+def normalize_light_inventory_item(item: Any, inventory_titles: dict[str, str]) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        item = {"item_id": str(item), "state": {"status": str(item)}}
+    result = dict(item)
+    item_id = str(result.get("item_id") or result.get("id") or "").strip()
+    if item_id:
+        result["item_id"] = item_id
+    if not str(result.get("title") or "").strip():
+        result["title"] = inventory_titles.get(item_id, item_id)
+    if isinstance(result.get("state"), str):
+        result["state"] = {"status": result["state"]}
+    if isinstance(result.get("payload"), str):
+        result["payload"] = {"note": result["payload"]}
+    return result
 
 
 def _default_progress_control() -> dict:

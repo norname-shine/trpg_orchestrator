@@ -151,9 +151,11 @@ def _valid_payload_item(item: Any) -> bool:
         return bool(text) and text not in {"placeholder", "todo", "tbd", "trpg"}
     if isinstance(item, dict):
         text = " ".join(str(value).lower() for value in item.values() if isinstance(value, (str, int, float)))
-        if not text.strip() or "placeholder" in text or text.strip() in {"trpg", "todo", "tbd"}:
+        meaningful = [key for key, value in item.items() if key not in {"id", "title", "name", "asset_key"} and _has_payload(value)]
+        if not text.strip() and not meaningful:
             return False
-        meaningful = [key for key, value in item.items() if key not in {"id", "title", "name", "asset_key"} and value not in (None, "", [], {})]
+        if "placeholder" in text or text.strip() in {"trpg", "todo", "tbd"}:
+            return False
         return bool(meaningful)
     if isinstance(item, list):
         return any(_valid_payload_item(value) for value in item)

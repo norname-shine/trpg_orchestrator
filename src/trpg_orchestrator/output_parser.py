@@ -157,6 +157,12 @@ def _normalize_blocks(rows: Any) -> list[dict[str, Any]]:
         if not body and not choices:
             continue
         actor_id = str(row.get("actor_id") or "").strip()
+        avatar_key = str(row.get("avatar_key") or "").strip()
+        actor_kind = str(row.get("actor_kind") or "").strip()
+        if block_type == "player_action":
+            actor_kind = actor_kind or "player"
+            actor_id = actor_id or "player"
+            avatar_key = avatar_key or "player"
         speaker = _normalize_speaker(str(row.get("speaker") or _default_speaker(block_type)), block_type, actor_id)
         normalized_row = {
             "id": str(row.get("id") or f"block_{index + 1}"),
@@ -164,9 +170,9 @@ def _normalize_blocks(rows: Any) -> list[dict[str, Any]]:
             "speaker": speaker,
             "body": body,
             "time": str(row.get("time") or ""),
-            "avatar_key": str(row.get("avatar_key") or ""),
+            "avatar_key": avatar_key,
             "actor_id": actor_id,
-            "actor_kind": str(row.get("actor_kind") or ""),
+            "actor_kind": actor_kind,
             "check": row.get("check") if isinstance(row.get("check"), dict) else {},
             "choices": choices,
             "tags": row.get("tags") if isinstance(row.get("tags"), list) else [],

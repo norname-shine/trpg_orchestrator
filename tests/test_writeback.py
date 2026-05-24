@@ -141,7 +141,7 @@ def test_state_writeback_gallery_and_inventory_use_extension_stores(tmp_path, mo
     memory = default_memory("demo")
     writeback = approved_writeback()
     writeback["campaign_id"] = "demo"
-    writeback["gallery_assets"] = [{"id": "letter_art", "type": "item", "title": "Damp Letter"}]
+    writeback["gallery_assets"] = [{"id": "letter_art", "type": "item", "title": "Damp Letter", "gallery_category": "item"}]
     writeback["inventory_items"] = [{"item_id": "letter_001", "title": "Damp Letter", "state": {"status": "sealed"}}]
 
     updates = apply_approved_writeback(memory, writeback)
@@ -151,6 +151,68 @@ def test_state_writeback_gallery_and_inventory_use_extension_stores(tmp_path, mo
     inventory_state = read_json(inventory_state_store.inventory_state_path("demo"))
     assert gallery_raw["assets"] == writeback["gallery_assets"]
     assert inventory_state["items"][0]["item_id"] == "letter_001"
+
+
+def test_director_visual_assets_persist_without_actor_gallery_writeback(tmp_path, monkeypatch):
+    root = tmp_path / "campaigns"
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", root)
+    memory = default_memory("demo")
+    writeback = approved_writeback()
+    writeback["campaign_id"] = "demo"
+    writeback["gallery_assets"] = []
+    pressure_pack = {
+        "payloads": {
+            "visual_assets": [
+                {
+                    "id": "opening_map",
+                    "title": "开场地图",
+                    "kind": "map",
+                    "gallery_category": "map",
+                    "detail": "林间空地地图。",
+                    "display_zone": "gallery",
+                    "canvas_spec": {"schema": "map_canvas_spec.v1", "area": "clearing"},
+                }
+            ]
+        }
+    }
+
+    apply_approved_writeback(memory, writeback, pressure_pack=pressure_pack)
+
+    gallery_raw = read_json(raw_gallery_store.gallery_raw_path("demo"))
+    assert gallery_raw["assets"][0]["id"] == "opening_map"
+    assert gallery_raw["assets"][0]["type"] == "map"
+    assert gallery_raw["assets"][0]["canvas_spec"]["area"] == "clearing"
+
+
+def test_pressure_pack_ignores_actor_gallery_assets_and_uses_director_payload(tmp_path, monkeypatch):
+    root = tmp_path / "campaigns"
+    monkeypatch.setattr(raw_gallery_store, "CAMPAIGNS_DIR", root)
+    memory = default_memory("demo")
+    writeback = approved_writeback()
+    writeback["campaign_id"] = "demo"
+    writeback["gallery_assets"] = [
+        {"id": "actor_fake_card", "type": "prop", "title": "演员层假卡", "gallery_category": "prop"}
+    ]
+    pressure_pack = {
+        "payloads": {
+            "visual_assets": [
+                {
+                    "id": "director_real_card",
+                    "title": "导演层真实卡",
+                    "kind": "prop",
+                    "gallery_category": "prop",
+                    "display_zone": "gallery",
+                    "detail": "导演层下发的真实资产。",
+                    "canvas_spec": {"schema": "item_canvas_spec.v1", "archetype": "token"},
+                }
+            ]
+        }
+    }
+
+    apply_approved_writeback(memory, writeback, pressure_pack=pressure_pack)
+
+    gallery_raw = read_json(raw_gallery_store.gallery_raw_path("demo"))
+    assert [asset["id"] for asset in gallery_raw["assets"]] == ["director_real_card"]
 
 
 def test_gallery_assets_upsert_by_exact_id_replaces_whole_asset(tmp_path, monkeypatch):
@@ -165,6 +227,7 @@ def test_gallery_assets_upsert_by_exact_id_replaces_whole_asset(tmp_path, monkey
                 "id": "trace_001",
                 "type": "clue",
                 "title": "Old Trace",
+                "gallery_category": "prop",
                 "detail": "old detail",
                 "payload": {"old": True},
             }
@@ -172,11 +235,11 @@ def test_gallery_assets_upsert_by_exact_id_replaces_whole_asset(tmp_path, monkey
     })
 
     raw_gallery_store.apply_gallery_assets("demo", [
-        {"id": "trace_001", "type": "map_note", "title": "Updated Trace"}
+        {"id": "trace_001", "type": "map_note", "title": "Updated Trace", "gallery_category": "map"}
     ])
 
     gallery_raw = read_json(raw_gallery_store.gallery_raw_path("demo"))
-    assert gallery_raw["assets"] == [{"id": "trace_001", "type": "map_note", "title": "Updated Trace"}]
+    assert gallery_raw["assets"] == [{"id": "trace_001", "type": "map_note", "title": "Updated Trace", "gallery_category": "map"}]
 
 
 def test_gallery_assets_reject_duplicate_ids_in_same_batch(tmp_path, monkeypatch):
@@ -185,8 +248,8 @@ def test_gallery_assets_reject_duplicate_ids_in_same_batch(tmp_path, monkeypatch
 
     with pytest.raises(RuntimeError, match="duplicate gallery_assets id"):
         raw_gallery_store.apply_gallery_assets("demo", [
-            {"id": "trace_001", "type": "clue", "title": "Trace"},
-            {"id": "trace_001", "type": "clue", "title": "Trace Again"},
+            {"id": "trace_001", "type": "clue", "title": "Trace", "gallery_category": "prop"},
+            {"id": "trace_001", "type": "clue", "title": "Trace Again", "gallery_category": "prop"},
         ])
 
 
@@ -216,6 +279,7 @@ def test_inventory_items_reject_duplicate_ids_in_same_writeback(tmp_path, monkey
                     "id": "current_location_trace",
                     "type": "clue",
                     "title": "当前地点痕迹",
+                    "gallery_category": "prop",
                     "detail": "玩家观察到地面有近期活动痕迹。",
                 }]
             },
@@ -241,6 +305,7 @@ def test_inventory_items_reject_duplicate_ids_in_same_writeback(tmp_path, monkey
                     "id": "mist_entrance_map_note",
                     "type": "map_note",
                     "title": "迷雾入口标记",
+                    "gallery_category": "map",
                     "detail": "玩家在地图上记录新发现的迷雾入口。",
                 }]
             },
@@ -254,6 +319,7 @@ def test_inventory_items_reject_duplicate_ids_in_same_writeback(tmp_path, monkey
                     "id": "old_note_fragment",
                     "type": "document",
                     "title": "旧纸条片段",
+                    "gallery_category": "item",
                     "detail": "玩家读到一段关于入口符号的文字。",
                 }]
             },

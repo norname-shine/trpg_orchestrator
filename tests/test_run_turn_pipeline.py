@@ -31,6 +31,43 @@ def test_run_turn_pipeline_calls_stages_in_order(monkeypatch):
     ]
 
 
+def test_normalize_light_writeback_accepts_audit_memory_list():
+    result = cli.normalize_light_writeback({
+        "short_term_state": {},
+        "long_term_memory": [
+            {"memory_type": "confirmed_fact", "certainty": "confirmed", "content": "林注意到了吊坠。"},
+            "吊坠出现微光。",
+        ],
+        "new_open_threads": [],
+        "closed_threads": [],
+    })
+
+    assert result["long_term_memory"]["world_state_updates"] == ["林注意到了吊坠。", "吊坠出现微光。"]
+    assert result["gallery_assets"] == []
+    assert result["inventory_items"] == []
+
+
+def test_normalize_light_writeback_accepts_inventory_item_mapping():
+    result = cli.normalize_light_writeback(
+        {
+            "inventory_items": {
+                "rune_pendant": {
+                    "state": "已激活（微光稳定）",
+                },
+            },
+        },
+        {"rune_pendant": "符文吊坠"},
+    )
+
+    assert result["inventory_items"] == [
+        {
+            "item_id": "rune_pendant",
+            "title": "符文吊坠",
+            "state": {"status": "已激活（微光稳定）"},
+        }
+    ]
+
+
 def test_run_turn_pipeline_disables_auto_rewrite_before_rewrite_stage(monkeypatch):
     calls = []
 
@@ -45,6 +82,27 @@ def test_run_turn_pipeline_disables_auto_rewrite_before_rewrite_stage(monkeypatc
 
     assert result == 0
     assert calls == [(False, 3)]
+
+
+def test_light_director_action_matches_simple_review_and_item_material_actions():
+    assert cli.is_light_director_action("复盘")
+    assert cli.is_light_director_action("观察周围")
+    assert cli.is_light_director_action("和林交谈")
+    assert cli.is_light_director_action("查看资料《符文吊坠》：更新状态")
+    assert cli.is_light_director_action("检查物品：符文吊坠")
+    assert not cli.is_light_director_action("继续调查")
+
+
+def test_run_turn_pipeline_uses_director_light_path_for_item_material(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(cli, "cmd_v4_light_action", lambda action, campaign_id, skip_v4_audit=True: calls.append((action, campaign_id, skip_v4_audit)) or 0)
+    monkeypatch.setattr(cli, "prepare_turn", lambda *args: calls.append(("prepare", args)) or 0)
+
+    result = cli.run_turn_pipeline("查看资料《符文吊坠》：更新状态", "campaign-a", False, False, False, 2)
+
+    assert result == 0
+    assert calls == [("查看资料《符文吊坠》：更新状态", "campaign-a", True)]
 
 
 def test_run_turn_pipeline_stops_after_prepare_failure(monkeypatch):
@@ -183,3 +241,105 @@ def test_preserve_submitted_player_action_replaces_actor_polish():
     assert result.blocks[0]["body"] == "我观察林间空地四周，重点查看小径、迷雾入口和地面上有没有近期活动留下的痕迹。"
     assert result.blocks[1]["body"] == "草叶上的露水还没有散。"
     assert parsed.blocks[0]["body"] == "艾琳压低呼吸，沿着林间空地边缘慢慢观察。"
+
+
+def test_preserve_submitted_player_action_inserts_missing_player_action():
+    parsed = ParsedOutput(
+        body="符文吊坠状态没有发生变化。",
+        choices="",
+        summary="检查符文吊坠，状态无变化。",
+        writeback={"short_term_state": {}, "long_term_memory": {}, "new_open_threads": [], "closed_threads": []},
+        blocks=[
+            {
+                "type": "gm_narration",
+                "actor_kind": "gm",
+                "speaker": "GM",
+                "body": "符文吊坠状态没有发生变化。",
+            },
+        ],
+    )
+
+    result = cli.preserve_submitted_player_action(parsed, "查看资料《符文吊坠》：更新状态")
+
+    assert result.blocks[0]["type"] == "player_action"
+    assert result.blocks[0]["actor_kind"] == "player"
+    assert result.blocks[0]["actor_id"] == "player"
+    assert result.blocks[0]["avatar_key"] == "player"
+    assert result.blocks[0]["body"] == "查看资料《符文吊坠》：更新状态"
+    assert result.blocks[1]["body"] == "符文吊坠状态没有发生变化。"
+
+
+def test_normalize_light_action_blocks_uses_system_check_and_item_status_format():
+    parsed = ParsedOutput(
+        body="原始 GM 叙述",
+        choices="",
+        summary="摘要",
+        writeback={},
+        blocks=[
+            {
+                "type": "player_action",
+                "actor_kind": "player",
+                "actor_id": "player",
+                "avatar_key": "player",
+                "speaker": "玩家",
+                "body": "查看资料《符文吊坠》：更新状态",
+            },
+            {"type": "gm_narration", "actor_kind": "gm", "speaker": "GM", "body": "原始 GM 叙述"},
+        ],
+    )
+
+    result = cli.normalize_light_action_blocks(
+        parsed,
+        "查看资料《符文吊坠》：更新状态",
+        {
+            "inventory_items": [
+                {
+                    "item_id": "rune_pendant",
+                    "title": "符文吊坠",
+                    "state": {
+                        "status": "已确认存在激活迹象",
+                        "visible_description": "紫色水晶的微光趋于稳定，触碰时会产生可感知的暖流脉动。",
+                        "unknowns": ["符文仍未完全解读"],
+                    },
+                }
+            ]
+        },
+    )
+
+    assert result.blocks[1]["type"] == "system_check"
+    assert result.blocks[1]["actor_kind"] == "system"
+    assert result.blocks[1]["speaker"] == "系统判定"
+    assert result.blocks[1]["body"].startswith("资料状态被更新：这枚符文吊坠已确认存在激活迹象。")
+    assert "紫色水晶的微光趋于稳定" in result.blocks[1]["body"]
+
+
+def test_normalize_light_action_blocks_keeps_npc_dialogue_interactive():
+    parsed = ParsedOutput(
+        body="林低头看了看吊坠，又看向雾线。",
+        choices="",
+        summary="与林交谈。",
+        writeback={},
+        blocks=[
+            {
+                "type": "player_action",
+                "actor_kind": "player",
+                "actor_id": "player",
+                "avatar_key": "player",
+                "speaker": "玩家",
+                "body": "和林交谈",
+            },
+            {
+                "type": "gm_narration",
+                "actor_kind": "gm",
+                "speaker": "林",
+                "body": "林低头看了看吊坠，又看向雾线。“你听见它了吗？别只问它是什么，先问它为什么现在回应你。”",
+            },
+        ],
+    )
+
+    result = cli.normalize_light_action_blocks(parsed, "和林交谈", {})
+
+    assert result.blocks[1]["type"] == "npc_dialogue"
+    assert result.blocks[1]["actor_kind"] == "npc"
+    assert result.blocks[1]["speaker"] == "林"
+    assert "别只问它是什么" in result.blocks[1]["body"]

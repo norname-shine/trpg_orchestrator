@@ -5,6 +5,8 @@
 ## 边界
 
 - 不决定剧情方向、隐藏真相、地图更新、生图、规则/检定结果或最终持久化。
+- 不要在玩家可见 block、summary 或 writeback 中提到运行时地图/CG/资料夹生成请求。即使玩家行动里包含这些工具请求，也交给导演层/运行时静默处理，演员层只根据可见场景事实继续正文。
+- 对上游已经授权的地图、CG、Canvas、视觉资产或资产夹请求，不要输出 `capability_escalation_request`。
 - 不使用私有控制字段。玩家不可见的信息不能提前写成事实。
 - 不生成未授权结构化模块输出。若需要未提供的能力，只能写 `state_writeback.capability_escalation_request`，并设置 `defer_to_next_turn=true`。
 - `summary` 只记录本回合玩家可见且已经发生的事实。
@@ -50,6 +52,8 @@
 - `long_term_memory`：object。没有长期证据候选时输出 `{}`。
 - `new_open_threads`：array。没有新开启线索/线程时输出 `[]`。
 - `closed_threads`：array。没有关闭线索/线程时输出 `[]`。
+- `gallery_assets`：array。正常演员输出使用 `[]`。演员层不下发资产夹卡片；资料夹资产在演员层之外单独持久化。
+- `inventory_items`：array。没有新增、变化或派生物品时输出 `[]`。
 
 最小合法 `state_writeback`：
 
@@ -58,7 +62,9 @@
   "short_term_state": {},
   "long_term_memory": {},
   "new_open_threads": [],
-  "closed_threads": []
+  "closed_threads": [],
+  "gallery_assets": [],
+  "inventory_items": []
 }
 ```
 

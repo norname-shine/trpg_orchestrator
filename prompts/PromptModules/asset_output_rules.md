@@ -21,7 +21,10 @@ Ordinary visual asset candidates may include only these fields:
 Do not output `asset_kind`, `source_type`, `path`, `url`, manifest keys, runtime cache keys, or file-system paths. The backend derives `asset_kind` only from `asset_use` and assigns `source_type` only after the asset is registered.
 
 `gallery_category` controls only frontend filtering. It must be one of the core categories `prop`, `item`, `character`, `map`, `cg`, or a campaign-registered custom gallery category. Do not output `gallery_category=scene`.
+Frontend filters are returned only from the campaign initialization asset contract, never generated from runtime asset `type`, `category`, or prose semantics. Do not output temporary categories such as `item_record`, `inventory_record`, or `dossier`.
 
+`item` is something the player owns, can equip, can consume, or can track in inventory.
+`prop` is a scene clue, mechanism, environmental object, non-portable object, or object not yet assigned to the player.
 `asset_use` controls backend processing. Ordinary assets may use `portrait`, `item`, `prop`, or `map`. Scene, location, region, route, and map-like visual material must use `gallery_category=map` and `asset_use=map`.
 
 `actor_role` controls story identity only. It must not be used to choose the frontend filter category.

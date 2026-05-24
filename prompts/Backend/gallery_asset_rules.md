@@ -8,6 +8,8 @@ These rules define how the local web console treats the right-side gallery. They
 - Fixed gallery categories are only `prop`, `item`, `character`, `map`, and `cg`.
 - Gallery categories are asset display slots only. They do not decide campaign-specific story semantics.
 - Use an explicit director-provided `gallery_category` when a campaign-specific entity should be visible in one of the fixed slots.
+- `item` is something the player owns, can equip, can consume, or can track in inventory.
+- `prop` is a scene clue, mechanism, environmental object, non-portable object, or object not yet assigned to the player.
 - Maps and locations enter `map` as visual map assets.
 - Clue/document-like objects enter `item` or `prop`; they must not create `clue` or `document` filters.
 - Player, sub-player, and companion portraits stay in independent character-card/avatar slots and must not enter gallery filters.
@@ -21,6 +23,8 @@ These rules define how the local web console treats the right-side gallery. They
 - `cg` is a universal fixed filter and should be present for every campaign type. Formal generated story images must enter the CG category.
 - The startup baseline is always `prop`, `item`, `character`, `map`, and `cg`.
 - Director setup may add 0-3 story-specific custom gallery filters in `campaign_categories`. Four or more must be rejected locally.
+- Custom gallery filters must be a small set of reusable, campaign-specific information dimensions. They are not synonyms for locations, chapters, characters, items, props, maps, or CGs. Return an empty list when there is no strong campaign-specific need.
+- Do not use map regions, location names, chapter phases, or scene names as custom filters. Do not output categories equivalent to fixed filters, such as character records, item records, prop records, map regions, or CG albums.
 - Campaign-specific resources should use director-declared custom libraries, custom categories, or explicit fixed-slot asset links, not new fixed category IDs.
 - `all` is only a frontend aggregate filter. It is not an asset category ID, and backend rows must never use `all` as `kind`.
 

@@ -5,6 +5,8 @@ Write only player-facing TRPG text for the current turn. Use only the provided v
 ## Boundaries
 
 - Do not decide plot direction, hidden truth, map updates, image generation, rule/check results, or final persistence.
+- Do not mention runtime map/CG/gallery generation requests in player-facing blocks, summary, or writeback. If the player action includes those tooling requests, let the director/runtime handle them silently and continue the story text from visible scene facts.
+- Do not use `capability_escalation_request` for map, CG, Canvas, visual asset, or asset-folder requests that were already authorized upstream.
 - Do not use private control fields. If information is not visible to the player, do not reveal it as fact.
 - Do not create unauthorized structured module output. If an unprovided capability is needed, write `state_writeback.capability_escalation_request` with `defer_to_next_turn=true`.
 - `summary` records only facts that visibly happened in this turn.
@@ -51,7 +53,7 @@ Valid `choice_prompt.choices` shape:
 - `long_term_memory`: object. Use `{}` if there is no durable evidence candidate.
 - `new_open_threads`: array. Use `[]` if no new open thread was visibly introduced.
 - `closed_threads`: array. Use `[]` if no thread was visibly closed.
-- `gallery_assets`: array. Use `[]` if no player-known reviewable facts, clues, records, documents, symbols, observations, or anomalies were created or updated.
+- `gallery_assets`: array. Use `[]` in normal actor output. Actor layer does not issue asset-folder cards; they are persisted outside the actor layer.
 - `inventory_items`: array. Use `[]` if no item was created, changed, or derived.
 
 Minimal valid `state_writeback`:

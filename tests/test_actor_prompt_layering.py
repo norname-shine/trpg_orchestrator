@@ -64,7 +64,23 @@ def pressure_pack():
         },
         "payloads": {
             "map_route": {"nodes": [{"id": "camp"}]},
-            "visual_assets": [{"id": "cg"}],
+            "map_canvas": {"points": [{"id": "camp", "x": 1, "y": 2}], "legend": "old camp"},
+            "visual_assets": [
+                {
+                    "id": "fog_cg",
+                    "title": "雾中营地",
+                    "kind": "cg",
+                    "gallery_category": "cg",
+                    "detail": "旧营地外的雾气与抓痕。",
+                    "display_zone": "gallery",
+                    "canvas_spec": {
+                        "schema": "cg_canvas_spec.v1",
+                        "scene": "old_camp",
+                        "lighting": "foggy",
+                        "subjects": [{"type": "trace", "description": "fresh claw marks"}],
+                    },
+                }
+            ],
             "inventory_updates": [],
             "state_update_hints": ["脚印方向被确认。"],
             "empty": {},
@@ -95,13 +111,14 @@ def test_actor_scene_control_converts_raw_control_to_scene_brief():
         "trigger",
         "mode",
         "reason",
-        "map_canvas",
-        "map_route",
         "story_topology",
         "human_readable_note",
         "required_writeback_targets",
     ):
         assert forbidden not in text
+    assert scene["map_route"]["nodes"][0]["id"] == "camp"
+    assert scene["map_canvas"]["legend"] == "old camp"
+    assert "visual_assets" not in scene
 
 
 def test_actor_prompt_uses_actor_facing_sections_and_filters_control_terms():
@@ -128,11 +145,11 @@ def test_actor_prompt_uses_actor_facing_sections_and_filters_control_terms():
         "trigger",
         "mode",
         "reason",
+        "fog_cg",
+        "canvas_spec",
         "director layer",
         "backend",
         "V4",
-        "map_canvas",
-        "map_route",
         "story_topology",
         "human_readable_note",
         "required_writeback_targets",
@@ -181,8 +198,6 @@ def test_actor_image_prompt_keeps_image_instruction_but_filters_routing_terms():
         "trigger",
         "mode",
         "reason",
-        "map_canvas",
-        "map_route",
         "story_topology",
         "human_readable_note",
     ):

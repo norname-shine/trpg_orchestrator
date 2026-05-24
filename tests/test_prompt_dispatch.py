@@ -1,6 +1,7 @@
 import json
 import re
 
+from trpg_orchestrator.json_utils import write_json
 from trpg_orchestrator.capability_resolver import build_capability_plan
 from trpg_orchestrator.config import PROMPTS_DIR
 from trpg_orchestrator.encoding_utils import read_runtime_text
@@ -137,6 +138,46 @@ def test_build_actor_prompt_does_not_request_memory_semantic_fields():
         assert term not in prompt
 
 
+def test_build_director_prompt_includes_local_gallery_taxonomy(tmp_path, monkeypatch):
+    monkeypatch.setattr("trpg_orchestrator.prompt_builder.CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr("trpg_orchestrator.services.asset_rules.CAMPAIGNS_DIR", tmp_path)
+    monkeypatch.setattr("trpg_orchestrator.services.raw_gallery_store.CAMPAIGNS_DIR", tmp_path)
+    root = tmp_path / "demo"
+    (root / "extensions").mkdir(parents=True)
+    write_json(root / "asset_presentation.json", {
+        "custom_gallery_categories": [
+            {"id": "线索档案", "label": "线索档案", "source": "campaign"},
+            {"id": "异常记录", "label": "异常记录", "source": "campaign"},
+        ],
+    })
+    write_json(root / "extensions" / "gallery_raw.json", {
+        "schema": "trpg.gallery_raw.v2",
+        "campaign_id": "demo",
+        "updated_turn": 0,
+        "assets": [
+            {"id": "opening_map", "type": "map", "title": "开场地图", "gallery_category": "map"},
+        ],
+    })
+    write_json(root / "npc_profiles.json", {
+        "campaign_id": "demo",
+        "profiles": {},
+        "personality_library": {
+            "npc_seed_1": {"summary": "{'name': '林', 'desc': '精灵向导'}", "source": "campaign_initialization"}
+        },
+    })
+
+    prompt = build_director_user_prompt("demo", "调查树影", default_memory("demo"), _plan(["base_director"]))
+    taxonomy = _json_after_heading(prompt, "## Gallery Taxonomy Contract")
+
+    assert "线索档案" in taxonomy["allowed_gallery_category_ids"]
+    assert "异常记录" in taxonomy["allowed_gallery_category_ids"]
+    assert taxonomy["existing_gallery_assets"][0]["id"] == "opening_map"
+    assert taxonomy["non_player_character_sources"][0]["id"] == "npc_seed_1"
+    assert "Do not create new gallery filters" in prompt
+    assert "Custom gallery filters never authorize protagonist or companion rows by name" in prompt
+    assert "reuse that row's stable id" in prompt
+
+
 def test_build_actor_prompt_uses_min_style_and_turn_title_contract():
     memory = default_memory("demo")
     prompt = build_chatgpt_input("demo", "继续", memory, _pressure_pack(), _plan(["base_actor"]))
@@ -147,8 +188,10 @@ def test_build_actor_prompt_uses_min_style_and_turn_title_contract():
     assert "`state_writeback` must always be a JSON object with these required keys" in prompt
     assert "`new_open_threads`: array. Use `[]` if no new open thread was visibly introduced." in prompt
     assert "`closed_threads`: array. Use `[]` if no thread was visibly closed." in prompt
-    assert "`gallery_assets`: array. Use `[]`" in prompt
+    assert "`gallery_assets`: array. Use `[]` in normal actor output." in prompt
     assert "`inventory_items`: array. Use `[]`" in prompt
+    assert "Do not mention runtime map/CG/gallery generation requests" in prompt
+    assert "already authorized upstream" in prompt
     assert '"new_open_threads": []' in prompt
     assert '"closed_threads": []' in prompt
     assert '"gallery_assets": []' in prompt
@@ -173,10 +216,11 @@ def test_actor_prompt_contains_global_gallery_and_inventory_writeback_protocol()
     plan = build_capability_plan("demo", "观察当前地点痕迹", memory)
     prompt = build_chatgpt_input("demo", "观察当前地点痕迹", memory, _pressure_pack(), plan)
 
-    assert "state_writeback.gallery_assets" in prompt
     assert "state_writeback.inventory_items" in prompt
-    assert "Each `gallery_assets` entry must include non-empty string `id`, `type`, and `title`." in prompt
+    assert "Keep `state_writeback.gallery_assets` as `[]` in normal actor output." in prompt
+    assert "The actor layer serves player-facing prose" in prompt
     assert "Each `inventory_items` entry must include non-empty string `item_id` and `title`." in prompt
+    assert "Item state, identification, depletion, carried status, and inventory ownership changes belong only in `state_writeback.inventory_items`" in prompt
     assert "payloads.gallery_updates" not in prompt
     assert "payloads.inventory_updates" not in prompt
     assert "dossier evidence for review" not in prompt
@@ -197,7 +241,7 @@ def test_global_writeback_protocol_is_visible_for_multiple_action_types():
     for action in actions:
         plan = build_capability_plan("demo", action, memory)
         prompt = build_chatgpt_input("demo", action, memory, _pressure_pack(), plan)
-        assert "state_writeback.gallery_assets" in prompt
+        assert "Keep `state_writeback.gallery_assets` as `[]` in normal actor output." in prompt
         assert "state_writeback.inventory_items" in prompt
         assert "allow_gallery_update" not in repr(plan)
         assert "allow_inventory_update" not in repr(plan)
@@ -209,9 +253,14 @@ def test_v4_audit_prompt_preserves_required_writeback_schema():
     assert "`approved_writeback` must follow the same backend schema as actor `state_writeback`." in text
     assert "`new_open_threads`: array. This is an authorized core writeback field" in text
     assert "`closed_threads`: array. This is an authorized core writeback field" in text
+    assert "`gallery_assets`: array. Always use `[]` for actor-layer writeback." in text
+    assert "pressure_pack.payloads.visual_assets" in text
+    assert "`inventory_items`: array. Keep safe player-visible item state changes here" in text
     assert "do not delete required schema keys" in text
     assert '"new_open_threads": []' in text
     assert '"closed_threads": []' in text
+    assert '"gallery_assets": []' in text
+    assert '"inventory_items": []' in text
 
 
 def test_build_actor_prompt_uses_min_npc_voice_without_long_voice_for_npc_present():
@@ -229,6 +278,64 @@ def test_build_actor_prompt_loads_long_npc_voice_only_for_deep_dispatch():
 
     assert "## Prompt Module: npc_voice_rules" in prompt
     assert "NPC Performance Rules" in prompt
+
+
+def test_repeated_player_actions_still_require_actor_output():
+    memory = default_memory("demo")
+    pressure_pack = _pressure_pack(
+        progress_control={
+            "must_not_repeat": ["do not rediscover the same footprint"],
+        },
+    )
+    prompt = build_chatgpt_input("demo", "再次检查同一枚脚印", memory, pressure_pack, _plan(["base_actor"]))
+
+    assert "Treat must_not_repeat as a no-duplicate-facts guard" in prompt
+    assert "Repeated actions still need player-facing blocks" in prompt
+    assert "do not rediscover the same footprint" in prompt
+
+
+def test_director_prompt_does_not_stop_on_repeated_actions():
+    text = read_runtime_text(PROMPTS_DIR / "Director" / "v4_director_prompt.md")
+
+    assert "do not stop content output" in text
+    assert "A repeated action may produce no new reward, but it must still get prose feedback." in text
+
+
+def test_director_prompt_exposes_public_think_for_waiting_ui():
+    text = read_runtime_text(PROMPTS_DIR / "Director" / "v4_director_prompt.md")
+
+    assert "optional `public_think`" in text
+    assert "player-facing waiting notes for UI rotation" in text
+    assert "do not reveal secrets" in text
+
+
+def test_visual_asset_protocol_requires_declarative_canvas_specs_and_ascii_maps():
+    text = read_runtime_text(PROMPTS_DIR / "Director" / "visual_asset_protocol.md")
+
+    assert '"canvas_spec"' in text
+    assert "declarative JSON only" in text
+    assert "Do not output JavaScript" in text
+    assert "This is how two items with the same archetype remain visually different." in text
+    assert "`gallery_categories`" in text
+    assert "`map_canvas.render_token` must be exactly `map_canvas.v1`" in text
+    assert "`ascii` is the primary layout source for scene maps" in text
+    assert "`@` player/current position" in text
+
+
+def test_light_action_rules_keep_item_checks_short_and_inventory_only():
+    text = read_runtime_text(PROMPTS_DIR / "Director" / "v4_light_action_rules.md")
+
+    assert "Recap/review" in text
+    assert "Continue is not a lightweight operation" in text
+    assert '"Observe surroundings" and "recap/review" use a `system_check` system verdict block' in text
+    assert "`system_check` system verdict block, not GM narration" in text
+    assert '"Talk to NPC" uses `npc_dialogue`' in text
+    assert "it must not merely deliver information" in text
+    assert "资料状态被更新：这枚符文吊坠已确认存在激活迹象" in text
+    assert "repeatedly checks the same item" in text
+    assert "Do not repeat the same `inventory_items` writeback" in text
+    assert "Item state updates must use `state_writeback.inventory_items`" in text
+    assert "Do not create extra `gallery_assets` just to sync the gallery." in text
 
 
 def test_actor_modules_without_dispatch_keep_existing_trigger_logic():

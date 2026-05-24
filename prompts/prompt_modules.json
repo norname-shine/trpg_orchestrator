@@ -125,7 +125,7 @@
   "director_visual_payload_min": {
     "path": "Director/director_visual_payload_min.md",
     "layers": ["director"],
-    "triggers": ["visual_preload", "user_requested_image"],
+    "triggers": ["visual_preload", "user_requested_image", "visual_assets"],
     "responsibility": "只为 director 预加载最小视觉 payload 判断规则",
     "allowed_outputs": ["output_requests", "payloads", "protocol_warnings"],
     "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆", "直接生成资产"]
@@ -133,7 +133,7 @@
   "director_map_payload_min": {
     "path": "Director/director_map_payload_min.md",
     "layers": ["director"],
-    "triggers": ["map_preload", "user_requested_map"],
+    "triggers": ["map_preload", "user_requested_map", "map"],
     "responsibility": "只为 director 预加载最小地图 payload 判断规则",
     "allowed_outputs": ["output_requests", "payloads", "protocol_warnings"],
     "must_not": ["写玩家可见正文", "生成最终 blocks", "直接写入记忆"]

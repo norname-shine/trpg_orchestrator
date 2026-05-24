@@ -22,7 +22,10 @@
 不得输出 `asset_kind`、`source_type`、`path`、`url`、manifest key、运行时缓存 key 或文件系统路径。后台只从 `asset_use` 派生 `asset_kind`，并只在资产登记完成时写入 `source_type`。
 
 `gallery_category` 只控制前端筛选入口。它必须是核心分类 `prop`、`item`、`character`、`map`、`cg`，或团内已登记的自定义资料夹分类。不得输出 `gallery_category=scene`。
+前端筛选项只从开局资产契约返回，不从运行中资产的 `type`、`category` 或正文语义临时生成；不得输出 `item_record`、`inventory_record`、`dossier` 等临时分类。
 
+`item` 是玩家持有、可装备、可消耗或可纳入物品栏追踪的物。
+`prop` 是场景线索、机关器物、环境物、不可携带物或尚未归属给玩家的物。
 `asset_use` 控制后台处理方式。普通资产只能使用 `portrait`、`item`、`prop` 或 `map`。场景、地点、区域、路线、地图类视觉资料统一使用 `gallery_category=map` 与 `asset_use=map`。
 
 `actor_role` 只控制剧情身份。不得用它决定前端筛选分类。

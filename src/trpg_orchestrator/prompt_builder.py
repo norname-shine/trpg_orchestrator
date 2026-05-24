@@ -14,6 +14,7 @@ from .encoding_utils import read_runtime_text
 from .memory_selector import build_actor_memory_digest, build_director_memory_digest, select_memory_for_actor, select_memory_for_audit, select_memory_for_director
 from .output_contract import summarize_payload_keys
 from .prompt_module_registry import get_prompt_module_warnings, load_prompt_modules, select_prompt_modules
+from .services.asset_rules import asset_contract_payload
 
 
 def read_prompt(name: str) -> str:
@@ -183,7 +184,7 @@ ACTOR_MEMORY_DIGEST_DEFAULTS = {
 ACTOR_WRITEBACK_TARGET_LABELS = {
     "story_progress": "story progress evidence for review",
     "character_card": "character status evidence for review",
-    "dossier": "dossier presentation only; persistent visible facts use gallery_assets",
+    "dossier": "dossier presentation only; persistent visible facts are handled outside the actor layer",
     "dice/check": "dice/check handling when allowed",
     "dice_or_check": "dice/check handling when allowed",
 }
@@ -287,7 +288,18 @@ def build_actor_scene_control(pressure_pack: dict[str, Any]) -> dict[str, Any]:
     for key in ("state_update_hints", "npc_direction", "choice_requirements", "required_choices"):
         if key not in scene and key in payloads:
             scene[key] = payloads.get(key)
-    return sanitize_actor_prompt_value(scene)
+    cleaned_scene = sanitize_actor_prompt_value(scene)
+    if not isinstance(cleaned_scene, dict):
+        cleaned_scene = {}
+    # Map payloads can help the actor describe what is visible. Gallery visual assets are
+    # persisted by the director/backend path and are intentionally not sent to the actor.
+    for key in ("map_canvas", "map_route"):
+        if key not in payloads:
+            continue
+        cleaned_payload = sanitize_actor_image_asset(payloads.get(key))
+        if not _actor_is_empty(cleaned_payload):
+            cleaned_scene[key] = cleaned_payload
+    return cleaned_scene
 
 
 def sanitize_actor_image_asset(value: Any) -> Any:
@@ -427,6 +439,7 @@ def build_director_user_prompt(
     module_text = sanitize_model_terms(load_prompt_modules(module_ids))
     _append_module_warnings(capability_plan)
     custom_rules = custom_rules_section(campaign_id, "director")
+    gallery_contract = gallery_taxonomy_section(campaign_id)
     return "\n\n".join(
         [
             "# Director Turn Input",
@@ -440,6 +453,7 @@ def build_director_user_prompt(
             "## Capability Plan",
             "This is local orchestration context. It does not decide story direction.",
             "```json\n" + json.dumps(sanitize_model_input(capability_plan), ensure_ascii=False, indent=2) + "\n```",
+            gallery_contract,
             "## Selected Director Prompt Modules",
             module_text,
             custom_rules,
@@ -485,7 +499,7 @@ def build_chatgpt_input(
             "These records are only for performance consistency. Do not expand unconfirmed content. Do not invent long-term setting.",
             "```json\n" + json.dumps(visible_memory, ensure_ascii=False, indent=2) + "\n```",
             "## Current Story Position",
-            "This is the visible current-node summary for this turn. It is not a full story blueprint.",
+            "This is the visible current-node summary for this turn. It is not a full story blueprint. Treat must_not_repeat as a no-duplicate-facts guard, not as permission to stop output when the player repeats an action. Repeated actions still need player-facing blocks: confirm the result, show no new finding, add cost/time/pressure, or surface a changed visible reaction.",
             "```json\n" + json.dumps(visible_story_progress, ensure_ascii=False, indent=2) + "\n```",
             "## Scene Brief For This Turn",
             "Follow this turn's visible pressure, boundaries, NPC direction, forbidden items, choice requirements, and allowed state updates.",
@@ -564,6 +578,7 @@ def build_v4_light_action_user_prompt(
 ) -> str:
     director_context = _pick(memory, DIRECTOR_LAYER_FILES)
     runtime_memory = _pick(memory, RUNTIME_MEMORY_FILES)
+    gallery_contract = gallery_taxonomy_section(campaign_id)
     return "\n\n".join(
         [
             f"campaign_id: {campaign_id}",
@@ -573,6 +588,7 @@ def build_v4_light_action_user_prompt(
             read_prompt("v4_light_action_rules.md"),
             "Player light action:",
             player_action,
+            gallery_contract,
             "Long-term context rules:",
             read_prompt("v4_campaign_context_prompt.md"),
             "Long-term context:",
@@ -626,6 +642,66 @@ def campaign_setup_controls_section(memory: dict[str, Any]) -> str:
         "```json\n" + json.dumps(controls, ensure_ascii=False, indent=2) + "\n```",
         "### Campaign Setup Rules",
         "\n".join(f"- {line}" for line in rules_text),
+    ])
+
+
+def gallery_taxonomy_section(campaign_id: str) -> str:
+    payload = asset_contract_payload(campaign_id)
+    categories = list(payload.get("core_gallery_categories", [])) + list(payload.get("custom_gallery_categories", []))
+    ids = [str(row.get("id") or "") for row in categories if isinstance(row, dict) and row.get("id")]
+    existing_assets: list[dict[str, str]] = []
+    non_player_character_sources: list[dict[str, str]] = []
+    try:
+        from .services.raw_gallery_store import load_gallery_raw
+
+        raw_gallery = load_gallery_raw(campaign_id)
+        for row in raw_gallery.get("assets", []) if isinstance(raw_gallery.get("assets"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            existing_assets.append({
+                "id": str(row.get("id") or ""),
+                "title": str(row.get("title") or ""),
+                "type": str(row.get("type") or ""),
+                "gallery_category": str(row.get("gallery_category") or ""),
+            })
+    except Exception:
+        existing_assets = []
+    try:
+        npc_path = CAMPAIGNS_DIR / campaign_id / "npc_profiles.json"
+        npc_profiles = json.loads(read_runtime_text(npc_path)) if npc_path.exists() else {}
+        profiles = npc_profiles.get("profiles") if isinstance(npc_profiles.get("profiles"), dict) else {}
+        for key, row in profiles.items():
+            if isinstance(row, dict):
+                non_player_character_sources.append({
+                    "id": str(key),
+                    "name": str(row.get("name") or row.get("display_name") or key),
+                    "source": "npc_profiles.profiles",
+                    "summary": str(row.get("summary") or row.get("desc") or row.get("description") or "")[:240],
+                })
+        library = npc_profiles.get("personality_library") if isinstance(npc_profiles.get("personality_library"), dict) else {}
+        for key, row in library.items():
+            if isinstance(row, dict):
+                non_player_character_sources.append({
+                    "id": str(key),
+                    "name": str(row.get("name") or key),
+                    "source": "npc_profiles.personality_library",
+                    "summary": str(row.get("summary") or row.get("desc") or row.get("description") or "")[:240],
+                })
+    except Exception:
+        non_player_character_sources = []
+    contract = {
+        "allowed_gallery_categories": categories,
+        "allowed_gallery_category_ids": ids,
+        "existing_gallery_assets": existing_assets[:30],
+        "non_player_character_sources": non_player_character_sources[:12],
+        "custom_category_source": "campaign initialization asset_presentation.json",
+    }
+    return "\n".join([
+        "## Gallery Taxonomy Contract",
+        "When this turn prepares visible gallery or canvas asset candidates, every asset gallery_category must be one of allowed_gallery_category_ids. Do not create new gallery filters, do not map custom filters to fixed filters, and do not use player/companion as gallery categories.",
+        "For `character`, use only non_player_character_sources, visible NPCs, monsters, enemies, or unknown non-player presences. Custom gallery filters never authorize protagonist or companion rows by name; if no source-backed non-player subject or campaign-specific resource exists, omit the filter and let validation surface the missing source.",
+        "If a candidate updates the same entity as an existing_gallery_assets row, reuse that row's stable id and gallery_category. Do not create a second card with a new id for the same entity just to add canvas_spec or fresher detail.",
+        "```json\n" + json.dumps(contract, ensure_ascii=False, indent=2) + "\n```",
     ])
 
 

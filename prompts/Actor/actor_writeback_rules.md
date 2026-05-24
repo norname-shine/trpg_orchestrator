@@ -5,7 +5,7 @@ Write only player-visible evidence candidates. `state_writeback` is reviewed bef
 - `state_writeback` must always include `short_term_state`, `long_term_memory`, `new_open_threads`, `closed_threads`, `gallery_assets`, and `inventory_items`.
 - If no new open thread exists, output `new_open_threads: []`.
 - If no thread closed, output `closed_threads: []`.
-- If no gallery fact changed, output `gallery_assets: []`.
+- Always output `gallery_assets: []`; actor-layer text never persists asset-folder cards.
 - If no inventory item changed, output `inventory_items: []`.
 - Empty evidence objects are allowed only for the two required containers: `short_term_state: {}` and `long_term_memory: {}`.
 - `long_term_memory` may record only facts or changes already visible in this turn's prose.
@@ -14,15 +14,15 @@ Write only player-visible evidence candidates. `state_writeback` is reviewed bef
 - Do not include scheduling fields, local routing notes, admin diagnostics, forecast data, hidden causes, or future nodes.
 - `blocks` are display-only; `system_check` shows check results only. Durable facts belong in `state_writeback`.
 
-## Global Gallery Writeback
+## Gallery Boundary
 
-Use `state_writeback.gallery_assets` whenever this turn creates or updates player-known, displayable, reviewable material. This includes but is not limited to clue, map note, location record, character record, item record, document, symbol record, monster/enemy observation, and environmental anomaly.
+The actor layer serves player-facing prose. It does not issue, copy, rename, categorize, or persist asset-folder cards.
 
-- Each `gallery_assets` entry must include non-empty string `id`, `type`, and `title`.
-- Recommended fields: `category`, `display_zone`, `detail`, `source`, `payload`.
-- When updating an existing asset, use the stable `asset.id` and return the complete asset. The runtime replaces the whole row by exact id; it does not shallow-merge and does not guess by title.
-- Do not use removed gallery transport fields, removed gallery request modules, dossier update transports, or prose-only dossier text as the gallery fact source.
-- `visual_assets` is media/image/canvas request data only; it is not gallery persistence.
+- Keep `state_writeback.gallery_assets` as `[]` in normal actor output.
+- Map, CG, Canvas, and asset-folder persistence happen outside the actor layer.
+- Do not create gallery cards from narration, choices, map text, item observations, NPC dialogue, or director payload summaries.
+- If a visible fact needs a future asset card and no director payload exists, mention it only through prose or short-term state evidence; do not fabricate a gallery row.
+- Item state, identification, depletion, carried status, and inventory ownership changes belong only in `state_writeback.inventory_items`.
 
 ## Global Inventory Writeback
 
@@ -42,14 +42,7 @@ Required shape:
     "long_term_memory": {},
     "new_open_threads": [],
     "closed_threads": [],
-    "gallery_assets": [
-      {
-        "id": "stable_visible_fact_id",
-        "type": "clue",
-        "title": "Visible clue title",
-        "detail": "What the player observed, read, or confirmed this turn."
-      }
-    ],
+    "gallery_assets": [],
     "inventory_items": [
       {
         "item_id": "stable_item_id",

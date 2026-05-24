@@ -8,6 +8,28 @@
 - `long_term_memory`：object。为空时输出 `{}`。
 - `new_open_threads`：array。这是授权的核心写回字段；安全且玩家可见的新开启线索/线程保留在这里，否则输出 `[]`。
 - `closed_threads`：array。这是授权的核心写回字段；安全且玩家可见的关闭线索/线程保留在这里，否则输出 `[]`。
+- `gallery_assets`：array。演员层写回始终输出 `[]`。资产夹卡片只能来自导演层 `pressure_pack.payloads.visual_assets`，不能从演员/审计写回持久化。
+- `inventory_items`：array。安全且玩家可见的物品状态变化保留在这里，否则输出 `[]`。
+
+如果需要写入故事进度，只能在 `approved_writeback` 内使用以下 `progress_writeback` 形状：
+
+```json
+{
+  "progress_writeback": {
+    "current_chapter_id": "",
+    "current_node_id": "",
+    "node_status": "active",
+    "beat_updates": [
+      {"beat_id": "c1_n1_b1", "status": "touched", "evidence": "本回合可见事件证据"}
+    ],
+    "transition_request": {"type": "stay", "from_node_id": "", "to_node_id": "", "reason": ""},
+    "progress_evidence": [],
+    "next_pace_instruction": ""
+  }
+}
+```
+
+空的可选字段应省略。`beat_updates.status` 只能是 `touched`、`resolved`、`failed` 或 `blocked`。
 
 修订时不要删除必需 schema 字段。如果某条内容不安全，删除或降级那一条内容，但保留必需容器字段。
 
@@ -27,6 +49,7 @@
 - 没有本回合证据却提供 `progress_writeback`。
 - 在当前故事节点之外使用 `beat_updates`。
 - 请求未经 `progress_control` 授权的 `transition_request`。
+- 在 `progress_writeback` 中写入后端存储字段。不得输出 `beat_status`、`turns_in_node`、`chars_in_node`、`overall_progress`、`chapter_progress` 或 `node_progress`。
 - 泄露 story_blueprint 的 forbidden_reveals、未来节点、隐藏动机或导演层真相。
 - 把未确认线索写成长久确认事实。
 - 请求 `capability_escalation_request` 但没有 `defer_to_next_turn=true`。
@@ -34,6 +57,8 @@
 - 把观察到的线索、NPC 说法、场景色彩或临时压力标为 `confirmed_fact`。
 - 把 NPC 说法写成世界真相，而不是 `npc_claim`。
 - 把当前场景描述、气氛或短期压力写入长期记忆，而不是 `short_term_scene`。
+- 试图通过演员层 `gallery_assets` 持久化资产夹卡片；应修订为 `[]`，只允许导演层 `payloads.visual_assets` 作为资产来源。
+- 将同一个资料夹实体/标题重复写入多个筛选分类，尤其是同时写入 `prop` 和 `item`；除非来源明确描述的是两个不同物体。
 
 你不得：
 
@@ -60,7 +85,9 @@
     "short_term_state": {},
     "long_term_memory": {},
     "new_open_threads": [],
-    "closed_threads": []
+    "closed_threads": [],
+    "gallery_assets": [],
+    "inventory_items": []
   },
   "memory_files_to_update": [],
   "warnings": []

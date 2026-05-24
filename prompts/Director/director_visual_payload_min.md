@@ -6,3 +6,16 @@
 - `user_requested` requires an explicit player image request.
 - `director_triggered` requires a concrete visible reason, such as first appearance of an important NPC, item, creature trace, or scene image.
 - Keep payload details minimal; full image structure belongs to heavier visual rules.
+- If this turn prepares gallery-facing visual candidates, each `payloads.visual_assets` row must include `id`, `title`, `kind`, `gallery_category`, `detail`, `display_zone`, and declarative `canvas_spec`.
+- Local custom Canvas gallery assets are limited to `kind: "map"`, `kind: "item"`, and `kind: "prop"`. Do not use custom Canvas gallery rows for player, companion, NPC, monster, character, portrait, or CG assets.
+- `item` means a player-held, equippable, or consumable object. `prop` means a scene clue, mechanism, environmental object, non-portable object, or unowned object.
+- For maps, use `canvas_spec.schema: "trpg.map_asset_protocol.v1"` or put the same object in `payloads.map_canvas` when `output_requests.map.mode` is `update_canvas`.
+- For items and props, use `canvas_spec.schema: "item_canvas_spec.v1"` with distinctive declarative fields. Avoid template-only specs that differ only by title.
+- If one real asset belongs to multiple filters, use the same row and add `gallery_categories` with registered filter ids; it must include the primary `gallery_category`. Do not create duplicate rows for the same entity just to cover two filters.
+- `gallery_category` must be one of the Gallery Taxonomy Contract ids. Do not infer new filters from prose.
+- When the player asks every asset-folder filter to update, prepare at most one source-backed candidate per registered filter id. Use visible scene facts, initialization data, or current memory only; omit filters with no real source.
+- Avoid duplicate entities across filters. A single visible object may appear in only one gallery category.
+- Reuse `existing_gallery_assets.id` for the same entity/category when the Gallery Taxonomy Contract provides one. Updating an existing card is preferred over creating a second card with a new id.
+- Do not output a `payloads.visual_assets` row without `canvas_spec`. If the source is real but the drawing fields are not yet clear, derive a minimal declarative `canvas_spec` from the same visible source text; if even that is impossible, omit the row.
+- `canvas_spec` is declarative data for the local Canvas renderer, not drawing code. Allowed shape: `schema`, `id`, `title`, `genre`, `scale`, `description`, `layers`, `archetype`, `silhouette`, `materials`, `palette`, `parts`, `state_effects`, `state_tags`, `marks`, `markers`, `features`, `role_archetype`, `body_type`, `shape`, `scene`, `area`, `biome`, `lighting`, `mood`, `subjects`, `elements`, `surroundings`, `style`, `atmosphere`, `source_text`.
+- Example row: `{"id":"rune_pendant_prop","title":"符文吊坠","kind":"prop","gallery_category":"prop","gallery_categories":["prop","item"],"detail":"银质吊坠中央嵌有紫色水晶，表面刻有古老符文。","display_zone":"gallery","canvas_spec":{"schema":"item_canvas_spec.v1","archetype":"pendant","silhouette":"small_hanging_charm","materials":["silver","purple_crystal"],"palette":{"metal":"#c7ccd4","crystal":"#7b5bd6"},"marks":["ancient_runes"]}}`
